@@ -21,12 +21,12 @@ for /f "tokens=*" %%i in ('python --version') do echo Found: %%i
 
 REM Check required files exist
 if not exist "requirements.txt" (
-    echo ERROR: requirements.txt not found. Make sure you are running from the ATLAS_v2.2 folder.
+    echo ERROR: requirements.txt not found. Make sure you are running from the ATLAS folder.
     pause
     exit /b 1
 )
 if not exist "_pip_helper.py" (
-    echo ERROR: _pip_helper.py not found. Make sure you are running from the ATLAS_v2.2 folder.
+    echo ERROR: _pip_helper.py not found. Make sure you are running from the ATLAS folder.
     pause
     exit /b 1
 )
@@ -51,13 +51,13 @@ if exist "venv\Scripts\activate.bat" (
     echo Activating virtual environment...
     call venv\Scripts\activate.bat
     echo.
-    echo Installing packages (this may take a few minutes)...
+    echo Installing packages - this may take a few minutes...
     python _pip_helper.py install -r requirements.txt
 ) else (
     echo.
     echo Note: Virtual environment unavailable. Using user-level installation.
     echo.
-    echo Installing packages (this may take a few minutes)...
+    echo Installing packages - this may take a few minutes...
     python _pip_helper.py install --user -r requirements.txt
 )
 
