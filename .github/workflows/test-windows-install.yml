@@ -1,0 +1,84 @@
+name: Test Windows Install
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-install:
+    name: Run setup.bat + boot ATLAS on windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Show Python version
+        shell: cmd
+        run: python --version
+
+      - name: Run setup.bat
+        shell: cmd
+        # Pipe NUL so the trailing `pause` commands don't block CI.
+        run: call setup.bat < NUL
+
+      - name: Verify all imports
+        shell: cmd
+        run: |
+          call venv\Scripts\activate.bat
+          python -c "import streamlit, pandas, numpy, plotly, wordcloud, matplotlib, sklearn, nltk, spellchecker, openpyxl; print('ALL IMPORTS OK')"
+
+      - name: Launch streamlit and probe health endpoint
+        shell: pwsh
+        run: |
+          $venvPython = Join-Path $PWD "venv\Scripts\python.exe"
+          $logPath = Join-Path $PWD "streamlit.log"
+          $proc = Start-Process -FilePath $venvPython `
+            -ArgumentList '-m','streamlit','run','app.py','--server.headless=true','--server.port=8501','--browser.gatherUsageStats=false' `
+            -RedirectStandardOutput $logPath `
+            -RedirectStandardError "streamlit.err.log" `
+            -PassThru
+          Write-Host "Started streamlit PID=$($proc.Id)"
+
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-WebRequest -Uri 'http://localhost:8501/_stcore/health' -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) {
+                Write-Host "Health check passed on attempt $($i+1)"
+                $ok = $true
+                break
+              }
+            } catch {
+              Write-Host "attempt $($i+1): $_"
+            }
+          }
+
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) {
+            Write-Host "=== streamlit.log ==="
+            if (Test-Path $logPath) { Get-Content $logPath }
+            Write-Host "=== streamlit.err.log ==="
+            if (Test-Path 'streamlit.err.log') { Get-Content 'streamlit.err.log' }
+            throw "Streamlit health check failed"
+          }
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs
+          path: |
+            streamlit.log
+            streamlit.err.log
+            venv/pip.log
+          if-no-files-found: ignore
