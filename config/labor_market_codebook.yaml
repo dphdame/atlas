@@ -1,0 +1,100 @@
+# ATLAS Labor Market Task Unbundling Codebook
+# Domain: Applied Microeconomics, Frontier AI Lab Economic Research, and Tech Platform Roles
+# Purpose: Quantifying skill demands, methodological requirements, and institutional responsibilities
+
+meta:
+  project: "Labor Market Task Unbundling & Applied Micro Skill Valuation"
+  version: "1.0"
+  description: "Deductive thematic evaluation codebook for classifying research economist job postings, RFP requirements, and technical role specifications."
+
+themes:
+  - id: "causal_identification"
+    name: "Causal Inference & Empirical Identification"
+    definition: "Requirements for quasi-experimental design, causal machine learning, and formal econometric identification strategies."
+    keywords:
+      - "causal inference"
+      - "difference-in-differences"
+      - "instrumental variables"
+      - "synthetic control"
+      - "regression discontinuity"
+      - "panel data"
+      - "fixed effects"
+      - "causal forest"
+      - "double machine learning"
+      - "quasi-experimental"
+      - "counterfactual"
+      - "endogeneity"
+    sentiment_expected: "neutral"
+
+  - id: "empirical_pipelines"
+    name: "Automated Data Pipelines & Reproducibility"
+    definition: "Requirements for production data engineering, reproducible econometric pipelines, and cloud computing architectures."
+    keywords:
+      - "python"
+      - "sql"
+      - "bigquery"
+      - "snowflake"
+      - "pyspark"
+      - "automated pipeline"
+      - "reproducible workflow"
+      - "version control"
+      - "docker"
+      - "ci/cd"
+      - "dbt"
+      - "data engineering"
+    sentiment_expected: "neutral"
+
+  - id: "market_design_pricing"
+    name: "Market Design & Platform Mechanism Architecture"
+    definition: "Requirements for industrial organization, auction theory, algorithmic pricing, and matching mechanisms on multi-sided platforms."
+    keywords:
+      - "market design"
+      - "auction"
+      - "dynamic pricing"
+      - "two-sided market"
+      - "matching algorithm"
+      - "incentive compatibility"
+      - "elasticity"
+      - "revenue management"
+      - "network effects"
+      - "platform economics"
+    sentiment_expected: "neutral"
+
+  - id: "frontier_ai_governance"
+    name: "Frontier AI Evaluation & Policy Architecture"
+    definition: "Requirements for evaluating generative model impacts, socio-technical risks, labor substitution, and economic policy fencing."
+    keywords:
+      - "ai governance"
+      - "frontier models"
+      - "labor substitution"
+      - "task unbundling"
+      - "alignment"
+      - "safety benchmark"
+      - "evals"
+      - "antitrust"
+      - "economic impact"
+      - "algorithmic accountability"
+    sentiment_expected: "neutral"
+
+frictions:
+  - id: "credential_fragmentation"
+    name: "Credential & Methodological Mismatch"
+    keywords:
+      - "phd required"
+      - "years of experience"
+      - "publication record"
+      - "traditional econometrics vs machine learning"
+  - id: "data_access_bottlenecks"
+    name: "Proprietary Data & Compute Constraints"
+    keywords:
+      - "proprietary data"
+      - "compute limits"
+      - "gpu access"
+      - "security clearance"
+  - id: "toolchain_silos"
+    name: "Legacy Toolchain Siloing"
+    keywords:
+      - "stata only"
+      - "sas migration"
+      - "pipeline conversion"
+      - "code translation"

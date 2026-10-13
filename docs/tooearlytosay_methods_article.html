@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>From Spoken Words to Countable Data: Meet ATLAS</title>
+    <style>
+        :root {
+            --bg-canvas: #FAFAFA;
+            --bg-card: #FFFFFF;
+            --text-main: #0F172A;
+            --text-muted: #475569;
+            --text-subtle: #64748B;
+            --primary: #1E3A8A;
+            --teal: #0F766E;
+            --border-light: #E2E8F0;
+            --border-card: #CBD5E1;
+            --accent-bg: #F8FAFC;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+            line-height: 1.75;
+            padding: 3rem 1.5rem;
+            font-size: 1.05rem;
+            -webkit-font-smoothing: antialiased;
+        }
+        .container {
+            max-width: 820px;
+            margin: 0 auto;
+            background: var(--bg-card);
+            padding: 4rem 3.5rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-card);
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        }
+        .header-meta {
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .site-badge {
+            display: inline-block;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 700;
+            color: var(--teal);
+            margin-bottom: 0.75rem;
+        }
+        h1 {
+            font-size: 2.25rem;
+            font-weight: 800;
+            line-height: 1.25;
+            color: #0F172A;
+            letter-spacing: -0.03em;
+            margin-bottom: 1rem;
+        }
+        .author-line {
+            font-size: 1rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .author-line span {
+            color: #0F172A;
+            font-weight: 600;
+        }
+        h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: #1E293B;
+            letter-spacing: -0.02em;
+            margin-top: 2.75rem;
+            margin-bottom: 1rem;
+        }
+        h3 {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -0.01em;
+            margin-top: 2.5rem;
+            margin-bottom: 0.85rem;
+        }
+        h4 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--teal);
+            margin-top: 1.75rem;
+            margin-bottom: 0.5rem;
+        }
+        p {
+            margin-bottom: 1.4rem;
+            color: #334155;
+        }
+        strong {
+            color: #0F172A;
+            font-weight: 600;
+        }
+        hr {
+            border: 0;
+            height: 1px;
+            background: var(--border-light);
+            margin: 2.5rem 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+            font-size: 0.95rem;
+            background: #FFFFFF;
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-light);
+        }
+        th {
+            background-color: var(--accent-bg);
+            font-weight: 600;
+            color: #0F172A;
+            border-top: 1px solid var(--border-light);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        tr:hover td {
+            background-color: #F8FAFC;
+        }
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background-color: #F1F5F9;
+            color: #0F172A;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background-color: #0F172A;
+            color: #F8FAFC;
+            padding: 1.25rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1.75rem 0;
+            font-size: 0.85rem;
+            line-height: 1.45;
+        }
+        pre code {
+            background-color: transparent;
+            color: inherit;
+            padding: 0;
+        }
+        ol, ul {
+            margin-left: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: #334155;
+        }
+        li {
+            margin-bottom: 0.6rem;
+            padding-left: 0.3rem;
+        }
+        img {
+            max-width: 100%;
+            max-height: 480px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+            margin: 0 auto;
+            border-radius: 6px;
+            border: 1px solid var(--border-card);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+        }
+        figure {
+            margin: 2.25rem 0;
+            text-align: center;
+        }
+        figcaption {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            margin-top: 0.75rem;
+            line-height: 1.5;
+            text-align: center;
+        }
+        .callout-box {
+            background-color: var(--accent-bg);
+            border: 1px solid var(--border-card);
+            border-left: 4px solid var(--primary);
+            padding: 1.5rem 1.75rem;
+            border-radius: 6px;
+            margin: 2rem 0;
+        }
+        .callout-box h4 {
+            color: var(--primary);
+            font-size: 1.15rem;
+            margin-bottom: 0.75rem;
+            font-weight: 700;
+        }
+        .btn-download {
+            display: inline-block;
+            background-color: var(--primary);
+            color: #FFFFFF !important;
+            padding: 0.65rem 1.25rem;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin: 0.5rem 0;
+            transition: background-color 0.15s ease;
+        }
+        .btn-download:hover {
+            background-color: #1e40af;
+            text-decoration: none;
+        }
+        .footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-light);
+            font-size: 0.9rem;
+            color: var(--text-subtle);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+<h1>From Spoken Words to Countable Data: Meet ATLAS</h1>
+<p class="article-subtitle" style="font-size: 1.25rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.5rem; margin-bottom: 1.5rem;">A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.</p>
+<p><strong>By Victoria Cholette</strong><br />
+<em>Published in Methods &amp; Empirical Practice on tooearlytosay.com</em></p>
+<hr />
+<p>Applied economic evaluations and empirical models provide essential discipline, but they are bounded by what administrative records and published literature capture. Claims databases, registries, and journal benchmarks record expenditures, utilization rates, and clinical endpoints. They rarely capture the operational frictions that govern program uptake—intake documentation delays, billing credentialing lags, or transit disconnects.</p>
+<p>Until recently, gathering ground-level qualitative and contextual data required dedicated field teams. Modern speech-to-text tools have inverted that constraint: an applied evaluation can now assemble hundreds of pages of interview transcripts, stakeholder deliberations, and case notes in a matter of days.</p>
+<p>The bottleneck arrives when an evaluation team tries to turn those narrative records into structured parameters for an economic model. A typical applied economics or evaluation unit consists of one or two analysts working against legislative, budget, or grant deadlines. These teams lack the staffing footprint to operate a multi-person qualitative coding lab across six months of manual indexing. Yet relying solely on literature benchmarks leaves empirical models disconnected from ground-level implementation constraints.</p>
+<p>Applied economics needs a tool purpose-built for this scale: a way to process narrative text directly into auditable parameter matrices during the regular course of an evaluation.</p>
+<p><strong>ATLAS (Automated Text-to-Ledger Actuarial Synthesis)</strong> fills this gap for small teams who need insights from qualitative data. It is a local, deterministic Python framework that translates unstructured qualitative transcripts into structured frequency matrices and quote inventories with bit-for-bit reproducibility and cryptographic provenance.</p>
+<hr />
+<h3>The Limits of Traditional Qualitative Software</h3>
+<p>Traditional qualitative software treats text analysis as a database management task. Programs like Dedoose, NVivo, and MAXQDA provide clean graphical interfaces: digital highlighters, hierarchical tag trees, and collaboration dashboards. Under the hood, they function as relational databases that store pointers: this user highlighted this sentence and assigned that label.</p>
+<p>These platforms carry substantial recurring costs. Annual subscriptions run from roughly $200 per user on cloud tools like Dedoose to $900–$1,500 per seat for enterprise desktop packages like NVivo and MAXQDA. Because they store project data in proprietary formats, every collaborating analyst, auditor, or county partner needs an active paid seat simply to inspect the underlying coding database.</p>
+<p>The software manages the storage of manual tags. It leaves the actual reading, pattern recognition, and boundary enforcement entirely to human labor. An analyst still sits in front of a screen, reads every dialogue turn, and manually clicks a code. When that manual tagging ends, the software simply tallies how many times the human clicked each button.</p>
+<p>In our evaluation, we had twenty-three transcripts containing 3,892 dialogue turns and a six-week timeline before cross-agency budget deliberations. Manual line-by-line tagging across that corpus requires 120 to 160 analyst hours. Paying several thousand dollars for seat licenses buys a structured filing cabinet, but human reading speed remains the binding constraint. When that full human pipeline of coding labor is inaccessible to a two-person team, those narrative records usually get abandoned in an appendix.</p>
+<hr />
+<h3>Two Ways to Use ATLAS: Standalone Thematic Analysis vs. Econometric Parameterization</h3>
+<p>We designed ATLAS to support two distinct analytical workflows depending on an evaluation unit's mandate:</p>
+<ol>
+<li><strong>Path 1: Standalone Thematic Qualitative Analysis (Free, Local NVivo/MAXQDA Alternative):</strong><br />
+For public health analysts, qualitative researchers, community foundations, and program evaluators who manage 20 to 200 interview transcripts, focus group notes, or open-ended survey entries. An evaluation team does not need to build an econometric model or run regressions to use ATLAS. The framework operates on its own as a reproducible qualitative workbench: it parses dialogue turns, surfaces emergent themes through unsupervised topic medoids, tags text against custom YAML codebooks, filters verbatim quotes with speaker attribution, and exports a transparent, audited Excel spreadsheet—with zero recurring seat fees and local processing without third-party API transmissions.</li>
+<li><strong>Path 2: Qualitative-to-Econometric Parameterization:</strong><br />
+For applied microeconomists, health economists, and policy analysts who need to convert narrative implementation barriers into structured numerical vectors. This workflow translates qualitative frequencies and co-occurrence patterns into living-wage parameter bounds, administrative ramp-up curves, and hedonic feature vectors for econometric specifications and actuarial decision workbooks.</li>
+</ol>
+<hr />
+<h3>Why Commercial LLMs Create an Audit Risk in Applied Economics</h3>
+<p>The modern alternative is to send raw text through a commercial large language model API with a prompt to extract themes and count occurrences.</p>
+<p>In applied policy evaluation and peer-reviewed empirical research, that approach introduces three critical vulnerabilities:</p>
+<ol>
+<li><strong>Stochastic Drift:</strong> A prompt executed against an external closed-source model today can yield different categorizations next week when temperature exceeds zero. In empirical economics, where results must withstand audit and peer replication, lack of exact reproducibility weakens the empirical warrant.</li>
+<li><strong>Attribution Errors and Quote Hallucination:</strong> Generative models routinely smooth, paraphrase, or blend quotes when summarizing dialogue. Researchers cannot present an altered quote in a legislative briefing, a regulatory filing, or an audit.</li>
+<li><strong>Data Privacy and Governance Mandates:</strong> Sending proprietary program notes, confidential key informant interviews, or protected participant feedback across cloud APIs conflicts with institutional review board protocols, county data-governance agreements, and participant consent terms.</li>
+</ol>
+<h4>Methodological Division of Labor: Deterministic Execution vs. Generative Models</h4>
+<p>In applied evaluation and empirical modeling, the analytical requirements of reproducibility, verbatim quote attribution, and data governance are addressed directly by deterministic data processing rather than generative language modeling.</p>
+<p>The binding constraint in qualitative synthesis is rarely a lack of initial hypotheses. Program evaluators and health economists typically begin with concrete institutional questions—identifying enrollment bottlenecks, staffing shortages, or billing rejections. The constraint is verifying that frequency counts and quotations are authentic, reproducible, and anchored to the underlying record.</p>
+<p>Generative models can serve a bounded upstream role: an analyst can use a language model during initial codebook design to brainstorm candidate synonyms, Spanish colloquialisms, or agency acronyms. However, once candidate terms are identified, delegating measurement to generative models introduces substantial verification overhead. Because probabilistic models can smooth phrasing, paraphrase dialogue, or count conversational repetitions inconsistently across runs, researchers must audit extracted passages back against raw transcripts.</p>
+<p>ATLAS separates these tasks: <strong>local execution using deterministic regular expression state machines and structured YAML codebooks.</strong> Once an analyst formalizes keywords and token-distance context fences in YAML, the engine executes locally on the workstation without transmitting data across external cloud APIs during execution. It reports findings across two defined units of analysis—matching dialogue turns and the prevalence of documents reporting each theme—and records the source file name, speaker tag, timestamp, line number, character span, and source file SHA-256 hash for every extracted quote. When evaluation resources preclude multi-coder manual labs and governance rules restrict commercial cloud processing, a local programmatic pipeline provides an auditable and reproducible empirical foundation.</p>
+<hr />
+<h3>Pipeline Architecture: Exploratory Modeling Meets Deterministic Rules</h3>
+<p>Text analysis in program evaluation faces a double constraint: fixed keyword searches miss unprompted operational barriers, while unconstrained clustering returns high-level topic labels that cannot be defended as model parameters.</p>
+<p>ATLAS addresses this by separating exploratory discovery from deductive measurement:</p>
+<pre><code>┌────────────────────────────────────────────────────────┐
+│             UNSTRUCTURED TRANSCRIPT CORPUS             │
+│       (Interviews, Case Notes, Deliberation Logs)      │
+└───────────────────────────┬────────────────────────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+    [PHASE 1: EXPLORATORY]      [PHASE 2: DEDUCTIVE]
+    Unsupervised LDA Modeling   YAML Codebook Specification
+    • High-frequency n-grams    • Explicit Root Stems (EN/ES)
+    • Bilingual stem discovery  • Co-occurring Context Fences
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+               [PHASE 3: DETERMINISTIC ENGINE]
+               Turn-Level RegEx State Machine
+               • Exact Match Execution
+               • Source SHA-256 Digest &amp; Line Coordinates
+                            │
+                            ▼
+               [ACTUARIAL PARAMETER LEDGER]
+               CSV &amp; Excel Matrices for Economic Models
+</code></pre>
+<h4>1. Exploratory Discovery</h4>
+<p>Before writing codebook rules, analysts run unsupervised Latent Dirichlet Allocation (LDA) and term-frequency passes over the raw utterance corpus. This step identifies recurring vocabularies and bilingual stems that the evaluation team did not anticipate in the initial interview protocol.</p>
+<h4>2. Deductive Codebook Specification</h4>
+<p>Surfaced concepts are formalized into a YAML codebook defining domains, root stems in English and Spanish, and required context fences. In <code>atlas_engine.py</code>, context fencing operates across token-distance windows: a participant turn is tagged only when both an approved root pattern and a required fence pattern co-occur within the configured token window (or within the same dialogue turn when no window is specified).</p>
+<h4>3. Cryptographic Provenance and Export</h4>
+<p>The engine processes each participant turn through compiled regular expression rules, filtering out facilitator dialogue to preserve authentic participant feedback. For every match, the engine logs the document name, speaker, timestamp, line number, character start/end coordinates, and the SHA-256 digest of the source file.</p>
+<p>The results export to clean CSVs and a formatted Excel workbook (<code>actuarial_parameter_matrix.xlsx</code>) with summary prevalence rates on the primary sheet and full verbatim quotes with audit coordinates on the secondary sheet.</p>
+<p>This pipeline does not generate sociological theory. It provides an auditable translation layer between narrative records and economic parameters, giving a two-person analytics team the capacity to verify implementation assumptions against recorded text.</p>
+<hr />
+<h3>Empirical Application: Mapping Contracting Discussions Across 3,892 Utterances</h3>
+<p>To test this workflow in an applied health policy setting, we deployed it within an evaluation of California’s Community Health Worker (CHW) and Promotor Medi-Cal benefit rollout.</p>
+<p>The analysis evaluated <strong>3,892 verified community informant utterances</strong> extracted from <strong>23 completed Key Informant Interview transcripts</strong> (22 Round 2 interviews plus one follow-up session) across Community-Based Organizations (CBOs), Community Health Centers/Clinics, and Medi-Cal Managed Care Plans (payers). A stateful dialogue turn parser (<code>parse_kii_utterances.py</code>) isolated informant turns, purging 93 leaked interviewer prompts.</p>
+<p>The pipeline scored the 3,892 utterances against compiled CalAIM domain rules (<code>run_dual_analytical_pipeline.py</code>), generating an evidence matrix and quote inventory. In health economics qualitative analysis, keyword mention counts measure <strong>lexical density and conversational focus</strong>—identifying which operational topics occupied discussion time and where administrative anxiety concentrated. They do not represent voting shares or organizational endorsement.</p>
+<p>The table below reports coded mentions across contracting pathways and operational frictions from <code>chw_round2_thematic_frequency_matrix.csv</code>:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Domain ID</th>
+<th style="text-align: left;">Track &amp; Operational Friction Domain</th>
+<th style="text-align: center;">CBO Mentions</th>
+<th style="text-align: center;">Clinic Mentions</th>
+<th style="text-align: center;">Payer Mentions</th>
+<th style="text-align: center;">Total Mentions</th>
+<th style="text-align: left;">Topic Context and Stance in Coded Utterances</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Track D</strong></td>
+<td style="text-align: left;">Referral &amp; Care-Gap Partner Model</td>
+<td style="text-align: center;">62</td>
+<td style="text-align: center;">35</td>
+<td style="text-align: center;">5</td>
+<td style="text-align: center;"><strong>102</strong></td>
+<td style="text-align: left;">Utterances centered on informal, non-billing community navigation and outreach, reflecting current uncompensated frontline practice.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Track B</strong></td>
+<td style="text-align: left;">Administrative Hub Subcontracting</td>
+<td style="text-align: center;">26</td>
+<td style="text-align: center;">13</td>
+<td style="text-align: center;">9</td>
+<td style="text-align: center;"><strong>48</strong></td>
+<td style="text-align: left;">Utterances supported intermediary billing hubs to manage administrative overhead, endorsed symmetrically by CBOs and health plans.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Track A</strong></td>
+<td style="text-align: left;">Direct MCP Contracting (In-House Billing)</td>
+<td style="text-align: center;">13</td>
+<td style="text-align: center;">4</td>
+<td style="text-align: center;">15</td>
+<td style="text-align: center;"><strong>32</strong></td>
+<td style="text-align: left;">Payer mentions focused on technical clearinghouse standards; over 70% of CBO mentions described direct contracting as an administrative barrier rather than a goal.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Track C</strong></td>
+<td style="text-align: left;">State Fee-for-Service via PAVE/UIS</td>
+<td style="text-align: center;">5</td>
+<td style="text-align: center;">4</td>
+<td style="text-align: center;">2</td>
+<td style="text-align: center;"><strong>11</strong></td>
+<td style="text-align: left;">Mentions centered on immigration status vulnerabilities and anxiety regarding state PAVE enrollment hurdles and supervising clinician shortages.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Friction 1</strong></td>
+<td style="text-align: left;">Documentation &amp; EHR Burdens</td>
+<td style="text-align: center;">3</td>
+<td style="text-align: center;">7</td>
+<td style="text-align: center;">2</td>
+<td style="text-align: center;"><strong>12</strong></td>
+<td style="text-align: left;">Utterances cited electronic health record requirements and credentialing as major operational constraints for frontline teams.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Friction 2</strong></td>
+<td style="text-align: left;">Clearinghouse &amp; EDI Bottlenecks</td>
+<td style="text-align: center;">5</td>
+<td style="text-align: center;">1</td>
+<td style="text-align: center;">4</td>
+<td style="text-align: center;"><strong>10</strong></td>
+<td style="text-align: left;">Utterances documented technical failures submitting standard 837P electronic claim transactions.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Workforce</strong></td>
+<td style="text-align: left;">Living Wage Floors (\$28–\$35/hr)</td>
+<td style="text-align: center;">37</td>
+<td style="text-align: center;">7</td>
+<td style="text-align: center;">0</td>
+<td style="text-align: center;"><strong>44</strong></td>
+<td style="text-align: left;">Utterances identified hourly wage floors as necessary to prevent workforce turnover and maintain service continuity.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3>How Contextual Text Informs Model Specification</h3>
+<p>Coded qualitative frequencies inform model specification by testing where baseline assumptions conflict with operational conditions. In applied health economics, these counts guide sensitivity bounds and structural model choices in three areas:</p>
+<ol>
+<li><strong>Intermediary Overhead in Cost Models:</strong> State policy frameworks often model direct provider enrollment (Track C). In the interview corpus, direct state enrollment accounted for only 11 of 193 pathway-related mentions (5.7%), and those discussions focused primarily on administrative hurdles. By contrast, referral models (Track D) and administrative subcontracting hubs (Track B) accounted for 150 of 193 mentions (77.7%). For an applied economist, this indicates that an evaluation should include intermediary fiscal sponsorship and hub overhead fees in cost projections, rather than assuming direct, frictionless billing.</li>
+<li><strong>Labor Rate Calibration:</strong> Baseline cost models frequently apply generic county average wages or statutory minimums. The 44 mentions emphasizing living-wage floors (\$28–\$35/hour) highlight a potential source of parameter bias, establishing an empirical floor for labor cost sensitivity analysis.</li>
+<li><strong>Implementation Lags:</strong> Frequent mentions of clearinghouse, EHR, and state portal credentialing bottlenecks suggest that uptake will not follow an immediate step-function. An analyst can use these qualitative signals to model phased ramp-up curves and test sensitivity to administrative delays.</li>
+</ol>
+<p>Every quote in <code>chw_4_tracks_verbatim_quotes.csv</code> links to its document source file, participant, and line number, with file-level cryptographic digests cataloged in <code>kii_round2_source_provenance.json</code> and <code>synthesis_provenance_manifest.json</code>. When program officers or reviewers examine model assumptions, the qualitative evidence provides a documented, auditable record.</p>
+<figure>
+    <img src="figures/atlas_audit_bridge.png" alt="Figure 2: Verifiable text-to-ledger synthesis. Verbatim quotes record transcript line numbers and source-file SHA-256 hashes, while parameter cells embed aggregate verification digests." />
+    <figcaption><strong>Figure 2:</strong> Verifiable text-to-ledger synthesis. Verbatim quotes record transcript line numbers and source-file SHA-256 hashes, while parameter cells embed aggregate verification digests.</figcaption>
+</figure>
+<hr />
+<h3>An Offline Desktop Surface for Lean Teams</h3>
+<p>While ATLAS runs as a Python script (<code>atlas_engine.py</code>), small evaluation units often include analysts or program officers who do not write code. </p>
+<p>To make the pipeline accessible across an agency, ATLAS includes a local desktop interface. The application runs entirely on the analyst's machine using local Python libraries, requiring no connection to external cloud servers. Analysts load a transcript directory and a YAML codebook through a simple browser window, run the deterministic rules in under thirty seconds, and download the resulting frequency matrix and quote inventory directly into Excel.</p>
+<hr />
+<h3>The Practical Resolution: The Inductive-to-Deductive Translation Bridge</h3>
+<p>Most evaluation teams get trapped between two untenable extremes:
+1. <strong>Costly, Slow Manual Tagging:</strong> Hiring qualitative consultants at $150/hour to manually highlight transcripts across months of coding fatigue and inter-rater drift.
+2. <strong>Unpredictable LLM Outputs:</strong> Feeding private client transcripts to commercial cloud APIs that hallucinate quotes, vary across runs, and violate client privacy agreements.</p>
+<p>Even when evaluators attempt unsupervised NLP (such as topic models or clustering), they hit a drop-off wall: raw word distributions and topic proportions cannot directly answer a funder's question: <em>"What percentage of our families experienced housing instability?"</em></p>
+<p>ATLAS resolves this through an <strong>interactive, on-screen Codebook Wizard</strong>:
+* <strong>Step 1 (Inductive Discovery):</strong> Ingest raw survey or interview notes to discover what community members talk about naturally, surfacing unexpected themes without preconceived bias.
+* <strong>Step 2 (The 1-Click Codebook Wizard):</strong> Review discovered word clusters right on screen. Give each topic a plain-language program label (e.g., <em>Housing Security</em> or <em>Childcare Assistance</em>), click <strong>✕</strong> to prune conversational filler words (<em>really</em>, <em>know</em>), and add project terms.
+* <strong>Step 3 (Deductive Measurement):</strong> Click <strong>[Save as Active Codebook &amp; Run Deductive Scoring]</strong>. ATLAS instantly converts the rubric into a deterministic Boolean dictionary, scoring every participant response into verified percentages and exportable <code>.yaml</code> codebooks.</p>
+<p>By bridging inductive discovery and deductive measurement in a single local interface, ATLAS enables evaluation teams to operationalize qualitative evidence locally—avoiding third-party API transmissions, recurring seat fees, and generative paraphrasing.</p>
+<figure>
+    <img src="figures/atlas_dashboard_ui_walkthrough.png" alt="Figure 3: The local ATLAS interface. Analysts review context-fenced matches, verify source line coordinates, and export parameter sheets without sending data across external networks." />
+    <figcaption><strong>Figure 3:</strong> The local ATLAS interface. Analysts review context-fenced matches, verify source line coordinates, and export parameter sheets without sending data across external networks.</figcaption>
+</figure>
+<hr />
+<h3>The ATLAS Documentation Ecosystem</h3>
+<p>Because ATLAS addresses both technical econometric modeling and community program reporting, the documentation divides into three specialized tracks:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Audience</th>
+<th style="text-align: left;">Deliverable</th>
+<th style="text-align: left;">What It Covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Applied Economists &amp; Quantitative Researchers</strong></td>
+<td style="text-align: left;"><a href="ATLAS_Methodology_and_Reference_Manual.md">ATLAS Methodology &amp; Reference Manual</a> (<a href="ATLAS_Methodology_and_Reference_Manual.pdf">PDF</a>)</td>
+<td style="text-align: left;">Regular expression state machine mechanics, token-window proximity algorithms, bilingual lemma harmonization, and econometric parameter integration.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Program Evaluators &amp; Grant Writers</strong></td>
+<td style="text-align: left;"><a href="ATLAS_Practitioner_Field_Guide_Program_Evaluation.html">ATLAS Practitioner Field Guide</a> (<a href="ATLAS_Practitioner_Field_Guide_Program_Evaluation.pdf">PDF</a>)</td>
+<td style="text-align: left;">A four-part reporting framework (Context, Activity, Counts + Quotes, Action Plan), funder audit receipts, and non-profit pre-flight checklists.</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Analysts &amp; Developers</strong></td>
+<td style="text-align: left;"><a href="https://github.com/dphdame/atlas">Open ATLAS GitHub Repository</a></td>
+<td style="text-align: left;">Python source code (<code>universal_transcript_parser.py</code>, <code>atlas_engine.py</code>, <code>app.py</code>), sample YAML codebooks, and automated test suites.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<div class="callout-box">
+    <h4>Get ATLAS (Local Open-Source Pipeline)</h4>
+    <p>ATLAS executes locally on your workstation without transmitting transcript text, participant names, or evaluation notes across external cloud APIs during execution.</p>
+    <p><a href="https://github.com/dphdame/atlas/releases/latest" class="btn-download">Download ATLAS v1.0.0 (.zip)</a></p>
+    <p style="margin-top: 1rem; margin-bottom: 0.5rem;"><strong>1-Click Local Launch (Zero Terminal Knowledge Required):</strong></p>
+    <ul>
+        <li><strong>macOS:</strong> Double-click <code>run.command</code> in the extracted folder.</li>
+        <li><strong>Windows:</strong> Double-click <code>run.bat</code> in the extracted folder.</li>
+        <li><em>The launcher automatically initializes an isolated local Python environment, installs dependencies, and opens the dashboard in your default browser at <code>http://localhost:8501</code>.</em></li>
+    </ul>
+    <p style="margin-top: 1rem; margin-bottom: 0.5rem;"><strong>Download Full Guides Directly:</strong></p>
+    <ul>
+        <li><a href="https://github.com/dphdame/atlas/blob/main/docs/ATLAS_Practitioner_Field_Guide_Program_Evaluation.pdf"><strong>ATLAS Practitioner Field Guide (PDF)</strong></a> — Step-by-step evaluator manual for program reporting and audit receipts.</li>
+        <li><a href="https://github.com/dphdame/atlas/blob/main/docs/ATLAS_Methodology_and_Reference_Manual.pdf"><strong>ATLAS Methodology &amp; Reference Manual (PDF)</strong></a> — Academic specification for regex state machines, determinism proofs, and econometric vectors.</li>
+    </ul>
+    <p style="margin-top: 1rem; margin-bottom: 0.5rem;"><strong>Developer &amp; Command-Line Install:</strong></p>
+    <pre><code>git clone https://github.com/dphdame/atlas.git
+cd atlas
+pip install -r requirements.txt
+streamlit run app.py</code></pre>
+</div>
+<hr />
+<p>An economic model is only as credible as its parameter assumptions. When administrative registries omit implementation frictions, and a full qualitative coding lab is out of reach, deterministic text synthesis gives applied analysts an auditable way to ground their work in operational reality.</p>
+        <div class="footer">
+            Too Early to Say &bull; Methods in Empirical Economics &bull; 2026
+        </div>
+    </div>
+</body>
+</html>

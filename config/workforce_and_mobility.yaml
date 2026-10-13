@@ -1,0 +1,52 @@
+# ATLAS Starter Codebook: Workforce & Economic Mobility
+program_name: "Workforce Development & Career Pathways"
+version: "1.0"
+
+topics:
+  benefit_cliffs:
+    label: "Benefit Cliffs & Sudden Aid Loss"
+    description: "Loss of healthcare, food aid, or childcare subsidies triggered by small wage increases"
+    keywords:
+      - "benefit cliff"
+      - "lost medi-cal"
+      - "cut off food stamps"
+      - "income limit"
+      - "made a dollar too much"
+      - "lost coverage"
+    context_window: 10
+
+  childcare_conflicts:
+    label: "Childcare & Dependent Care Roadblocks"
+    description: "Inability to accept shifts or attend training due to lack of affordable childcare"
+    keywords:
+      - "daycare"
+      - "child care"
+      - "no babysitter"
+      - "after school care"
+      - "care for parent"
+      - "schedule conflict"
+    context_window: 8
+
+  credential_attainment:
+    label: "Certification & Credential Completion"
+    description: "Earning professional licenses, degrees, or technical certificates"
+    keywords:
+      - "certificate"
+      - "license"
+      - "passed exam"
+      - "credential"
+      - "completed course"
+      - "apprenticeship"
+    context_window: 6
+
+  wage_progression:
+    label: "Wage Growth & Career Advancement"
+    description: "Transitioning to higher hourly wages, salary roles, or promotion tracks"
+    keywords:
+      - "raise"
+      - "higher pay"
+      - "promoted"
+      - "full time"
+      - "hourly rate"
+      - "benefits included"
+    context_window: 8

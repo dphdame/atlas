@@ -1,0 +1,54 @@
+# ATLAS Starter Codebook: Intake & Enrollment Administrative Friction
+program_name: "Community Program Enrollment & Navigation"
+version: "1.0"
+
+topics:
+  paperwork_delays:
+    label: "Documentation & Paperwork Burdens"
+    description: "Difficulties gathering required forms, verifications, and pay stubs"
+    keywords:
+      - "paperwork"
+      - "pay stubs"
+      - "proof of income"
+      - "forms"
+      - "tax return"
+      - "birth certificate"
+      - "delayed application"
+    context_window: 8
+
+  wait_times:
+    label: "Wait Times & Processing Backlogs"
+    description: "Long delays waiting for eligibility determination or appointment scheduling"
+    keywords:
+      - "waiting on hold"
+      - "weeks waiting"
+      - "backlog"
+      - "pending approval"
+      - "called three times"
+      - "no callback"
+    context_window: 8
+
+  language_access:
+    label: "Language & Translation Barriers"
+    description: "Lack of translated forms or bilingual staff during intake"
+    keywords:
+      - "interpreter"
+      - "in spanish"
+      - "translation"
+      - "didn't understand form"
+      - "bilingual staff"
+      - "language barrier"
+    context_window: 8
+
+  staff_navigation_rapport:
+    label: "Staff Navigation & Advocacy Support"
+    description: "Positive, supportive assistance provided by community navigators"
+    keywords:
+      - "navigator"
+      - "advocate"
+      - "patient"
+      - "listened"
+      - "walked me through"
+      - "answered questions"
+      - "respectful"
+    context_window: 6

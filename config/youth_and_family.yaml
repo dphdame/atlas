@@ -1,0 +1,52 @@
+# ATLAS Starter Codebook: Youth & Family Support
+program_name: "Youth Enrichment & Family Engagement"
+version: "1.0"
+
+topics:
+  school_attendance:
+    label: "School Attendance & Chronic Absenteeism"
+    description: "Missed school days due to illness, transport, or family care duties"
+    keywords:
+      - "missed school"
+      - "truancy"
+      - "attendance"
+      - "unexcused absence"
+      - "stayed home"
+      - "behind on credits"
+    context_window: 8
+
+  mentorship_connection:
+    label: "Adult Mentorship & Safe Relationships"
+    description: "Positive bond with a program mentor, coach, or youth specialist"
+    keywords:
+      - "mentor"
+      - "coach"
+      - "trusted adult"
+      - "checks on me"
+      - "safe space"
+      - "always there"
+    context_window: 6
+
+  family_communication:
+    label: "Family Conflict & Home Stability"
+    description: "Household stress, communication breakdowns, or family transitions"
+    keywords:
+      - "family stress"
+      - "arguing at home"
+      - "divorce"
+      - "crowded house"
+      - "talking things out"
+      - "parent meeting"
+    context_window: 8
+
+  mental_wellbeing:
+    label: "Emotional Health & Peer Connections"
+    description: "Feelings of anxiety, loneliness, or building positive friendships"
+    keywords:
+      - "anxious"
+      - "stressed out"
+      - "made friends"
+      - "calmer"
+      - "counselor"
+      - "peer support"
+    context_window: 6

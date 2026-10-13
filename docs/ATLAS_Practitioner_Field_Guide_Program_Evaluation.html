@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS Practitioner Field Guide: Writing Program Evaluations</title>
+    <style>
+        :root {
+            --bg-canvas: #F8FAFC;
+            --bg-card: #FFFFFF;
+            --text-main: #0F172A;
+            --text-muted: #334155;
+            --text-subtle: #64748B;
+            --primary: #0F766E;
+            --navy: #1E3A8A;
+            --border-light: #E2E8F0;
+            --border-accent: #CBD5E1;
+            --callout-bg: #F0FDFA;
+            --callout-border: #0D9488;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+            line-height: 1.8;
+            padding: 3rem 1.5rem;
+            font-size: 1.1rem;
+            -webkit-font-smoothing: antialiased;
+        }
+        .container {
+            max-width: 820px;
+            margin: 0 auto;
+            background: var(--bg-card);
+            padding: 4rem 3.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05);
+        }
+        h1 {
+            font-size: 2.25rem;
+            font-weight: 800;
+            line-height: 1.25;
+            color: var(--navy);
+            letter-spacing: -0.02em;
+            margin-bottom: 0.35rem;
+        }
+        h2:first-of-type {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 2rem;
+            padding-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border-light);
+        }
+        h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--navy);
+            margin-top: 2.75rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #E2E8F0;
+            padding-bottom: 0.4rem;
+        }
+        h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: 2rem;
+            margin-bottom: 0.75rem;
+        }
+        h4 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--navy);
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        p {
+            margin-bottom: 1.3rem;
+            color: var(--text-muted);
+        }
+        strong {
+            color: var(--text-main);
+            font-weight: 700;
+        }
+        blockquote {
+            background-color: var(--callout-bg);
+            border-left: 5px solid var(--callout-border);
+            padding: 1.25rem 1.5rem;
+            margin: 1.75rem 0;
+            border-radius: 0 8px 8px 0;
+            font-style: normal;
+        }
+        blockquote p {
+            margin-bottom: 0.5rem;
+            color: #134E4A;
+        }
+        blockquote p:last-child {
+            margin-bottom: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+            font-size: 1rem;
+        }
+        th, td {
+            padding: 0.85rem 1rem;
+            text-align: left;
+            border: 1px solid var(--border-light);
+        }
+        th {
+            background-color: #F1F5F9;
+            font-weight: 700;
+            color: var(--navy);
+            font-size: 0.9rem;
+        }
+        tr:nth-child(even) {
+            background-color: #F8FAFC;
+        }
+        ul, ol {
+            margin-left: 1.75rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-muted);
+        }
+        li {
+            margin-bottom: 0.5rem;
+        }
+        pre {
+            background-color: #0F172A;
+            color: #F8FAFC;
+            padding: 1.25rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background-color: #F1F5F9;
+            color: #0F172A;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre code {
+            background-color: transparent;
+            color: inherit;
+            padding: 0;
+        }
+        a {
+            color: var(--primary);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+        a:hover {
+            color: var(--navy);
+        }
+        .footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-light);
+            font-size: 0.9rem;
+            color: var(--text-subtle);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+<h1>ATLAS Practitioner Field Guide</h1>
+<h2>Writing Clear Program Evaluations with Community Voices</h2>
+<p><strong>Victoria Cholette</strong><br />
+<em>Open ATLAS Toolkit for Community Programs and Applied Evaluation</em></p>
+<hr />
+<h2>1. Communicating Program Value</h2>
+<p>Community programs do important work every day. They connect families to healthcare, food, and job training. At grant renewal time, funders ask a central question:<br />
+<strong>"Did the program achieve its intended impact, and what evidence supports that conclusion?"</strong></p>
+<p>This guide demonstrates how to use data from interviews, surveys, and intake forms to write evaluation reports that communicate program value clearly.</p>
+<p>Direct participant quotes are powerful: they give human voice to key themes and show what program services feel like on the ground. Pairing those quotes with statistics helps funders understand how widespread those experiences really are. Together, quotes and numbers provide both the human story and the evidence of scale.</p>
+<hr />
+<h2>2. How Evaluators Report Findings (And Where Information Gaps Emerge)</h2>
+<p>Evaluation reports draw on many sources of community feedback. These include intake notes, focus groups, and survey comments.</p>
+<p>When summarizing this qualitative feedback, it is common and reasonable to write statements like this:</p>
+<blockquote>
+<p><em>"Participants reported that clinic hours helped, while several families faced travel barriers and paperwork delays."</em></p>
+</blockquote>
+<p>This statement is accurate and reflects real staff observations. But funders and review teams face clear information gaps when reading general descriptions:</p>
+<ul>
+<li><strong>Scope and Prevalence:</strong> Did the problem affect 3 people out of 50, or 35 people? Without a clear count, funders cannot tell if the issue was an isolated case or a widespread barrier.</li>
+<li><strong>Mechanism:</strong> What part of the system broke down? Was it bus schedules, gas costs, or appointment times?</li>
+<li><strong>Accountability:</strong> Funders want to know how the theme was identified and whether counter-examples were reviewed.</li>
+</ul>
+<p>When reports pair direct quotes with exact counts and percentages, those gaps disappear. Funders see both the depth of the story and its true scale.</p>
+<hr />
+<h2>3. Two Ways to Learn from Stories: Inductive and Deductive Evaluation</h2>
+<p>Program evaluation uses two main ways of thinking: <strong>inductive reasoning</strong> and <strong>deductive reasoning</strong>. Strong evaluation reports use both.</p>
+<pre><code>+--------------------------------------------------------+
+|                   COMMUNITY DATA                       |
+|    (Interviews, Survey Responses, Program Notes)       |
++---------------------------+----------------------------+
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+    [INDUCTIVE DISCOVERY]       [DEDUCTIVE MEASUREMENT]
+     &quot;Listening to Learn&quot;        &quot;Measuring What Matters&quot;
+     * Uncovers surprise needs   * Checks defined goals
+     * Catches blind spots       * Counts exact frequencies
+              |                           |
+              +-------------+-------------+
+                            |
+                            v
+              [EVALUATION REPORT EVIDENCE]
+              Human Context  +  Verified Scale
+</code></pre>
+<h3>Inductive Reasoning ("Listening to Learn")</h3>
+<p>Inductive evaluation starts with an open mind. Instead of checking fixed boxes, the evaluator reads community notes to find surprise patterns.</p>
+<ul>
+<li><strong>Example:</strong> A nutrition program may assume class attendance is low due to a lack of cooking tools. Through open listening, staff learn that clients work night shifts and cannot attend day classes.</li>
+<li><strong>The Benefit:</strong> Inductive review catches blind spots that program staff never expected.</li>
+</ul>
+<h3>Deductive Reasoning ("Measuring What Matters")</h3>
+<p>Deductive evaluation starts with clear program goals. The evaluator builds a checklist of key topics and counts how often each topic appears across all notes.</p>
+<ul>
+<li><strong>Example:</strong> A grant contract requires tracking benefit cliffs. The evaluator searches the notes to count how many workers lost public aid after getting a wage raise.</li>
+<li><strong>The Benefit:</strong> Deductive review gives exact numbers that match grant goals.</li>
+</ul>
+<p>By combining inductive discovery (finding the surprise barriers) with deductive counts (measuring their prevalence), reports become both deep and accurate.</p>
+<hr />
+<h2>4. The 2-Step Evaluation Workflow: From Discovery to Measurement</h2>
+<p>Evaluation teams often face a difficult puzzle:
+* If you only count fixed questions, you miss unexpected community needs.
+* If you only look at word clouds or open topics, you cannot report clear percentages to funders.</p>
+<p>ATLAS solves this puzzle with a simple 2-step bridge: <strong>Discovery to Measurement</strong>.</p>
+<pre><code>+-------------------------------------------------------------+
+|                      YOUR RAW DATA                          |
+|             (Survey comments, interview notes)              |
++------------------------------+------------------------------+
+                               |
+                               v
++-------------------------------------------------------------+
+|              STEP 1: INDUCTIVE DISCOVERY                    |
+|  * Run &quot;Inductive Mode&quot; to find natural word clusters.       |
+|  * Uncover what clients talk about without guessing first.  |
++------------------------------+------------------------------+
+                               |
+                               v
++-------------------------------------------------------------+
+|         STEP 2: THE 1-CLICK CODEBOOK WIZARD                 |
+|  * Review each discovered group in the on-screen card.      |
+|  * Give each group a program name (e.g., Housing Relief).   |
+|  * Click [X] to remove general filler words.                |
+|  * Click [Save as Active Codebook &amp; Run Deductive Scoring]. |
++------------------------------+------------------------------+
+                               |
+                               v
++-------------------------------------------------------------+
+|             STEP 3: DEDUCTIVE MEASUREMENT                   |
+|  * ATLAS scores every response against your checklist.      |
+|  * Get exact percentages and counts for funder reports.     |
++-------------------------------------------------------------+
+</code></pre>
+<h3>Step A: Run Inductive Discovery</h3>
+<p>When you first load your survey or interview notes into ATLAS, choose <strong>Inductive Mode</strong>.
+* The computer reads all responses without any pre-set bias.
+* It groups words that frequently appear together into 3 to 10 natural clusters.
+* For example, it might discover that many clients talk about <em>landlord</em>, <em>rent</em>, <em>deposit</em>, and <em>eviction</em>, even if your grant originally only asked about job training.</p>
+<h3>Step B: Use the Codebook Wizard to Shape Your Checklist</h3>
+<p>Directly below your results chart, ATLAS provides an on-screen <strong>Codebook Wizard</strong>:
+1. <strong>Name Your Categories:</strong> Give each discovered cluster a clear program label that your funder recognizes (such as <em>Housing Security</em> or <em>Childcare Barriers</em>).
+2. <strong>Prune Filler Words:</strong> Discovered clusters sometimes contain conversational words like <em>actually</em> or <em>know</em>. Click the small <strong>X</strong> on any word tag to remove it.
+3. <strong>Add Project Terms:</strong> Type any specific local terms (like <em>voucher</em> or <em>stipend</em>) directly into the keyword box.
+4. <strong>Save and Score:</strong> Click <strong>[Save as Active Codebook &amp; Run Deductive Scoring]</strong>.</p>
+<h3>Step C: Report Verified Percentages</h3>
+<p>Once you click save, ATLAS instantly switches to <strong>Deductive Mode</strong> and scores every response in your dataset:
+* You see the exact number and percentage of clients who spoke about each theme (e.g., <em>"34 out of 50 families (68.0%) talked about Housing Security"</em>).
+* You can download a standard <code>.yaml</code> codebook file to attach to your grant report, proving that your checklist came directly from community voices.</p>
+<hr />
+<h2>5. How ATLAS Supports Both Approaches (Local and Confidential)</h2>
+<p>ATLAS (Automated Text-to-Ledger Actuarial Synthesis) is a free tool built for this dual evaluation workflow.</p>
+<h3>Local Processing and Data Confidentiality</h3>
+<p>Protecting community participant confidentiality is essential. Many commercial cloud tools transmit qualitative notes over the internet to remote servers, which can conflict with organizational data-handling protocols or participant consent agreements.</p>
+<p><strong>ATLAS executes locally on your workstation.</strong> Transcript files remain on your local disk during analysis without being transmitted across external cloud APIs (subject to the security of your local operating system and storage environment).</p>
+<h3>The ATLAS Evaluation Engine</h3>
+<ol>
+<li><strong>Surfacing Emergent Patterns (Inductive):</strong> ATLAS groups high-frequency word patterns to help evaluators identify unanticipated themes without pre-filtering.</li>
+<li><strong>Context-Fenced Measurement (Deductive):</strong> Evaluators define an explicit keyword checklist. ATLAS identifies matching dialogue turns and calculates document prevalence using exact string matching and token-distance context windows (such as matching <em>"delay"</em> only when it appears within a specified token window of <em>"bus"</em> or <em>"transit"</em>).</li>
+<li><strong>Audit Receipts &amp; Verbatim Provenance:</strong> For every matching quote, ATLAS records the source document name, speaker label, timestamp, line number, character span, and the source file's SHA-256 cryptographic digest. This allows evaluators to verify authentic verbatim excerpts against the original transcripts without paraphrasing.</li>
+</ol>
+<h3>Methodological Boundaries: Deterministic Execution and Generative AI</h3>
+<p>Community evaluation teams often ask whether analyzing qualitative transcripts requires commercial artificial intelligence subscriptions or cloud language models. In ATLAS, <strong>the core analytical workflow executes entirely through local, deterministic algorithms.</strong></p>
+<p>Separating qualitative vocabulary ideation from deterministic measurement addresses three practical evaluation considerations:</p>
+<ol>
+<li><strong>Local Data Handling:</strong> ATLAS processes transcript files directly on the user's workstation. Transcripts and participant identifiers are not transmitted across external networks or third-party cloud APIs during analysis (subject to the security of the local workstation and storage environment).</li>
+<li><strong>Verbatim Quote Provenance:</strong> Rather than relying on a generative model that may summarize or paraphrase participant remarks, ATLAS uses deterministic pattern matching. It extracts the authentic, unedited dialogue spoken by participants, pairing every excerpt with its source file name, speaker label, timestamp, line number, character span, and source file SHA-256 digest.</li>
+<li><strong>Reproducible Measurement:</strong> Executing the same codebook across the same corpus yields identical counts and percentages on every run. Funders, boards, and research partners can review matching dialogue turns and document prevalence without run-to-run stochastic variation.</li>
+</ol>
+<h4>The Role of Generative AI: Upstream Vocabulary Ideation</h4>
+<p>Generative models can serve an optional, strictly upstream role during initial evaluation design:</p>
+<ul>
+<li><strong>Upstream Synonym Discovery:</strong> Evaluators may find large language models useful during initial codebook drafting to brainstorm synonyms, regional terminology, or colloquial phrasing (for example, generating candidate terms for transportation hurdles or enrollment paperwork).</li>
+<li><strong>Local Processing:</strong> Once candidate keywords are selected, vetted by evaluators, and saved into a YAML codebook, ATLAS performs all keyword searching, context-window filtering, quote extraction, and frequency calculations locally on your workstation.</li>
+<li><strong>Confidentiality Precaution:</strong> To protect community member confidentiality, never upload raw interview transcripts or identifiable participant narratives to third-party cloud services. Reserve external tools for abstract vocabulary brainstorming, and process authentic qualitative records locally.</li>
+</ul>
+<h4>Unit of Analysis: Dialogue Turns and Documents</h4>
+<p>ATLAS reports findings across two defined units of measurement:</p>
+<ol>
+<li><strong>Dialogue Turns:</strong> The number of individual spoken conversational blocks that match a theme.</li>
+<li><strong>Document Prevalence:</strong> The number and percentage of transcript files in which a theme appears. When each transcript represents an interview with an individual participant, document prevalence corresponds directly to participant prevalence.</li>
+</ol>
+<hr />
+<h2>6. Setting Up an Evaluation Checklist (The Codebook)</h2>
+<p>To measure program goals deductively, staff organize their core questions into a checklist of 3 to 5 topics.</p>
+<p>Below is an evaluation checklist for a community health navigation initiative:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Domain</th>
+<th style="text-align: left;">Evaluation Target</th>
+<th style="text-align: left;">Words and Context Rules</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Transit Access</strong></td>
+<td style="text-align: left;">Travel barriers causing missed clinic visits</td>
+<td style="text-align: left;">bus, transit, route, ride, late, schedule</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Intake Burden</strong></td>
+<td style="text-align: left;">Paperwork delays during program signup</td>
+<td style="text-align: left;">forms, documentation, pay stub, verification, delay</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Benefit Cliffs</strong></td>
+<td style="text-align: left;">Loss of public aid after modest wage gains</td>
+<td style="text-align: left;">cliff, threshold, medi-cal, cal fresh, lost coverage</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Staff Support</strong></td>
+<td style="text-align: left;">Positive rapport and care from navigators</td>
+<td style="text-align: left;">navigator, listened, advocate, patient, answered</td>
+</tr>
+</tbody>
+</table>
+<p>In ATLAS, staff type these words into a plain text file. The tool scans every transcript against this list, producing an evidence table in seconds.</p>
+<hr />
+<h2>7. Writing the Evaluation Section: 4 Core Elements</h2>
+<p>Evaluation summaries achieve the greatest clarity when organized into four structured elements:</p>
+<ol>
+<li><strong>The Context:</strong> State the specific community barrier or service condition being studied.</li>
+<li><strong>The Program Activity:</strong> Describe what the program did to help.</li>
+<li><strong>The Evidence (Counts Paired with Quotes):</strong> State the exact count and percentage from the data, followed immediately by a direct quote that shows the human reality.</li>
+<li><strong>The Action Plan:</strong> Explain the operational change or shift in resources the team will make in response to what was learned.</li>
+</ol>
+<hr />
+<h2>8. Writing Models: From General Descriptions to Verifiable Findings</h2>
+<p>The following models illustrate how general qualitative descriptions transform into structured, verifiable evaluation findings.</p>
+<h3>Model 1: Transportation Barriers</h3>
+<ul>
+<li>
+<p><strong>General Description:</strong>  </p>
+<blockquote>
+<p><em>"Transportation continues to be a major obstacle for our community members. Many participants reported that buses were unreliable, which led to missed clinic visits."</em></p>
+</blockquote>
+</li>
+<li>
+<p><strong>Verifiable Evaluation Narrative:</strong>  </p>
+<blockquote>
+<p><em>"Transportation barriers directly affected clinic attendance across the cohort. Out of 45 individual interview transcripts (where each transcript records a 1:1 participant interview), 29 documents (64.4%) reported that transit delays caused them to arrive late or miss scheduled medical appointments across 38 matching dialogue turns. As one participant explained:<br />
+'The cross-town bus only runs once an hour. If an appointment is at 9:00 AM, my family has to leave home before 7:00 AM, and any transfer delay causes a missed visit' (Intake Log, Line 114).<br />
+In response to this measured prevalence, the program shifted funds to provide guaranteed ride-share vouchers for morning specialty visits."</em></p>
+</blockquote>
+</li>
+</ul>
+<h3>Model 2: Enrollment Administrative Friction</h3>
+<ul>
+<li>
+<p><strong>General Description:</strong>  </p>
+<blockquote>
+<p><em>"Participants expressed appreciation for navigator staff, although paperwork requirements created frustration during the initial enrollment period."</em></p>
+</blockquote>
+</li>
+<li>
+<p><strong>Verifiable Evaluation Narrative:</strong>  </p>
+<blockquote>
+<p><em>"Participant feedback reflected strong satisfaction with staff navigation alongside measurable paperwork delays during onboarding. Across 45 individual interview transcripts (one per participant), 41 documents (91.1%) recorded positive, respectful interactions with community navigators, while 16 documents (35.6%) noted that assembling three consecutive months of pay stubs delayed enrollment by more than two weeks. One participant noted:<br />
+'Finding old pay stubs from two past jobs took three weeks, during which my application sat waiting' (Interview 08, Line 62).<br />
+Based on these findings, the team updated the intake protocol to permit self-attestation for seasonal income, cutting onboarding time from 18 days to 4 days."</em></p>
+</blockquote>
+</li>
+</ul>
+<hr />
+<h2>9. Verifying Evaluation Findings: The Audit Receipt</h2>
+<p>Funders and evaluation monitors want to know that numbers and quotes are real.</p>
+<p>ATLAS creates an automated proof sheet for every run:</p>
+<ol>
+<li><strong>Digital Fingerprint (SHA-256 Code):</strong> A cryptographic hash that enables reviewers to verify whether local source files match retained reference versions.</li>
+<li><strong>Transcript Line References &amp; Character Spans:</strong> Every cited quote lists its transcript line number and turn character span, allowing an evaluator to locate the excerpt within the interview record.</li>
+<li><strong>Deterministic Reproducibility:</strong> Because ATLAS uses compiled regular expression state machines rather than probabilistic language models, re-running the tool on the same corpus yields identical counts and percentages every time.</li>
+</ol>
+<p>Attaching this proof sheet to a grant report protects the agency and builds long-term funder trust.</p>
+<hr />
+<h2>10. Evaluation Report Pre-Flight Checklist</h2>
+<p>Before submitting an evaluation report, grant renewal, or board update, verify that each section satisfies these standards:</p>
+<ul>
+<li>[ ] <strong>Dual Grounding:</strong> Does every major qualitative claim pair a concrete statistic (count and percentage) with an illustrative quote?</li>
+<li>[ ] <strong>Denominator Clarity:</strong> Are sample sizes and measurement units stated explicitly (e.g., <em>"29 of 45 individual interview transcripts (64.4%)"</em>, distinguishing matching dialogue turns from document prevalence)?</li>
+<li>[ ] <strong>Inductive &amp; Deductive Balance:</strong> Does the report capture both planned contract targets and unexpected community findings?</li>
+<li>[ ] <strong>Operational Action:</strong> Does each identified barrier connect to a clear next step or program change?</li>
+<li>[ ] <strong>Source Receipts:</strong> Are all quoted excerpts traceable to specific transcript line numbers?</li>
+<li>[ ] <strong>Confidentiality:</strong> Are individual names and personal details removed from public deliverables?</li>
+<li>[ ] <strong>Audit Attachment:</strong> Is the ATLAS proof sheet included in the report appendix?</li>
+</ul>
+<hr />
+<h2>Appendix: How to Develop an Evaluation Codebook</h2>
+<p>A <strong>codebook</strong> is the master checklist for an evaluation project. It tells ATLAS exactly what words to count, which topics belong together, and what to ignore.</p>
+<p>Developing a codebook does not require computer programming. You can either build one in two minutes using the built-in ATLAS Wizard (Option A) or craft a custom codebook step-by-step (Option B).</p>
+<h3>Option A: Build a Codebook in 2 Minutes with the ATLAS Wizard</h3>
+<p>The fastest way to build an authentic codebook is directly inside the ATLAS dashboard:</p>
+<ol>
+<li><strong>Load Your Data:</strong> Click <strong>Load Your Local Spreadsheet</strong> on the home screen and choose your CSV or Excel file.</li>
+<li><strong>Run Discovery:</strong> Under <em>Choose How to Analyze</em>, select <strong>Inductive (Find new patterns from what people say)</strong> and click <strong>Run Thematic Analysis</strong>.</li>
+<li><strong>Open the Wizard Panel:</strong> Look at the blue card directly below your charts titled <strong>Convert Discovered Patterns into an Evaluation Codebook</strong>.</li>
+<li><strong>Name Your Categories:</strong> For each topic, type a clear program title in the <em>Evaluation Category Name</em> box (for example, change <code>Theme 1: Bus, Ride</code> to <code>Transportation Barriers</code>).</li>
+<li><strong>Prune General Words:</strong> Click the small <strong>X</strong> on any word tag that is not specific to that goal.</li>
+<li><strong>Save or Export:</strong></li>
+<li>Click <strong>[Save as Active Codebook &amp; Run Deductive Scoring]</strong> to score all responses immediately.</li>
+<li>Click <strong>[Export Codebook (.yaml)]</strong> to save the file to your computer. You can upload this codebook for any future survey!</li>
+</ol>
+<h3>Option B: Build a Custom Codebook Step-by-Step</h3>
+<p>Here is a 5-step process to build a reliable codebook:</p>
+<h3>Step 1: Start with Grant Goals and Community Notes</h3>
+<p>A sound codebook connects grant requirements with authentic community language.
+* <strong>Review Contract Deliverables:</strong> List the 3 to 5 core outcomes required by funders (such as job placement, food security, or clinic visits).
+* <strong>Scan Initial Transcripts:</strong> Read 5 sample interview or survey notes to note the everyday words community members actually use. For example, people might say <em>"ran out of food"</em> instead of <em>"food insecure"</em>.</p>
+<h3>Step 2: Define Each Topic Clearly</h3>
+<p>Every topic needs a plain definition so team members agree on what belongs in that category.
+* <strong>Topic Name:</strong> Transit Barriers
+* <strong>Definition:</strong> Any mention where travel problems caused a client to miss, arrive late, or struggle to reach an appointment.
+* <strong>What Counts:</strong> Bus delays, broken cars, high fares, long walks.
+* <strong>What Does Not Count:</strong> General discussions about road construction unrelated to appointment attendance.</p>
+<h3>Step 3: Build the Word List (Inclusions and Exclusions)</h3>
+<p>A strong codebook uses two types of word rules:
+1. <strong>Inclusion Words (Words that count):</strong> Words that signal the topic.
+   * <em>Example for Transit:</em> <code>bus</code>, <code>transit</code>, <code>train</code>, <code>ride</code>, <code>car trouble</code>, <code>fare</code>, <code>late</code>
+2. <strong>Exclusion Rules (Words that do not count):</strong> Words that prevent false matches.
+   * <em>Example:</em> The word <em>"ride"</em> might appear in a conversation about an amusement park. A context rule ensures <em>"ride"</em> only counts when it appears within 10 words of terms like <em>"doctor"</em>, <em>"clinic"</em>, or <em>"job"</em>.</p>
+<h3>Step 4: Pilot Test on Five Transcripts</h3>
+<p>Before running ATLAS on the full dataset, test the codebook on five sample files:
+1. Run ATLAS using the initial keyword list.
+2. Review the resulting quotes in the Evidence Table.
+3. Check for two common issues:
+   * <strong>Missed Matches:</strong> Did a client describe a barrier using words not yet on the list? (If so, add those words).
+   * <strong>False Matches:</strong> Did ATLAS count a quote that does not fit the goal? (If so, add an exclusion rule).</p>
+<h3>Step 5: Save as a Plain Text File (YAML Format)</h3>
+<p>ATLAS reads codebooks formatted in standard plain text (<code>.yaml</code> or <code>.txt</code>). ATLAS natively supports two equivalent schemas:</p>
+<ol>
+<li><strong>Practitioner Format (shown below):</strong> Uses <code>topics</code>, with <code>keywords</code>, <code>context_window</code> (maximum token distance), and <code>required_context</code> (context fences).</li>
+<li><strong>Researcher Format:</strong> Uses <code>domains</code>, with <code>roots_en</code>, <code>roots_es</code>, <code>context_fences</code>, and <code>context_window</code>.</li>
+</ol>
+<p>The local engine (<code>atlas_engine.py</code>) automatically normalizes both formats into compiled regular expression state machines.</p>
+<p>Below is a complete, copy-pasteable example of an evaluation codebook for a family support program:</p>
+<pre><code class="language-yaml"># Family Support Program Evaluation Codebook
+program_name: &quot;Community Health and Navigation&quot;
+version: &quot;1.0&quot;
+
+topics:
+  transit_access:
+    label: &quot;Transportation Barriers&quot;
+    description: &quot;Difficulties traveling to appointments or work&quot;
+    keywords:
+      - &quot;bus&quot;
+      - &quot;transit&quot;
+      - &quot;route&quot;
+      - &quot;no ride&quot;
+      - &quot;car trouble&quot;
+      - &quot;fare&quot;
+    context_window: 10
+    required_context:
+      - &quot;clinic&quot;
+      - &quot;doctor&quot;
+      - &quot;visit&quot;
+      - &quot;job&quot;
+      - &quot;appointment&quot;
+
+  paperwork_delays:
+    label: &quot;Enrollment &amp; Paperwork Friction&quot;
+    description: &quot;Administrative delays during program intake&quot;
+    keywords:
+      - &quot;forms&quot;
+      - &quot;documentation&quot;
+      - &quot;pay stubs&quot;
+      - &quot;proof of income&quot;
+      - &quot;verification&quot;
+      - &quot;delayed&quot;
+    context_window: 8
+    required_context:
+      - &quot;intake&quot;
+      - &quot;application&quot;
+      - &quot;sign up&quot;
+      - &quot;enrollment&quot;
+      - &quot;weeks&quot;
+
+  staff_advocacy:
+    label: &quot;Staff Navigation &amp; Support&quot;
+    description: &quot;Positive support and navigation provided by staff&quot;
+    keywords:
+      - &quot;navigator&quot;
+      - &quot;advocate&quot;
+      - &quot;patient&quot;
+      - &quot;listened&quot;
+      - &quot;helped me&quot;
+      - &quot;clear answers&quot;
+    context_window: 6
+    required_context:
+      - &quot;clinic&quot;
+      - &quot;staff&quot;
+      - &quot;caseworker&quot;
+      - &quot;office&quot;
+      - &quot;appointment&quot;
+</code></pre>
+<h3>Where to Find Pre-Built Topic Libraries</h3>
+<p>Staff do not need to create topic lists from scratch. Several free, public libraries offer proven categories, clear definitions, and word ideas:</p>
+<ol>
+<li><strong>The 2-1-1 Community Needs Directory (<a href="https://211taxonomy.org">211taxonomy.org</a>):</strong></li>
+<li><em>What it is:</em> The national standard used by community help hotlines across North America.</li>
+<li>
+<p><em>What to borrow:</em> Clear names and definitions for over 10,000 community needs, such as rent help, food pantries, bus passes, and utility bills.</p>
+</li>
+<li>
+<p><strong>The PRAPARE® Community Clinic Tool (<a href="https://prapare.org">prapare.org</a>):</strong></p>
+</li>
+<li><em>What it is:</em> A top tool used by health clinics nationwide to track social needs.</li>
+<li>
+<p><em>What to borrow:</em> Proven topics for housing stress, food needs, transit hurdles, and clinic paperwork.</p>
+</li>
+<li>
+<p><strong>The IRIS+ Impact Catalog (<a href="https://iris.thegiin.org">iris.thegiin.org</a>):</strong></p>
+</li>
+<li><em>What it is:</em> A large library of social goals managed by the Global Impact Investing Network.</li>
+<li>
+<p><em>What to borrow:</em> Goal lists for youth programs, schooling, health access, and family nutrition.</p>
+</li>
+<li>
+<p><strong>The O*NET Job Skills System (<a href="https://www.onetonline.org">onetonline.org</a>):</strong></p>
+</li>
+<li><em>What it is:</em> A public tool from the U.S. Department of Labor.</li>
+<li>
+<p><em>What to borrow:</em> Clear word lists for job training, work tasks, and workplace hurdles.</p>
+</li>
+<li>
+<p><strong>ATLAS Starter Packs (In the Open-Source Repository):</strong></p>
+</li>
+<li>Pre-made codebook files live right in the ATLAS <code>config/</code> folder on GitHub:<ul>
+<li><code>sdoh_basic_needs.yaml</code>: Covers housing, transit, food, and utilities.</li>
+<li><code>intake_and_enrollment.yaml</code>: Covers paperwork delays, wait times, and sign-up rules.</li>
+<li><code>workforce_and_mobility.yaml</code>: Covers benefit cliffs, career goals, and job shifts.</li>
+<li><code>youth_and_family.yaml</code>: Covers school attendance, family talks, and staff support.</li>
+</ul>
+</li>
+</ol>
+<h4>How to Use a Public Library in 3 Steps:</h4>
+<ol>
+<li><strong>Pick the Topic:</strong> Find the matching topic in the public library, like PRAPARE's <em>Transportation Access</em>.</li>
+<li><strong>Copy the Definition:</strong> Paste the public text into the codebook <code>description</code> line so all staff agree on what it means.</li>
+<li><strong>Add Spoken Words:</strong> Add the everyday words people use in interviews (<code>bus</code>, <code>route 4</code>, <code>flat tire</code>, <code>late</code>) and set your context rules.</li>
+</ol>
+<h3>Codebook Quality Checklist</h3>
+<p>Before running a final evaluation, confirm:
+- [ ] Are topics limited to 3 to 5 clear domains?
+- [ ] Does each topic have a plain-English definition?
+- [ ] Are keywords drawn from real participant language rather than academic jargon?
+- [ ] Were rules tested on at least five sample transcripts?
+- [ ] Did another team member review the definitions for clarity?</p>
+<hr />
+<p><em>ATLAS is open-source software distributed under the MIT License. Documentation, sample codebooks, and implementation guides are available at <a href="https://github.com/your-org/open-atlas">github.com/your-org/open-atlas</a>.</em></p>
+        <div class="footer">
+            ATLAS Toolkit &bull; Open Source under MIT License &bull; 2026
+        </div>
+    </div>
+</body>
+</html>

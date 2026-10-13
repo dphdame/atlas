@@ -1,29 +1,46 @@
 @echo off
-REM ATLAS - Run Script (Windows)
+REM ==============================================================================
+REM From Spoken Words to Countable Data: Meet ATLAS
+REM A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
+REM 1-Click Desktop Launcher for Windows - 100% Local & Offline
+REM ==============================================================================
 
-REM Activate venv if it exists
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
-)
+title From Spoken Words to Countable Data: Meet ATLAS
+cd /d "%~dp0"
 
-REM Verify streamlit is installed
-python -c "import streamlit" >nul 2>nul
-if %errorlevel% neq 0 (
-    echo.
-    echo ERROR: Streamlit is not installed.
-    echo Please run setup.bat first, then try again.
-    echo.
+echo ==================================================================
+echo  From Spoken Words to Countable Data: Meet ATLAS
+echo  A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
+echo  100%% Local Processing - Zero External Network Traffic
+echo ==================================================================
+
+REM Check for Python
+where python >nul 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Python was not found on your system.
+    echo Please install Python 3.10 or higher from: https://www.python.org/downloads/
+    echo Be sure to check the box "Add Python to PATH" during installation.
     pause
     exit /b 1
 )
 
-echo Starting ATLAS Dashboard...
-echo Opening in browser at http://localhost:8501
-echo.
-echo (Press Ctrl+C to stop the dashboard)
-echo.
-python -m streamlit run app.py
+REM Create local isolated virtual environment if not present
+if not exist ".venv" (
+    echo --^> Creating local isolated environment (.venv)...
+    python -m venv .venv
+    echo --^> Installing dependencies into local environment...
+    call .venv\Scripts\activate.bat
+    python -m pip install --upgrade pip --quiet
+    pip install -r requirements.txt --quiet
+    echo --^> Environment ready.
+) else (
+    call .venv\Scripts\activate.bat
+)
 
-echo.
-echo Dashboard stopped.
+echo --^> Launching ATLAS Desktop Interface in your browser...
+echo --^> Close this command prompt window to stop the application.
+echo ==================================================================
+
+streamlit run app.py --server.headless=false --browser.serverAddress="localhost"
+
 pause

@@ -1,0 +1,66 @@
+# ATLAS Starter Codebook: Social Determinants & Basic Needs
+# Reference: PRAPARE & 211 Human Services Taxonomy
+program_name: "Social Determinants of Health (SDOH) Screening"
+version: "1.0"
+
+topics:
+  housing_insecurity:
+    label: "Housing Instability & Rent Burden"
+    description: "Difficulty paying rent, threat of eviction, or substandard living conditions"
+    keywords:
+      - "rent"
+      - "eviction"
+      - "behind on rent"
+      - "landlord"
+      - "homeless"
+      - "shelter"
+      - "couch surfing"
+      - "moved twice"
+    context_window: 10
+
+  food_insecurity:
+    label: "Food Needs & Grocery Distress"
+    description: "Running out of food before getting money to buy more"
+    keywords:
+      - "groceries"
+      - "food pantry"
+      - "ran out of food"
+      - "skipped meals"
+      - "snap"
+      - "cal fresh"
+      - "wic"
+      - "hunger"
+    context_window: 8
+
+  transportation_barrier:
+    label: "Transit Access & Travel Barriers"
+    description: "Inability to reach medical appointments or work due to lack of transit"
+    keywords:
+      - "bus"
+      - "transit"
+      - "no ride"
+      - "car broke"
+      - "gas money"
+      - "bus pass"
+      - "fare"
+      - "missed visit"
+    context_window: 10
+    required_context:
+      - "clinic"
+      - "doctor"
+      - "appointment"
+      - "visit"
+      - "work"
+
+  utility_strain:
+    label: "Utility Shutoffs & Energy Burden"
+    description: "Past-due electric, gas, water, or phone bills causing service shutoffs"
+    keywords:
+      - "electric bill"
+      - "pge"
+      - "shut off notice"
+      - "heat"
+      - "gas bill"
+      - "water bill"
+      - "phone disconnected"
+    context_window: 8
