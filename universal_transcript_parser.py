@@ -255,6 +255,43 @@ def _dedupe_columns(header: List[str]) -> List[str]:
     return columns
 
 
+def _validate_csv_quoting(text: str, name: str, start_line: int = 1) -> None:
+    """
+    RFC 4180 quote balance for a CSV body whose first character is on physical
+    line start_line. A '"' may appear only at the start of a cell, where it opens a
+    quoted cell (a quote inside an unquoted cell is malformed); inside it '""' is an
+    escaped quote, and a closing '"' must be followed by ',', a line break or the
+    end of the file.
+    Raises ValueError naming the physical line on malformed quoting.
+    """
+    in_quotes = False
+    at_field_start = True
+    line_no = open_line = start_line
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if in_quotes:
+            if ch == '"':
+                if i + 1 < n and text[i + 1] == '"':
+                    i += 2
+                    continue
+                if i + 1 < n and text[i + 1] not in ",\r\n":
+                    raise ValueError(f"Malformed CSV quoting at line {line_no} of {name}")
+                in_quotes = False
+        elif ch == '"':
+            if not at_field_start:
+                raise ValueError(
+                    f"Malformed CSV quoting at line {line_no} of {name}: unexpected quote inside unquoted field"
+                )
+            in_quotes, open_line = True, line_no
+        at_field_start = not in_quotes and ch in ",\r\n"
+        if ch == "\r" or (ch == "\n" and (i == 0 or text[i - 1] != "\r")):
+            line_no += 1
+        i += 1
+    if in_quotes:
+        raise ValueError(f"Malformed CSV: unterminated quoted field opened at line {open_line} of {name}")
+
+
 def _is_blank(value: Any) -> bool:
     if value is None:
         return True
@@ -725,6 +762,9 @@ class UniversalTranscriptParser:
         (quoted multi-line cells span several physical lines). Blank or
         whitespace-only physical lines are not records; short records are padded
         with empty cells, and a record with extra non-empty cells raises ValueError.
+        Malformed quoting (an unterminated quoted cell, or a character other than
+        ',' or a line break after a closing quote) raises ValueError, so a stray
+        quote can never merge the following records into one cell.
         """
         name = os.path.basename(file_path)
         with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
@@ -734,6 +774,9 @@ class UniversalTranscriptParser:
                     leading += 1
                     continue
                 break
+            fh.seek(0)
+            lines = fh.readlines()
+        _validate_csv_quoting("".join(lines[leading:]), name, leading + 1)
 
         header: Optional[List[str]] = None
         rows: List[List[str]] = []
@@ -741,13 +784,15 @@ class UniversalTranscriptParser:
         with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
             for _ in range(leading):
                 next(fh)
-            reader = csv.reader(fh)
+            reader = csv.reader(fh, strict=True)
             while True:
                 start = leading + reader.line_num + 1
                 try:
                     rec = next(reader)
                 except StopIteration:
                     break
+                except csv.Error as exc:
+                    raise ValueError(f"Malformed CSV at line {start} of {name}: {exc}") from exc
                 if not rec or (len(rec) == 1 and not rec[0].strip()):
                     continue
                 if header is None:

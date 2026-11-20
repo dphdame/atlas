@@ -82,7 +82,7 @@ Evaluation teams often face a difficult puzzle:
 * If you only count fixed questions, you miss unexpected community needs.
 * If you only look at word clouds or open topics, you cannot report clear percentages to funders.
 
-ATLAS solves this puzzle with a simple 2-step bridge: **Discovery to Measurement**.
+ATLAS bridges the two with a short loop: **discover, then measure**.
 
 ```
 +-------------------------------------------------------------+
@@ -92,45 +92,55 @@ ATLAS solves this puzzle with a simple 2-step bridge: **Discovery to Measurement
                                |
                                v
 +-------------------------------------------------------------+
-|              STEP 1: INDUCTIVE DISCOVERY                    |
-|  * Run "Inductive Mode" to find natural word clusters.       |
-|  * Uncover what clients talk about without guessing first.  |
+|        STEP 1: INDUCTIVE DISCOVERY (Tab 1, sub-tab 3)       |
+|  * Set the number of topics and read each topic's terms.    |
+|  * Read the medoid: the real comment closest to the topic.  |
 +------------------------------+------------------------------+
                                |
                                v
 +-------------------------------------------------------------+
-|         STEP 2: THE 1-CLICK CODEBOOK WIZARD                 |
-|  * Review each discovered group in the on-screen card.      |
-|  * Give each group a program name (e.g., Housing Relief).   |
-|  * Click [X] to remove general filler words.                |
-|  * Click [Save as Active Codebook & Run Deductive Scoring]. |
+|        STEP 2: SHAPE THE CHECKLIST (the YAML codebook)      |
+|  * Download the discovered codebook (.yaml).                |
+|  * Rename topics, drop filler words, add fences.            |
+|  * Upload it as a custom codebook.                          |
 +------------------------------+------------------------------+
                                |
                                v
 +-------------------------------------------------------------+
 |             STEP 3: DEDUCTIVE MEASUREMENT                   |
-|  * ATLAS scores every response against your checklist.      |
-|  * Get exact percentages and counts for funder reports.     |
+|  * ATLAS codes every response against the checklist.        |
+|  * Read counts, percentages and verbatim quotes.            |
 +-------------------------------------------------------------+
 ```
 
 ### Step A: Run Inductive Discovery
-When you first load your survey or interview notes into ATLAS, choose **Inductive Mode**.
-* The computer reads all responses without any pre-set bias.
-* It groups words that frequently appear together into 3 to 10 natural clusters.
-* For example, it might discover that many clients talk about *landlord*, *rent*, *deposit*, and *eviction*, even if your grant originally only asked about job training.
+Load the survey or interview files in the sidebar (**Corpus Dataset → Upload Custom Files**) and open
+**Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)**.
+* Choose **Number of topics (k)** between 1 and 10.
+* Each topic lists its top terms (a word belongs to one topic only), how many responses it covers, and
+  its **medoid**, the actual response that best represents the topic.
+* For example, a topic might gather *landlord*, *rent*, *deposit* and *eviction*, even if the grant
+  only asked about job training.
 
-### Step B: Use the Codebook Wizard to Shape Your Checklist
-Directly below your results chart, ATLAS provides an on-screen **Codebook Wizard**:
-1. **Name Your Categories:** Give each discovered cluster a clear program label that your funder recognizes (such as *Housing Security* or *Childcare Barriers*).
-2. **Prune Filler Words:** Discovered clusters sometimes contain conversational words like *actually* or *know*. Click the small **X** on any word tag to remove it.
-3. **Add Project Terms:** Type any specific local terms (like *voucher* or *stipend*) directly into the keyword box.
-4. **Save and Score:** Click **[Save as Active Codebook & Run Deductive Scoring]**.
+### Step B: Shape the Checklist
+Discovered topics are a starting draft, not a finished checklist:
+1. Click **📥 Download Discovered Codebook (.yaml)** and open the file in any text editor.
+2. **Name each category** with a label funders recognise (change `name:` to *Housing Security*).
+3. **Prune filler words** such as *actually* or *know* from `roots_en`.
+4. **Add project terms** (*voucher*, *stipend*) and context fences so a word only counts in the right
+   setting.
+5. In the sidebar choose **Active YAML Codebook → Upload Custom Codebook (.yaml)** and upload the edited
+   file.
+
+For a quick look before editing, **⚡ Apply Discovered Codebook to Engine** codes the corpus with the
+raw draft. Raw drafts have no fences, so their counts are exploratory only.
 
 ### Step C: Report Verified Percentages
-Once you click save, ATLAS instantly switches to **Deductive Mode** and scores every response in your dataset:
-* You see the exact number and percentage of clients who spoke about each theme (e.g., *"34 out of 50 families (68.0%) talked about Housing Security"*).
-* You can download a standard `.yaml` codebook file to attach to your grant report, proving that your checklist came directly from community voices.
+With the edited codebook active, ATLAS codes every response:
+* Tab 1 shows how many units mention each theme and every matching quote with its line and file hash
+  (for example, *"34 of 50 families (68.0%) mentioned Housing Security"*; illustrative numbers).
+* Tab 2 adds the standard error and the downloadable workbook, manifest and quote list. Keep the
+  `.yaml` codebook with the report so others can see exactly what was counted.
 
 ---
 
@@ -141,11 +151,11 @@ ATLAS (Automated Text-to-Ledger Actuarial Synthesis) is a free tool built for th
 ### Local Processing and Data Confidentiality
 Protecting community participant confidentiality is essential. Many commercial cloud tools transmit qualitative notes over the internet to remote servers, which can conflict with organizational data-handling protocols or participant consent agreements.
 
-**ATLAS executes locally on your workstation.** Transcript files remain on your local disk during analysis without being transmitted across external cloud APIs (subject to the security of your local operating system and storage environment).
+**ATLAS executes locally on your workstation.** Transcript files remain on your local disk during analysis without being transmitted across external cloud APIs (subject to the security of your local operating system and storage environment). ATLAS shows its results in a local web page; on a shared network, start it with `--server.address=localhost` so other computers cannot open that page (see [Privacy and network use](../README.md#privacy-and-network-use)).
 
 ### The ATLAS Evaluation Engine
 1. **Surfacing Emergent Patterns (Inductive):** ATLAS groups high-frequency word patterns to help evaluators identify unanticipated themes without pre-filtering.
-2. **Context-Fenced Measurement (Deductive):** Evaluators define an explicit keyword checklist. ATLAS identifies matching dialogue turns and calculates document prevalence using exact string matching and token-distance context windows (such as matching *"delay"* only when it appears within a specified token window of *"bus"* or *"transit"*).
+2. **Context-Fenced Measurement (Deductive):** Evaluators define an explicit keyword checklist. ATLAS identifies matching dialogue turns and calculates prevalence using case- and accent-insensitive word-start matching, optional context fences (such as counting *"delay"* only when *"bus"* or *"transit"* appears in the same turn, or within a set number of words), and optional exclusion fences that veto false matches.
 3. **Audit Receipts & Verbatim Provenance:** For every matching quote, ATLAS records the source document name, speaker label, timestamp, line number, character span, and the source file's SHA-256 cryptographic digest. This allows evaluators to verify authentic verbatim excerpts against the original transcripts without paraphrasing.
 
 ### Methodological Boundaries: Deterministic Execution and Generative AI
@@ -167,7 +177,7 @@ Generative models can serve an optional, strictly upstream role during initial e
 #### Unit of Analysis: Dialogue Turns and Documents
 ATLAS reports findings across two defined units of measurement:
 1. **Dialogue Turns:** The number of individual spoken conversational blocks that match a theme.
-2. **Document Prevalence:** The number and percentage of transcript files in which a theme appears. When each transcript represents an interview with an individual participant, document prevalence corresponds directly to participant prevalence.
+2. **Unit Prevalence:** The number and percentage of analytical units in which a theme appears. Each transcript file is one unit and each survey row is one unit. When each transcript records one participant, unit prevalence corresponds to participant prevalence.
 
 ---
 
@@ -203,6 +213,10 @@ Evaluation summaries achieve the greatest clarity when organized into four struc
 
 The following models illustrate how general qualitative descriptions transform into structured, verifiable evaluation findings.
 
+> **Hypothetical writing models.** The counts, quotes and line numbers in Models 1 and 2 are invented to
+> show sentence structure. They are not ATLAS output and not findings. For real ATLAS output on the
+> built-in `SOFTWARE_TEST` fixtures see the [Methodology & Reference Manual](ATLAS_Methodology_and_Reference_Manual.md#5-software_test-walkthrough).
+
 ### Model 1: Transportation Barriers
 
 * **General Description:**  
@@ -233,7 +247,11 @@ ATLAS creates an automated proof sheet for every run:
 
 1. **Digital Fingerprint (SHA-256 Code):** A cryptographic hash that enables reviewers to verify whether local source files match retained reference versions.
 2. **Transcript Line References & Character Spans:** Every cited quote lists its transcript line number and turn character span, allowing an evaluator to locate the excerpt within the interview record.
-3. **Deterministic Reproducibility:** Because ATLAS uses compiled regular expression state machines rather than probabilistic language models, re-running the tool on the same corpus yields identical counts and percentages every time.
+3. **Deterministic Reproducibility:** Because ATLAS applies fixed matching rules rather than a probabilistic language model, re-running the same codebook on the same files yields identical counts and percentages every time.
+4. **Workbook Check:** Each prevalence cell in the Excel export carries an audit-stamp comment, and ATLAS re-checks the workbook against its provenance manifest; the result is shown in Tab 2.
+
+![SOFTWARE_TEST audit bridge](figures/atlas_audit_bridge.png)
+*SOFTWARE_TEST illustration of the audit trail on a built-in sample; mechanics only.*
 
 Attaching this proof sheet to a grant report protects the agency and builds long-term funder trust.
 
@@ -257,20 +275,16 @@ Before submitting an evaluation report, grant renewal, or board update, verify t
 
 A **codebook** is the master checklist for an evaluation project. It tells ATLAS exactly what words to count, which topics belong together, and what to ignore.
 
-Developing a codebook does not require computer programming. You can either build one in two minutes using the built-in ATLAS Wizard (Option A) or craft a custom codebook step-by-step (Option B).
+Developing a codebook does not require computer programming. You can start from discovered topics inside ATLAS (Option A) or write one step by step (Option B).
 
-### Option A: Build a Codebook in 2 Minutes with the ATLAS Wizard
+### Option A: Start from Discovered Topics in ATLAS
 
-The fastest way to build an authentic codebook is directly inside the ATLAS dashboard:
-
-1. **Load Your Data:** Click **Load Your Local Spreadsheet** on the home screen and choose your CSV or Excel file.
-2. **Run Discovery:** Under *Choose How to Analyze*, select **Inductive (Find new patterns from what people say)** and click **Run Thematic Analysis**.
-3. **Open the Wizard Panel:** Look at the blue card directly below your charts titled **Convert Discovered Patterns into an Evaluation Codebook**.
-4. **Name Your Categories:** For each topic, type a clear program title in the *Evaluation Category Name* box (for example, change `Theme 1: Bus, Ride` to `Transportation Barriers`).
-5. **Prune General Words:** Click the small **X** on any word tag that is not specific to that goal.
-6. **Save or Export:**
-   * Click **[Save as Active Codebook & Run Deductive Scoring]** to score all responses immediately.
-   * Click **[Export Codebook (.yaml)]** to save the file to your computer. You can upload this codebook for any future survey!
+1. **Load Your Data:** In the sidebar choose **Corpus Dataset → Upload Custom Files** and add CSV, Excel or transcript files. For tables, check that the **Text column** selector shows the free-text column.
+2. **Run Discovery:** Open **Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)** and choose the number of topics.
+3. **Download the Draft:** Click **📥 Download Discovered Codebook (.yaml)**.
+4. **Name Your Categories:** In a text editor, change each `name:` to a clear program title (for example, `Transportation Barriers`).
+5. **Prune General Words:** Delete entries from `roots_en` that are not specific to that goal, and add context fences.
+6. **Load and Score:** Choose **Active YAML Codebook → Upload Custom Codebook (.yaml)** and upload the edited file. Every response is scored immediately.
 
 ### Option B: Build a Custom Codebook Step-by-Step
 
@@ -293,7 +307,8 @@ A strong codebook uses two types of word rules:
 1. **Inclusion Words (Words that count):** Words that signal the topic.
    * *Example for Transit:* `bus`, `transit`, `train`, `ride`, `car trouble`, `fare`, `late`
 2. **Exclusion Rules (Words that do not count):** Words that prevent false matches.
-   * *Example:* The word *"ride"* might appear in a conversation about an amusement park. A context rule ensures *"ride"* only counts when it appears within 10 words of terms like *"doctor"*, *"clinic"*, or *"job"*.
+   * *Context rule:* The word *"ride"* might appear in a conversation about an amusement park. A context fence (`required_context` or `context_fences`, with `context_window: 10`) makes *"ride"* count only within 10 words of terms like *"doctor"*, *"clinic"*, or *"job"*.
+   * *Exclusion rule:* An exclusion fence (`exclude_fences`, optional `exclude_window`) vetoes a match, for example *"childcare"* followed by *"not a problem"*.
 
 ### Step 4: Pilot Test on Five Transcripts
 Before running ATLAS on the full dataset, test the codebook on five sample files:
@@ -304,11 +319,11 @@ Before running ATLAS on the full dataset, test the codebook on five sample files
    * **False Matches:** Did ATLAS count a quote that does not fit the goal? (If so, add an exclusion rule).
 
 ### Step 5: Save as a Plain Text File (YAML Format)
-ATLAS reads codebooks formatted in standard plain text (`.yaml` or `.txt`). ATLAS natively supports two equivalent schemas:
+ATLAS reads codebooks saved as plain-text YAML files (`.yaml` or `.yml`). It accepts two equivalent layouts:
 1. **Practitioner Format (shown below):** Uses `topics`, with `keywords`, `context_window` (maximum token distance), and `required_context` (context fences).
-2. **Researcher Format:** Uses `domains`, with `roots_en`, `roots_es`, `context_fences`, and `context_window`.
+2. **Researcher Format:** Uses `domains`, with `roots_en`, `roots_es`, `context_fences`, `context_window`, `exclude_fences`, and `exclude_window`.
 
-The local engine (`atlas_engine.py`) automatically normalizes both formats into compiled regular expression state machines.
+The local engine (`atlas_engine.py`) normalizes both layouts into the same rules. Words match at the start of a word, ignoring capital letters and accents. A `context_window` only applies when context words are listed.
 
 Below is a complete, copy-pasteable example of an evaluation codebook for a family support program:
 
@@ -394,7 +409,7 @@ Staff do not need to create topic lists from scratch. Several free, public libra
    * *What to borrow:* Clear word lists for job training, work tasks, and workplace hurdles.
 
 5. **ATLAS Starter Packs (In the Open-Source Repository):**
-   * Pre-made codebook files live right in the ATLAS `config/` folder on GitHub:
+   * Pre-made codebook files live in the ATLAS `config/` folder:
      * `sdoh_basic_needs.yaml`: Covers housing, transit, food, and utilities.
      * `intake_and_enrollment.yaml`: Covers paperwork delays, wait times, and sign-up rules.
      * `workforce_and_mobility.yaml`: Covers benefit cliffs, career goals, and job shifts.
@@ -415,4 +430,4 @@ Before running a final evaluation, confirm:
 
 ---
 
-*ATLAS is open-source software distributed under the MIT License. Documentation, sample codebooks, and implementation guides are available at [github.com/your-org/open-atlas](https://github.com/your-org/open-atlas).*
+*ATLAS is open-source software distributed under the MIT License. Documentation, sample codebooks, and implementation guides are available at [github.com/dphdame/atlas](https://github.com/dphdame/atlas).*

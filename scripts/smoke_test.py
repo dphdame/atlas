@@ -22,6 +22,14 @@ Stage 2 (Slice 2 - engine, discovery, provenance):
      verify_workbook_integrity
   2. scripts/anti_shortcut_gate.py --slice 2
 
+Stage 3 (Slice 3 - live-wired workbench, docs and figures):
+  1. a guarded child (this script with --app-check) drives app.py through
+     streamlit.testing.v1.AppTest: boot, corpus and codebook switches, the
+     topic slider, the apply-discovered-codebook button and a CSV upload with
+     id columns, comparing the rendered KPI cards with AtlasEngine output and
+     checking text-column auto-detection
+  2. scripts/anti_shortcut_gate.py --slice 3
+
 The repository's provisioned .venv is reused (the guard blocks pip downloads by
 design); provision it first with `run.command --check-only`. The copy gets its
 own real .venv (with a copy of the dependency marker) that reads the shared
@@ -30,7 +38,7 @@ rewrites or deletes only the copy's environment. After every stage, including a
 failed one, the run fails if any file's content or symlink target in the shared
 .venv (bytecode caches aside) was added, removed or changed.
 
-Usage: .venv/bin/python scripts/smoke_test.py --max-stage 2
+Usage: .venv/bin/python scripts/smoke_test.py --max-stage 3
 """
 
 from __future__ import annotations
@@ -525,9 +533,186 @@ def stage2(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
     run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", ".", "--slice", "2"], work, env, net_log)
 
 
+# ----------------------------------------------------------------------
+# Stage 3: live-wired workbench (runs inside a guarded child process)
+# ----------------------------------------------------------------------
+APP_UPLOAD_CSV = (
+    "response_id,participant_id,response\n"
+    "RID-01,P-01,\"Cuando se agotó el beneficio, busqué otro trabajo.\"\n"
+    "RID-02,P-02,The evening bus schedule made clinic visits hard.\n"
+    "RID-03,P-03,Paperwork for the caseworker took two weeks.\n"
+    "RID-04,P-04,Childcare costs went up after the rent increase.\n"
+)
+
+
+def app_check() -> list[str]:
+    """
+    Drive app.py through streamlit.testing.v1.AppTest, mutating every sidebar
+    control and the topic controls, and compare the rendered KPIs with
+    AtlasEngine output computed here on the same SOFTWARE_TEST inputs.
+    """
+    sys.path.insert(0, str(REPO))
+    import pandas as pd
+    from streamlit.testing.v1 import AppTest
+    from atlas_engine import AtlasEngine
+
+    failures: list[str] = []
+    samples, config = REPO / "data" / "samples", REPO / "config"
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        print(f"    [{'ok' if condition else 'FAIL'}] {label}" + (f": {detail}" if detail and not condition else ""))
+        if not condition:
+            failures.append(f"{label}{': ' + detail if detail else ''}")
+
+    def widget(at, accessor: str, label: str):
+        return next((w for w in getattr(at, accessor) if w.label == label), None)
+
+    def metrics(at) -> dict:
+        return {m.label: float(str(m.value).replace(",", "")) for m in at.metric}
+
+    def expected(codebook: str, files, options=None) -> dict:
+        res = AtlasEngine(str(config / codebook)).process_corpus(
+            [str(f) for f in files], root_dir=str(REPO), tabular_options=options)
+        freq = res["frequencies_df"]
+        return {
+            "Analytical Units (N)": float(res["total_documents"]),
+            "Participant Turns": float(res["participant_turns_analyzed"]),
+            "Active Domains": float(len(freq)),
+            "Matched Turn Mentions": float(freq["matching_turns"].sum()),
+        }
+
+    def no_exceptions(at, context: str) -> None:
+        check(f"{context}: no exceptions", len(at.exception) == 0, str([e.value for e in at.exception]))
+
+    def select(at, label: str, needle: str) -> None:
+        box = widget(at, "selectbox", label)
+        option = next((o for o in (box.options if box else []) if needle in str(o)), None)
+        check(f"{label!r} offers {needle!r}", option is not None)
+        if option is not None:
+            box.set_value(option)
+            at.run()
+
+    at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
+    at.run()
+    no_exceptions(at, "boot")
+    check("SOFTWARE_TEST notice on boot", any("SOFTWARE_TEST" in str(i.value) for i in at.info))
+    bilingual = [samples / "software_test_bilingual_interview.txt", samples / "software_test_zoom_session.vtt"]
+    check("boot KPIs match engine (bilingual x pfl)",
+          metrics(at) == expected("pfl_case_study_codebook.yaml", bilingual), str(metrics(at)))
+
+    survey_opts = {"text_col": "response", "id_col": "respondent_id", "speaker_col": "role"}
+    select(at, "Corpus Dataset", "Survey")
+    for codebook in ("pfl_case_study_codebook.yaml", "intake_and_enrollment.yaml", "sdoh_basic_needs.yaml"):
+        select(at, "Active YAML Codebook", codebook)
+        no_exceptions(at, f"survey x {codebook}")
+        check(f"survey x {codebook}: KPIs match engine",
+              metrics(at) == expected(codebook, [samples / "software_test_survey.csv"], survey_opts),
+              str(metrics(at)))
+
+    select(at, "Corpus Dataset", "DOCX")
+    select(at, "Active YAML Codebook", "intake_and_enrollment.yaml")
+    no_exceptions(at, "docx x intake")
+    check("docx x intake: KPIs match engine",
+          metrics(at) == expected("intake_and_enrollment.yaml", [samples / "software_test_teams_multiline.docx"]),
+          str(metrics(at)))
+
+    slider = next((s for s in at.slider if "topic" in str(s.label).lower()), None)
+    check("topic-count slider rendered", slider is not None)
+    if slider is not None:
+        slider.set_value(2)
+        at.run()
+        no_exceptions(at, "topic slider = 2")
+        apply = next((b for b in at.button if "Apply Discovered Codebook" in str(b.label)), None)
+        check("apply-discovered-codebook button rendered", apply is not None)
+        if apply is not None:
+            apply.click()
+            at.run()
+            no_exceptions(at, "apply discovered codebook")
+            active = str(widget(at, "selectbox", "Active YAML Codebook").value)
+            check("discovered codebook becomes active", active.startswith("Discovered:"), active)
+            domains = metrics(at).get("Active Domains", 0.0)
+            check("discovered codebook drives the engine", 1.0 <= domains <= 2.0, str(domains))
+
+    select(at, "Corpus Dataset", "Upload")
+    uploader = next((u for u in at.file_uploader if ".csv" in (u.allowed_type or [])), None)
+    check("file uploader accepts .csv", uploader is not None)
+    if uploader is not None:
+        uploader.set_value(("software_test_app_upload.csv", APP_UPLOAD_CSV.encode("utf-8"), "text/csv"))
+        at.run()
+        select(at, "Active YAML Codebook", "pfl_case_study_codebook.yaml")
+        no_exceptions(at, "uploaded csv")
+        text_box = widget(at, "selectbox", "Text column (free-text responses)")
+        check("text column auto-detected as 'response'", text_box is not None and text_box.value == "response",
+              str(text_box.value if text_box else None))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "software_test_app_upload.csv"
+            path.write_text(APP_UPLOAD_CSV, encoding="utf-8")
+            want = expected("pfl_case_study_codebook.yaml", [path], {"text_col": "response"})
+        check("uploaded csv: KPIs match engine", metrics(at) == want, f"{metrics(at)} != {want}")
+        frames = [f.value for f in at.dataframe if isinstance(f.value, pd.DataFrame)]
+        check("uploaded csv: matched quote rendered",
+              any("busqué otro trabajo" in str(v) for fr in frames for v in fr.astype(str).to_numpy().ravel()))
+
+    # Uploads with no usable text column must stop with a validation error, never
+    # fall back to an id column or to the parser's default "response" column.
+    # Each case: (tables, text column to force in the selector or None, selector expected?).
+    rejected_uploads = {
+        "id-only table": (
+            [("software_test_ids_only.csv", "id,respondent_id\nA-1,R-1\nA-2,R-2\n")], None, False),
+        "tables with no shared column": (
+            [("software_test_left.csv", "respondent_id,comment\nR-1,The bus was late.\n"),
+             ("software_test_right.csv", "case_id,note\nC-1,Paperwork took weeks.\n")], None, False),
+        "shared headers, different populated text columns": (
+            [("software_test_resp.csv",
+              "respondent_id,comment,response\nR-1,,The evening bus schedule made clinic visits hard.\n"
+              "R-2,,Paperwork for the caseworker took two weeks.\n"),
+             ("software_test_comm.csv",
+              "respondent_id,comment,response\nR-3,Childcare costs went up after the rent increase.,\n"
+              "R-4,Cuando se agotó el beneficio busqué otro trabajo.,\n")], None, False),
+        "chosen text column empty in one table": (
+            [("software_test_noted.csv",
+              "respondent_id,response,note\nR-1,The evening bus schedule made clinic visits hard.,ok\n"),
+             ("software_test_unnoted.csv",
+              "respondent_id,response,note\nR-2,Paperwork for the caseworker took two weeks.,\n")], "note", True),
+    }
+    for case, (tables, force_col, selector_expected) in rejected_uploads.items():
+        at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
+        at.run()
+        select(at, "Corpus Dataset", "Upload")
+        uploader = next((u for u in at.file_uploader if ".csv" in (u.allowed_type or [])), None)
+        if uploader is None:
+            check(f"{case}: file uploader rendered", False)
+            continue
+        uploader.set_value([(name, body.encode("utf-8"), "text/csv") for name, body in tables])
+        at.run()
+        text_box = widget(at, "selectbox", "Text column (free-text responses)")
+        if force_col is not None and text_box is not None:
+            check(f"{case}: detection agrees on 'response' before override", text_box.value == "response",
+                  str(text_box.value))
+            check(f"{case}: agreeing tables are analysed before override",
+                  len(at.error) == 0 and len(at.metric) == 4, f"{len(at.error)} errors, {len(at.metric)} metrics")
+            text_box.set_value(force_col)
+            at.run()
+            text_box = widget(at, "selectbox", "Text column (free-text responses)")
+        no_exceptions(at, case)
+        check(f"{case}: validation error shown", len(at.error) == 1, str([e.value for e in at.error]))
+        check(f"{case}: no analysis run", len(at.metric) == 0 and len(at.dataframe) == 0,
+              f"{len(at.metric)} metrics, {len(at.dataframe)} tables rendered")
+        check(f"{case}: text-column selector {'shown' if selector_expected else 'not offered'}",
+              (text_box is not None) == selector_expected, str(text_box.options if text_box else None))
+    return failures
+
+
+def stage3(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    py = str(venv_python(work))
+    run_step("app widget check", [py, "scripts/smoke_test.py", "--app-check"], work, env, net_log)
+    run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", ".", "--slice", "3"], work, env, net_log)
+
+
 STAGES = {
     1: ("packaging, launchers, ingestion", stage1),
     2: ("engine, discovery, provenance", stage2),
+    3: ("live-wired workbench, docs and figures", stage3),
 }
 
 
@@ -557,10 +742,19 @@ def run_stages(stages, work: Path, env: dict, net_log: Path, tmp: Path, before: 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--max-stage", type=int, default=2, choices=sorted(STAGES),
+    ap.add_argument("--max-stage", type=int, default=3, choices=sorted(STAGES),
                     help="run stages 1..N (later stages are added in later slices)")
     ap.add_argument("--pipeline-check", metavar="DIR", help=argparse.SUPPRESS)
+    ap.add_argument("--app-check", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
+
+    if args.app_check:
+        failures = app_check()
+        if failures:
+            print(f"APP CHECK FAILED ({len(failures)} check(s))")
+            return 1
+        print("APP CHECK PASSED")
+        return 0
 
     if args.pipeline_check:
         scratch = Path(args.pipeline_check)
