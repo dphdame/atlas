@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# From Spoken Words to Countable Data: Meet ATLAS
-# A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
-# 1-Click Desktop Launcher for macOS / Linux • 100% Local & Offline
+# ATLAS - Automated Text-to-Ledger Actuarial Synthesis
+# Local desktop launcher for macOS / Linux
 #
 # Usage:
 #   ./run.command               provision .venv if needed, verify, launch ATLAS
@@ -44,9 +43,8 @@ fail() {
 }
 
 echo "=================================================================="
-echo " From Spoken Words to Countable Data: Meet ATLAS"
-echo " A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop."
-echo " 100% Local Processing • Zero External Network Traffic"
+echo " ATLAS - Automated Text-to-Ledger Actuarial Synthesis"
+echo " Local qualitative coding and auditable frequency workbench"
 echo "=================================================================="
 
 # Check for Python 3.10+

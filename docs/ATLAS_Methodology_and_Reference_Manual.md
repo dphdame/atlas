@@ -1,5 +1,4 @@
-# From Spoken Words to Countable Data: Meet ATLAS
-## Methodology & Reference Manual
+# ATLAS: Methodology & Reference Manual
 
 > Every count, quote, digest and figure in this manual is output of the ATLAS code on the built-in
 > `SOFTWARE_TEST` fixtures in `data/samples/`. The fixtures demonstrate software mechanics only and are

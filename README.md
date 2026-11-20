@@ -1,5 +1,5 @@
-# From Spoken Words to Countable Data: Meet ATLAS
-### A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
+# ATLAS
+### Automated Text-to-Ledger Actuarial Synthesis — local qualitative coding, topic discovery, and auditable frequency exports for transcripts and survey tables.
 
 **Python 3.10+ · MIT License · local processing · SHA-256 source provenance**
 

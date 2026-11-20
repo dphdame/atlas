@@ -1,8 +1,7 @@
 @echo off
 REM ==============================================================================
-REM From Spoken Words to Countable Data: Meet ATLAS
-REM A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
-REM 1-Click Desktop Launcher for Windows - 100% Local and Offline
+REM ATLAS - Automated Text-to-Ledger Actuarial Synthesis
+REM Local desktop launcher for Windows
 REM
 REM Usage:
 REM   run.bat               provision .venv if needed, verify, launch ATLAS
@@ -19,7 +18,7 @@ REM parentheses can never close a block early.
 REM ==============================================================================
 
 setlocal EnableExtensions
-title From Spoken Words to Countable Data: Meet ATLAS
+title ATLAS Workbench
 cd /d "%~dp0"
 
 set "CHECK_ONLY=0"
@@ -38,9 +37,8 @@ set "MARKER=.venv\.atlas_deps.sha256"
 set "HASH_TMP=%TEMP%\atlas_req_hash_%RANDOM%.txt"
 
 echo ==================================================================
-echo  From Spoken Words to Countable Data: Meet ATLAS
-echo  A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
-echo  100%% Local Processing - Zero External Network Traffic
+echo  ATLAS - Automated Text-to-Ledger Actuarial Synthesis
+echo  Local qualitative coding and auditable frequency workbench
 echo ==================================================================
 
 REM Check for Python 3.10+

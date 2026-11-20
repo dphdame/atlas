@@ -1,6 +1,6 @@
 """
-From Spoken Words to Countable Data: Meet ATLAS
-A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
+ATLAS — Automated Text-to-Ledger Actuarial Synthesis
+Local qualitative coding, topic discovery, and auditable frequency tables for transcripts and surveys.
 
 Every number, quote, digest and topic on screen is computed live from the
 selected corpus and codebook by UniversalTranscriptParser, AtlasEngine and
@@ -111,8 +111,8 @@ _TEXT_COLUMN_HINTS = (
 # 1. Page configuration and accessible styling (WCAG 2.1 AA palette)
 # ------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="From Spoken Words to Countable Data: Meet ATLAS",
-    page_icon="⚖️",
+    page_title="ATLAS Workbench",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -327,13 +327,7 @@ if "discovered_codebooks" not in st.session_state:
 config_codebooks = list_config_codebooks()
 
 with st.sidebar:
-    st.markdown(
-        '<div class="badge-row" aria-label="ATLAS Workbench">'
-        '<span class="atlas-badge">ATLAS</span><span class="atlas-badge atlas-badge-teal">Workbench</span>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("### Operational Controls")
+    st.markdown("### Inputs & Codebook")
 
     corpus_choice = st.selectbox("Corpus Dataset", CORPUS_OPTIONS, index=0)
 
@@ -436,15 +430,6 @@ with st.sidebar:
         uploaded_codebook = st.file_uploader("Upload Custom Codebook (.yaml)", type=["yaml", "yml"])
 
     st.markdown("---")
-    st.markdown("### Operational Guarantees")
-    st.markdown(
-        "🔒 **Local processing**  \nFiles are parsed and coded on this computer; ATLAS code makes no network "
-        "requests and loads no remote assets. The desktop launchers turn off Streamlit usage statistics."
-    )
-    st.markdown("⚖️ **Line-level provenance**  \nEvery coded quote carries its source line, character span and file SHA-256.")
-    st.markdown("⚡ **Deterministic coding**  \nThe same files and codebook give the same counts on every run.")
-
-    st.markdown("---")
     st.markdown("### Reference Guides")
     for label, filename in REFERENCE_GUIDES:
         guide = DOCS_DIR / filename
@@ -459,16 +444,10 @@ with st.sidebar:
 # 4. Header and fixture notice
 # ------------------------------------------------------------------------------
 st.markdown(
-    f"""
+    """
 <div class="brand-header">
-<h1>From Spoken Words to Countable Data: Meet ATLAS</h1>
-<p>A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.</p>
-<div class="badge-row">
-<span class="atlas-badge">Local processing</span>
-<span class="atlas-badge">SHA-256 source digests</span>
-<span class="atlas-badge atlas-badge-teal">Deterministic coding</span>
-<span class="atlas-badge atlas-badge-outline">WCAG 2.1 AA palette</span>
-</div>
+<h1>ATLAS</h1>
+<p>Local qualitative coding, topic discovery, and auditable frequency tables for transcripts and surveys.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -818,7 +797,7 @@ with tab_econometric:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#475569;font-size:0.85rem;padding:1rem 0;'>"
-    "From Spoken Words to Countable Data: Meet ATLAS · MIT License"
+    "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License"
     "</div>",
     unsafe_allow_html=True,
 )
