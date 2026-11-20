@@ -1,0 +1,5 @@
+[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]
+Rosa [00:00:05]: How long have you lived here?
+Lee [00:00:20]: Six years. Why do you ask?
+Rosa [00:00:40]: What changed in that time? Who helped you most?
+Lee [00:01:00]: My sister helped with rent.

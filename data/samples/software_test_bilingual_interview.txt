@@ -1,0 +1,7 @@
+[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]
+Interviewer [00:00:30]: Thanks for joining us today. Can you tell me about your work before the layoff?
+María José Pérez [00:01:12]: Trabajaba en limpieza de oficinas. Cuando perdí el puesto, se agotó el beneficio en pocas semanas.
+O'Connor [00:01:45]: For me the protección laboral rules were confusing. Who was supposed to explain them?
+Interviewer [00:02:10]: What happened after the benefit ended? Did anyone help you apply for other support?
+María José Pérez [00:02:40]: Una vecina me ayudó con los formularios y encontré trabajo temporal.
+O'Connor [00:03:05]: Negative-fence control: this part is not about protección laboral at all, only about the bus schedule.
