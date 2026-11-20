@@ -1,57 +1,88 @@
 #!/usr/bin/env python3
-"""Progressive ATLAS smoke suite.
+"""Progressive 5-stage ATLAS smoke suite.
 
-Each stage runs against a fresh copy of the repository in a temporary
+Every stage runs against a fresh copy of the repository in a temporary
 directory, with every child process under the ATLAS offline guard
-(scripts/offline_guard/sitecustomize.py, ATLAS_OFFLINE_GUARD=1). Any blocked
-network call recorded in the guard log fails the stage.
+(scripts/offline_guard/sitecustomize.py, ATLAS_OFFLINE_GUARD=1,
+ATLAS_NET_LOG=<tmp>/net_attempts.jsonl). Any blocked network call recorded in
+the guard log fails the step, and the run fails unless the log is still empty
+at the end.
 
-Stage 1 (Slice 1 - packaging, launchers, ingestion):
-  1. confirm the offline guard is loaded in child Python processes
-  2. launcher --check-only (run.command on macOS/Linux, run.bat on Windows)
-  3. python -m unittest discover -s tests
-  4. scripts/anti_shortcut_gate.py --slice 1
+Stage 1 (clean-temp copy and subprocess offline monitor):
+  1. the copy holds no .git / .codex / thoughts and no path that resolves
+     outside it
+  2. guarded children block and log a DNS lookup, a sitecustomize-bypassing
+     `python -I` launch and a curl launch
 
-Stage 2 (Slice 2 - engine, discovery, provenance):
-  1. a guarded child (this script with --pipeline-check DIR) writes SOFTWARE_TEST
-     .docx, .vtt, accented .txt (NFC/NFD marks, ligature, sharp s), same-basename
-     .txt files in two folders and a .csv into DIR, then runs
-     UniversalTranscriptParser -> atlas_discover -> AtlasEngine.export_results and
-     checks denominators, verbatim spans, .xlsx audit comments, .parquet,
-     provenance_manifest.json, semantic rerun equality and tamper detection by
-     verify_workbook_integrity
-  2. scripts/anti_shortcut_gate.py --slice 2
+Stage 2 (launcher --check-only and broken-venv recovery):
+  1. launcher --check-only (run.command on macOS/Linux, run.bat on Windows)
+  2. in scratch directories holding only the launcher and requirements.txt, an
+     empty .venv/ without the dependency marker, and a .venv/ with a stale marker
+     and a damaged interpreter, both take the rebuild path; with pip offline
+     (PIP_NO_INDEX=1) the launcher fails fast and removes the incomplete .venv
 
-Stage 3 (Slice 3 - live-wired workbench, docs and figures):
-  1. a guarded child (this script with --app-check) drives app.py through
-     streamlit.testing.v1.AppTest: boot, corpus and codebook switches, the
-     topic slider, the apply-discovered-codebook button and a CSV upload with
-     id columns, comparing the rendered KPI cards with AtlasEngine output and
-     checking text-column auto-detection
-  2. scripts/anti_shortcut_gate.py --slice 3
+Stage 3 (end-to-end multi-format CLI, reproducibility, tamper detection):
+  a guarded child (this script with --pipeline-check DIR) writes SOFTWARE_TEST
+  .docx (speaker labels, and a speakerless Teams export with a multiline turn
+  and an interviewer prompt), .vtt, accented .txt (NFC/NFD marks, ligature,
+  sharp s), same-basename .txt files in two folders and a multi-row .csv into
+  DIR, then runs UniversalTranscriptParser -> atlas_discover ->
+  AtlasEngine.export_results and checks denominators, verbatim spans, .xlsx
+  audit comments, .parquet (pyarrow), provenance_manifest.json, semantic rerun
+  identity and tamper detection by verify_workbook_integrity
+
+Stage 4 (unit tests, AppTest and a real headless browser):
+  1. python -m unittest discover -s tests
+  2. a guarded child (this script with --app-check) drives app.py through
+     streamlit.testing.v1.AppTest and compares the KPIs with AtlasEngine output
+  3. `streamlit run app.py --server.headless=true` on a free loopback port in the
+     copy, under the guard; a guarded child (this script with --browser-check)
+     drives headless Playwright Chromium (PLAYWRIGHT_BROWSERS_PATH is honoured):
+     zero non-local browser requests, zero uncaught page errors, SOFTWARE_TEST
+     notice and engine-matching KPI cards on boot, a transcript upload whose KPI
+     cards and domain table update to the engine's counts, and downloaded
+     .xlsx / manifest files that carry audit stamps and pass
+     verify_workbook_integrity. The server is then stopped with a signal and
+     must shut down by itself.
+  Skipping the browser check needs an explicit --skip-playwright.
+
+Stage 5 (anti-shortcut gate and codebook audit):
+  1. scripts/anti_shortcut_gate.py --repo <copy> --slice 4
+  2. a guarded child (this script with --codebook-audit) compiles every
+     config/*.yaml codebook in AtlasEngine
 
 The repository's provisioned .venv is reused (the guard blocks pip downloads by
-design); provision it first with `run.command --check-only`. The copy gets its
-own real .venv (with a copy of the dependency marker) that reads the shared
-site-packages through a .pth file, so a launcher or pip in the copy installs,
-rewrites or deletes only the copy's environment. After every stage, including a
-failed one, the run fails if any file's content or symlink target in the shared
-.venv (bytecode caches aside) was added, removed or changed.
+design); provision it first with `run.command --check-only` and add Playwright
+(`pip install playwright` + `python -m playwright install chromium`). The copy
+gets its own real .venv (with a copy of the dependency marker) that reads the
+shared site-packages through a .pth file, so a launcher or pip in the copy
+installs, rewrites or deletes only the copy's environment. After every stage,
+including a failed one, the run fails if any file's content or symlink target in
+the shared .venv (bytecode caches aside) was added, removed or changed.
 
-Usage: .venv/bin/python scripts/smoke_test.py --max-stage 3
+Usage: .venv/bin/python scripts/smoke_test.py [--max-stage 5] [--skip-playwright]
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
+import ipaddress
+import json
 import os
 from pathlib import Path
+import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
+from urllib.parse import urlsplit
+import urllib.request
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -59,8 +90,11 @@ COPY_IGNORE = shutil.ignore_patterns(
     ".git", ".venv", "venv", ".codex", "thoughts", "__pycache__", "*.pyc", "*.pyo",
     ".pytest_cache", "output", "*.log", ".DS_Store",
 )
+EXCLUDED_FROM_COPY = (".git", ".codex", "thoughts", "venv")
 IS_WINDOWS = os.name == "nt"
 MARKER_NAME = ".atlas_deps.sha256"
+NET_LOG_NAME = "net_attempts.jsonl"
+SMOKE_SCRIPT = "scripts/smoke_test.py"
 
 
 class StageFailure(Exception):
@@ -112,6 +146,15 @@ def _python_output(argv: list[str]) -> str:
     return proc.stdout.strip()
 
 
+def copy_repo(src: Path, dst: Path) -> None:
+    """
+    Copy the working tree, keeping symlinks as links: a followed link would bring
+    external content in as an ordinary file, while a kept one is rejected by
+    copy_problems() when its target lies outside the copy.
+    """
+    shutil.copytree(src, dst, ignore=COPY_IGNORE, symlinks=True)
+
+
 def prepare_copy(tmp: Path) -> Path:
     """
     Copy the repository and give the copy its own real virtual environment.
@@ -124,7 +167,7 @@ def prepare_copy(tmp: Path) -> Path:
     if not shared_py.exists():
         raise StageFailure(f"{shared_py} not found; provision it with run.command --check-only (or run.bat)")
     work = tmp / "atlas"
-    shutil.copytree(REPO, work, ignore=COPY_IGNORE)
+    copy_repo(REPO, work)
     wrapper = work / ".venv"
     _python_output([str(shared_py), "-m", "venv", str(wrapper)])
 
@@ -212,17 +255,129 @@ def verify_guard_active(work: Path, env: dict, tmp: Path) -> None:
     print("--- offline guard probe: PASS (lookup blocked and logged)", flush=True)
 
 
+def copy_problems(root: Path) -> list[str]:
+    """
+    Reasons the temp copy at root is not a clean, self-contained copy: a top-level
+    directory that must be excluded, or any path (symlink or not) that resolves
+    outside root. The copy's own .venv, created by prepare_copy after the copy,
+    links to the base interpreter by design and is not walked.
+    """
+    root = Path(os.path.realpath(root))
+    problems = [f"excluded directory copied: {name}" for name in EXCLUDED_FROM_COPY if (root / name).exists()]
+    for dirpath, dirnames, filenames in os.walk(root):
+        if Path(dirpath) == root:
+            dirnames[:] = [d for d in dirnames if d != ".venv"]
+        for name in sorted(dirnames + filenames):
+            path = Path(dirpath) / name
+            resolved = Path(os.path.realpath(path))
+            if resolved != root and root not in resolved.parents:
+                problems.append(f"path escapes the copy: {path.relative_to(root).as_posix()} -> {resolved}")
+    return problems
+
+
+def probe_guard_blocks(name: str, code: str, expect_function: str, work: Path, env: dict, tmp: Path) -> None:
+    """A guarded child running code must fail, with a blocked call to expect_function logged."""
+    probe_log = tmp / f"guard_probe_{name.replace(' ', '_')}.jsonl"
+    probe_env = dict(env, ATLAS_NET_LOG=str(probe_log))
+    print(f"\n--- offline monitor probe ({name})", flush=True)
+    proc = subprocess.run(
+        [str(venv_python(work)), "-c", code],
+        cwd=str(work), env=probe_env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    )
+    functions = [json.loads(line).get("function", "") for line in read_log(probe_log)]
+    if proc.returncode == 0 or not any(fn.startswith(expect_function) for fn in functions):
+        raise StageFailure(
+            f"offline monitor probe ({name}): expected a blocked {expect_function} call, "
+            f"got exit {proc.returncode} and log {functions}")
+    print(f"--- offline monitor probe ({name}): PASS (blocked and logged: {expect_function})", flush=True)
+
+
 def stage1(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    print(f"\n--- clean temp copy: {work}", flush=True)
+    problems = copy_problems(work)
+    if problems:
+        raise StageFailure("clean temp copy: " + "; ".join(problems[:20]))
+    print("--- clean temp copy: PASS (no .git/.codex/thoughts, no path outside the copy)", flush=True)
+    print(f"    ATLAS_OFFLINE_GUARD={env['ATLAS_OFFLINE_GUARD']} ATLAS_NET_LOG={env['ATLAS_NET_LOG']}")
+    print(f"    PYTHONPATH={env['PYTHONPATH']}", flush=True)
     verify_guard_active(work, env, tmp)
-    launcher = ["cmd", "/c", "run.bat", "--check-only"] if IS_WINDOWS else ["bash", "run.command", "--check-only"]
-    run_step("launcher --check-only", launcher, work, env, net_log)
-    py = str(venv_python(work))
-    run_step("unit tests", [py, "-m", "unittest", "discover", "-s", "tests", "-v"], work, env, net_log)
-    run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", ".", "--slice", "1"], work, env, net_log)
+    probe_guard_blocks(
+        "isolated python child", "import subprocess, sys; subprocess.run([sys.executable, '-I', '-c', 'pass'])",
+        "subprocess.Popen(sitecustomize-bypass)", work, env, tmp)
+    probe_guard_blocks(
+        "curl child", "import subprocess; subprocess.run(['curl', '--version'])", "subprocess.Popen", work, env, tmp)
+
+
+def launcher_argv() -> list[str]:
+    return ["cmd", "/c", "run.bat", "--check-only"] if IS_WINDOWS else ["bash", "run.command", "--check-only"]
+
+
+def broken_venv_scenarios() -> dict:
+    """
+    name -> function that damages a fresh scratch .venv in place. On every
+    platform the launcher must recreate the environment from scratch in the same
+    run; a reinstall into the damaged interpreter does not count as recovery.
+    """
+    def empty_venv(venv: Path) -> None:
+        venv.mkdir()
+
+    def stale_marker_damaged_python(venv: Path) -> None:
+        exe = venv / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"SOFTWARE_TEST damaged interpreter, not a program\n")
+        (venv / MARKER_NAME).write_text("0" * 64 + "\n", encoding="utf-8")
+
+    return {"empty .venv without marker": empty_venv,
+            "stale marker and damaged interpreter": stale_marker_damaged_python}
+
+
+def broken_venv_check(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    """
+    In scratch directories holding only the launcher files, a damaged .venv must
+    take the rebuild path; with pip offline the launcher must fail fast, print
+    the install error and remove the incomplete .venv (and its marker).
+    """
+    launcher_files = ["run.bat", "_pip_helper.py"] if IS_WINDOWS else ["run.command"]
+    offline_env = dict(env, PIP_NO_INDEX="1", PIP_NO_CACHE_DIR="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
+    for idx, (name, damage) in enumerate(broken_venv_scenarios().items(), 1):
+        scratch = tmp / f"launcher_recovery_{idx}"
+        scratch.mkdir()
+        for rel in [*launcher_files, "requirements.txt"]:
+            shutil.copy2(work / rel, scratch / rel)
+        damage(scratch / ".venv")
+        print(f"\n--- broken-venv recovery ({name}): {' '.join(launcher_argv())} in {scratch}", flush=True)
+        before = len(read_log(net_log))
+        proc = subprocess.run(launcher_argv(), cwd=str(scratch), env=offline_env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace")
+        output = proc.stdout + proc.stderr
+        blocked = read_log(net_log)[before:]
+        problems = []
+        if blocked:
+            problems.append(f"{len(blocked)} network call(s) blocked by the offline guard")
+        if proc.returncode == 0:
+            problems.append("launcher exited 0 with no installable dependencies")
+        if "Installing dependencies into local environment" not in output:
+            problems.append("launcher did not take the provisioning path")
+        if "Creating local isolated environment" not in output:
+            problems.append("launcher did not recreate the damaged .venv")
+        if "Dependency installation failed" not in output:
+            problems.append("launcher did not report the failed install")
+        if (scratch / ".venv").exists():
+            problems.append("incomplete .venv was left behind")
+        if problems:
+            print(output[-3000:])
+            raise StageFailure(f"broken-venv recovery ({name}): " + "; ".join(problems))
+        print(f"--- broken-venv recovery ({name}): PASS (rebuilt, failed fast offline with exit "
+              f"{proc.returncode}, incomplete .venv removed)", flush=True)
+
+
+def stage2(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    run_step("launcher --check-only", launcher_argv(), work, env, net_log)
+    broken_venv_check(work, env, net_log, tmp)
 
 
 # ----------------------------------------------------------------------
-# Stage 2: multi-format pipeline (runs inside a guarded child process)
+# Stage 3: multi-format pipeline (runs inside a guarded child process)
 # ----------------------------------------------------------------------
 NFC = lambda text: unicodedata.normalize("NFC", text)  # noqa: E731
 NFD_PROTECCION = "protecc" + "ió" + "n laboral"
@@ -237,13 +392,18 @@ SMOKE_CODEBOOK = {
         {"id": "TRANSIT", "name": "Transit barriers", "keywords": ["bus", "transit"]},
     ],
 }
-# (domain_id) -> (documents_reporting, matching_turns). 10 units = 7 transcripts (including
+# (domain_id) -> (documents_reporting, matching_turns). 11 units = 8 transcripts (including
 # one with only facilitator turns and one that parses to no turns) + 3 CSV respondent rows;
 # the blank CSV row and the CSV interviewer-prompt row are not respondents.
-SMOKE_EXPECTED_TOTAL = 10
-SMOKE_PARTICIPANT_ONLY_UNITS = 8
+SMOKE_EXPECTED_TOTAL = 11
+SMOKE_PARTICIPANT_ONLY_UNITS = 9
+SMOKE_FACILITATOR_TURNS = 5  # 3 Moderator turns + the speakerless .docx prompt + the CSV prompt row
 PROMPT_PATTERNS = [r"^PROMPT:"]
-SMOKE_EXPECTED = {"PROTECCION": (1, 3), "CHILDCARE": (2, 2), "TRANSIT": (3, 3)}
+SMOKE_EXPECTED = {"PROTECCION": (1, 3), "CHILDCARE": (2, 2), "TRANSIT": (4, 4)}
+# Speakerless Teams-style .docx: each paragraph is a timestamp, then line breaks and the text.
+TEAMS_DOCX = "software_test_teams_export.docx"
+TEAMS_PROMPT = "PROMPT: Does the bus or transit schedule work for you?"
+TEAMS_MULTILINE = ("The bus comes once an hour.", "The transit pass costs more now.")
 ACCENTED_LINES = [
     ("Trabajadora A", NFC("Perdí la protección laboral cuando pedí permiso en el trabajo.")),
     ("Trabajadora B", "Perdí la " + NFD_PROTECCION + " durante el permiso."),
@@ -254,7 +414,7 @@ TABULAR_OPTIONS = {"text_col": "response", "id_col": "respondent_id"}
 EMPTY_TRANSCRIPT = "software_test_empty.txt"
 
 
-def write_stage2_fixtures(corpus: Path) -> list[Path]:
+def write_pipeline_fixtures(corpus: Path) -> list[Path]:
     """SOFTWARE_TEST inputs: they demonstrate software mechanics only, not findings."""
     import docx  # python-docx
     from universal_transcript_parser import SOFTWARE_TEST_BANNER
@@ -275,6 +435,13 @@ def write_stage2_fixtures(corpus: Path) -> list[Path]:
     docx_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(docx_path))
     files.append(docx_path)
+
+    teams = docx.Document()
+    teams.add_paragraph(SOFTWARE_TEST_BANNER)
+    teams.add_paragraph("\n0:00\n" + TEAMS_PROMPT)
+    teams.add_paragraph("\n0:05\n" + "\n".join(TEAMS_MULTILINE))
+    teams.save(str(corpus / TEAMS_DOCX))
+    files.append(corpus / TEAMS_DOCX)
 
     files.append(write("software_test_session.vtt", (
         "WEBVTT\n\n"
@@ -305,9 +472,9 @@ def write_stage2_fixtures(corpus: Path) -> list[Path]:
 def pipeline_check(scratch: Path) -> list[str]:
     """Run the Stage 2 pipeline in scratch; return a list of failed checks."""
     sys.path.insert(0, str(REPO))
-    import json
     import openpyxl
     import pandas as pd
+    import pyarrow.parquet
     import yaml
     import atlas_discover
     from atlas_engine import AtlasEngine, fold_accents
@@ -321,7 +488,7 @@ def pipeline_check(scratch: Path) -> list[str]:
             failures.append(f"{label}{': ' + detail if detail else ''}")
 
     corpus = scratch / "corpus"
-    files = write_stage2_fixtures(corpus)
+    files = write_pipeline_fixtures(corpus)
     paths = [str(p) for p in files]
     codebook_path = scratch / "software_test_smoke_codebook.yaml"
     with open(codebook_path, "w", encoding="utf-8") as fh:
@@ -341,7 +508,15 @@ def pipeline_check(scratch: Path) -> list[str]:
         file_hashes[path.relative_to(corpus).as_posix()] = sha256_file(path)
         turns.extend(parsed)
     participants = [t for t in turns if not t["is_facilitator"]]
-    check("facilitator and prompt turns flagged", sum(t["is_facilitator"] for t in turns) == 4)
+    check("facilitator and prompt turns flagged", sum(t["is_facilitator"] for t in turns) == SMOKE_FACILITATOR_TURNS,
+          str(sum(t["is_facilitator"] for t in turns)))
+    teams_turns = [t for t in turns if t["source_id"] == TEAMS_DOCX]
+    check("speakerless .docx prompt excluded by pattern",
+          [(t["text"], t["is_facilitator"], t.get("exclusion_reason")) for t in teams_turns if t["is_facilitator"]]
+          == [(TEAMS_PROMPT, True, f"matched_prompt_pattern:{PROMPT_PATTERNS[0]}")], repr(teams_turns))
+    teams_answers = [t["text"] for t in teams_turns if not t["is_facilitator"]]
+    check("speakerless .docx multiline turn keeps every line",
+          len(teams_answers) == 1 and all(line in teams_answers[0] for line in TEAMS_MULTILINE), repr(teams_answers))
     check("accented text kept verbatim",
           [t["text"] for t in turns if t["speaker"].startswith("Trabajadora")] == [x for _, x in ACCENTED_LINES])
 
@@ -403,6 +578,10 @@ def pipeline_check(scratch: Path) -> list[str]:
 
     pq = pd.read_parquet(out / "verbatim_quotes_inventory.parquet")
     check("parquet round-trips quote inventory", pq.reset_index(drop=True).equals(quotes.reset_index(drop=True)))
+    arrow = pyarrow.parquet.read_table(out / "verbatim_quotes_inventory.parquet")
+    check("pyarrow reads the parquet schema and rows",
+          arrow.num_rows == len(quotes) and arrow.column_names == list(quotes.columns),
+          f"{arrow.num_rows} rows, {arrow.column_names}")
     with open(out / "provenance_manifest.json", encoding="utf-8") as fh:
         manifest = json.load(fh)
     check("manifest binds file hashes", manifest["file_hashes"] == file_hashes)
@@ -417,6 +596,8 @@ def pipeline_check(scratch: Path) -> list[str]:
 
     # 4. Semantic rerun equality
     _, results_2, out_2 = run("export_2")
+    check("rerun frequencies_df identical", results_2["frequencies_df"].equals(results["frequencies_df"]))
+    check("rerun quotes_df identical", results_2["quotes_df"].equals(results["quotes_df"]))
     for name in ("thematic_frequencies.csv", "verbatim_quotes_inventory.csv"):
         check(f"rerun {name} byte-identical", (out / name).read_bytes() == (out_2 / name).read_bytes())
     with open(out_2 / "provenance_manifest.json", encoding="utf-8") as fh:
@@ -526,15 +707,14 @@ def pipeline_check(scratch: Path) -> list[str]:
     return failures
 
 
-def stage2(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+def stage3(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
     py = str(venv_python(work))
-    scratch = tmp / "stage2_pipeline"
-    run_step("pipeline check", [py, "scripts/smoke_test.py", "--pipeline-check", str(scratch)], work, env, net_log)
-    run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", ".", "--slice", "2"], work, env, net_log)
+    scratch = tmp / "stage3_pipeline"
+    run_step("pipeline check", [py, SMOKE_SCRIPT, "--pipeline-check", str(scratch)], work, env, net_log)
 
 
 # ----------------------------------------------------------------------
-# Stage 3: live-wired workbench (runs inside a guarded child process)
+# Stage 4a: live-wired workbench through AppTest (runs inside a guarded child)
 # ----------------------------------------------------------------------
 APP_UPLOAD_CSV = (
     "response_id,participant_id,response\n"
@@ -703,16 +883,404 @@ def app_check() -> list[str]:
     return failures
 
 
-def stage3(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+# ----------------------------------------------------------------------
+# Stage 4b: real headless browser against `streamlit run` (guarded child)
+# ----------------------------------------------------------------------
+BROWSER_UPLOAD_NAME = "software_test_browser_upload.txt"
+BROWSER_UPLOAD_LINES = [
+    "Respondent A: Cuando se agotó el beneficio, perdí la protección laboral en el trabajo.",
+    "Respondent B: The EDD portal kept rejecting my claim.",
+    "Respondent C: My manager was fine with the schedule.",
+]
+UPLOAD_OPTION = re.compile(r"^Upload Custom Files")
+KPI_LABELS = ("Analytical Units (N)", "Participant Turns", "Active Domains", "Matched Turn Mentions")
+AUDIT_STAMP = "ATLAS VERIFICATION AUDIT STAMP"
+UI_WAIT_SECONDS = 90
+
+
+def is_local_request_url(url: str) -> bool:
+    """
+    True for browser requests that stay on this machine: http(s)/ws(s) to a
+    loopback host, in-page data: URLs, about:blank / about:srcdoc, and blob: URLs
+    whose origin is itself local. Every other URL counts as an external request.
+    """
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    if scheme == "data":
+        return True
+    if scheme == "about":
+        return parts.path in ("blank", "srcdoc")
+    if scheme == "blob":
+        return is_local_request_url(parts.path)
+    if scheme not in ("http", "https", "ws", "wss"):
+        return False
+    host = (parts.hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def streamlit_server_argv(py: str, port: int) -> list[str]:
+    return [
+        py, "-m", "streamlit", "run", "app.py",
+        "--server.headless=true", f"--server.port={port}", "--server.address=127.0.0.1",
+        "--browser.gatherUsageStats=false", "--server.fileWatcherType=none",
+    ]
+
+
+def workbook_stamp_problems(xlsx_path: Path) -> list[str]:
+    """
+    Reasons a workbook is not an ATLAS export: the Empirical Frequencies sheet,
+    its prevalence column or its domain rows are missing, or a prevalence cell
+    lacks its ATLAS VERIFICATION AUDIT STAMP comment.
+    """
+    sys.path.insert(0, str(REPO))
+    import openpyxl
+    from atlas_engine import FREQUENCY_HEADERS, FREQUENCY_SHEET
+
+    wb = openpyxl.load_workbook(xlsx_path)
+    if FREQUENCY_SHEET not in wb.sheetnames:
+        return [f"sheet {FREQUENCY_SHEET!r} missing (sheets: {wb.sheetnames})"]
+    ws = wb[FREQUENCY_SHEET]
+    header = [cell.value for cell in ws[1]]
+    if header[: len(FREQUENCY_HEADERS)] != FREQUENCY_HEADERS:
+        return [f"unexpected header row {header}"]
+    if ws.max_row < 2:
+        return ["no domain rows"]
+    column = FREQUENCY_HEADERS.index("Prevalence Rate (%)") + 1
+    problems = []
+    for row in range(2, ws.max_row + 1):
+        comment = ws.cell(row=row, column=column).comment
+        if comment is None or AUDIT_STAMP not in comment.text:
+            problems.append(f"row {row}: prevalence cell has no {AUDIT_STAMP} comment")
+    return problems
+
+
+def engine_results(codebook: Path, files, root: Path, options=None) -> dict:
+    sys.path.insert(0, str(REPO))
+    from atlas_engine import AtlasEngine
+
+    return AtlasEngine(str(codebook)).process_corpus([str(f) for f in files], root_dir=str(root),
+                                                     tabular_options=options)
+
+
+def engine_kpis(results: dict) -> dict:
+    freq = results["frequencies_df"]
+    return {
+        "Analytical Units (N)": float(results["total_documents"]),
+        "Participant Turns": float(results["participant_turns_analyzed"]),
+        "Active Domains": float(len(freq)),
+        "Matched Turn Mentions": float(freq["matching_turns"].sum()),
+    }
+
+
+def engine_domain_counts(results: dict) -> dict:
+    freq = results["frequencies_df"]
+    return {str(r.domain_id): (int(r.documents_reporting), int(r.matching_turns)) for r in freq.itertuples()}
+
+
+def browser_check(url: str, scratch: Path) -> list[str]:
+    """
+    Drive the live app at url in headless Chromium: boot render, a transcript
+    upload that recomputes the KPIs and domain table, and the .xlsx / manifest
+    downloads. Every expected number comes from AtlasEngine run here on the same
+    SOFTWARE_TEST inputs.
+    """
+    sys.path.insert(0, str(REPO))
+    from atlas_engine import AtlasEngine
+    from universal_transcript_parser import SOFTWARE_TEST_BANNER
+
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        return [f"playwright is not importable ({exc}); install it into .venv with `pip install playwright` and "
+                "`python -m playwright install chromium`, or pass --skip-playwright explicitly"]
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        print(f"    [{'ok' if condition else 'FAIL'}] {label}" + (f": {detail}" if detail and not condition else ""))
+        if not condition:
+            failures.append(f"{label}{': ' + detail if detail else ''}")
+
+    scratch.mkdir(parents=True, exist_ok=False)
+    upload = scratch / BROWSER_UPLOAD_NAME
+    upload_text = SOFTWARE_TEST_BANNER + "\n" + "".join(line + "\n" for line in BROWSER_UPLOAD_LINES)
+    with open(upload, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(upload_text)
+
+    requested: list[str] = []
+    page_errors: list[str] = []
+
+    def kpis(page) -> dict:
+        values = {}
+        for card in page.locator('[data-testid="stMetric"]').all():
+            label = card.locator('[data-testid="stMetricLabel"]').inner_text().strip()
+            value = card.locator('[data-testid="stMetricValue"]').inner_text().strip()
+            values[label] = float(value.replace(",", ""))
+        return values
+
+    def caption_codebook(page) -> str:
+        for caption in page.locator('[data-testid="stCaptionContainer"]').all_inner_texts():
+            found = re.search(r"Codebook: (\S+\.ya?ml)", caption)
+            if found:
+                return found.group(1)
+        return ""
+
+    def domain_table(page) -> dict:
+        """{domain_id: (units reporting, matching turns)} from the visible thematic-prevalence grid."""
+        # Each grid paints to a canvas; its cell text lives in a visually hidden accessibility table.
+        for frame in page.locator('[data-testid="stDataFrame"]').all():
+            if not frame.is_visible() or frame.locator("table").count() == 0:
+                continue
+            table = frame.locator("table").first
+            headers = [h.strip() for h in table.locator("th").all_inner_texts()]
+            if not {"Domain ID", "Units reporting", "Matching turns"} <= set(headers):
+                continue
+            rows = {}
+            for tr in table.locator("tr").all()[1:]:
+                cells = [c.strip() for c in tr.locator("td").all_inner_texts()]
+                if len(cells) == len(headers):
+                    row = dict(zip(headers, cells))
+                    rows[row["Domain ID"]] = (int(row["Units reporting"]), int(row["Matching turns"]))
+            return rows
+        return {}
+
+    def wait_for(page, label: str, probe, want) -> object:
+        """Poll the live DOM until probe() == want (the app reruns asynchronously); return the last value."""
+        deadline = time.monotonic() + UI_WAIT_SECONDS
+        seen = None
+        while time.monotonic() < deadline:
+            try:
+                seen = probe(page)
+            except (PlaywrightError, ValueError) as exc:
+                seen = f"{type(exc).__name__}: {exc}"
+            if seen == want:
+                break
+            page.wait_for_timeout(250)
+        check(label, seen == want, f"{seen!r} != {want!r}")
+        return seen
+
+    def download(page, button: re.Pattern, target: Path) -> Path:
+        with page.expect_download() as info:
+            page.get_by_role("button", name=button).click()
+        info.value.save_as(str(target))
+        return target
+
+    print(f"    PLAYWRIGHT_BROWSERS_PATH={os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '(Playwright default cache)')}")
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(accept_downloads=True)
+            context.on("request", lambda req: requested.append(req.url))
+            # Recorded above and then refused, so an external asset can never load.
+            context.route("**/*", lambda route: route.continue_() if is_local_request_url(route.request.url)
+                          else route.abort())
+            page = context.new_page()
+            page.on("websocket", lambda ws: requested.append(ws.url))
+            page.on("pageerror", lambda err: page_errors.append(str(err)))
+            page.goto(url, wait_until="domcontentloaded")
+            page.locator('[data-testid="stMetric"]').first.wait_for(timeout=UI_WAIT_SECONDS * 1000)
+
+            # 1. Boot render: SOFTWARE_TEST notice and KPI cards matching the engine.
+            alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
+            check("boot: SOFTWARE_TEST notice rendered", "SOFTWARE_TEST" in alerts, alerts[:200])
+            boot_codebook = caption_codebook(page)
+            check("boot: active codebook shown", bool(boot_codebook))
+            samples = REPO / "data" / "samples"
+            boot = engine_results(REPO / "config" / (boot_codebook or "missing.yaml"),
+                                  [samples / "software_test_bilingual_interview.txt",
+                                   samples / "software_test_zoom_session.vtt"], REPO)
+            boot_kpis = wait_for(page, "boot: KPI cards match engine", kpis, engine_kpis(boot))
+            check("boot: four KPI cards", isinstance(boot_kpis, dict) and set(boot_kpis) == set(KPI_LABELS),
+                  repr(boot_kpis))
+
+            # 2. Upload a custom transcript; KPIs and the domain table recompute in the live DOM.
+            page.get_by_role("combobox", name="Corpus Dataset").click()
+            page.get_by_role("option", name=UPLOAD_OPTION).click()
+            page.locator("input[type='file']").first.set_input_files(str(upload))
+            page.get_by_text(f"Corpus: {BROWSER_UPLOAD_NAME}").wait_for(timeout=UI_WAIT_SECONDS * 1000)
+            codebook = caption_codebook(page)
+            uploaded_root = scratch / "engine_root"
+            (uploaded_root / "uploads").mkdir(parents=True)
+            shutil.copy2(upload, uploaded_root / "uploads" / BROWSER_UPLOAD_NAME)
+            want = engine_results(REPO / "config" / (codebook or "missing.yaml"),
+                                  [uploaded_root / "uploads" / BROWSER_UPLOAD_NAME], uploaded_root)
+            want_kpis = engine_kpis(want)
+            check("upload: engine finds matches in the SOFTWARE_TEST upload",
+                  want_kpis["Matched Turn Mentions"] > 0, repr(want_kpis))
+            check("upload: expected KPIs differ from boot", want_kpis != engine_kpis(boot))
+            wait_for(page, "upload: KPI cards recomputed to engine values", kpis, want_kpis)
+            wait_for(page, "upload: domain table recomputed to engine values", domain_table,
+                     engine_domain_counts(want))
+            alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
+            check("upload: SOFTWARE_TEST notice for the bannered upload", "SOFTWARE_TEST" in alerts)
+            check("upload: workbook integrity passes in the app", "integrity check passed" in alerts, alerts[:300])
+
+            # 3. Download the engine's workbook and manifest and verify them offline.
+            page.get_by_role("tab", name=re.compile(r"Tab 2")).click()
+            xlsx = download(page, re.compile(r"actuarial_parameter_matrix\.xlsx"), scratch / "downloaded.xlsx")
+            manifest_path = download(page, re.compile(r"provenance_manifest\.json"), scratch / "downloaded.json")
+        finally:
+            browser.close()
+
+    stamp_problems = workbook_stamp_problems(xlsx)
+    check(f"download: Empirical Frequencies carries {AUDIT_STAMP} comments", stamp_problems == [],
+          "; ".join(stamp_problems[:3]))
+    ok, reasons = AtlasEngine.verify_workbook_integrity(str(xlsx), str(manifest_path))
+    check("download: workbook verifies against the downloaded manifest", (ok, reasons) == (True, []),
+          "; ".join(reasons[:3]))
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    check("download: manifest binds the uploaded bytes",
+          manifest.get("file_hashes") == {f"uploads/{BROWSER_UPLOAD_NAME}": sha256_file(upload)},
+          repr(manifest.get("file_hashes")))
+    check("download: manifest counts match engine", manifest.get("total_documents") == want["total_documents"]
+          and {d["domain_id"]: (d["documents_reporting"], d["matching_turns"]) for d in manifest.get("domains", [])}
+          == engine_domain_counts(want))
+
+    external = [u for u in requested if not is_local_request_url(u)]
+    check("browser: requests recorded", len(requested) > 0)
+    check("browser: 0 external requests", external == [], "; ".join(external[:5]))
+    check("browser: 0 uncaught page errors", page_errors == [], "; ".join(page_errors[:3]))
+    print(f"    browser requests: {len(requested)} total, {len(external)} external; page errors: {len(page_errors)}")
+    return failures
+
+
+def wait_for_server(proc: subprocess.Popen, url: str, log_path: Path) -> None:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback only, never a proxy
+    deadline = time.monotonic() + UI_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise StageFailure(f"streamlit server exited early ({proc.returncode}):\n{tail(log_path)}")
+        try:
+            with opener.open(f"{url}/_stcore/health", timeout=5) as resp:
+                if resp.status == 200:
+                    return
+        except OSError:
+            pass
+        time.sleep(0.5)
+    raise StageFailure(f"streamlit server did not answer {url}/_stcore/health:\n{tail(log_path)}")
+
+
+def stop_server(proc: subprocess.Popen) -> str | None:
+    """Ask the server to shut down with a signal; return a problem if it was already gone or had to be killed."""
+    if proc.poll() is not None:
+        return f"streamlit server had already exited ({proc.returncode})"
+    proc.send_signal(signal.CTRL_BREAK_EVENT if IS_WINDOWS else signal.SIGTERM)
+    try:
+        code = proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return "streamlit server ignored the shutdown signal and was killed"
+    if code != 0 and not IS_WINDOWS:
+        return f"streamlit server exited {code} after SIGTERM"
+    print(f"--- streamlit server stopped (exit {code})", flush=True)
+    return None
+
+
+def tail(path: Path, lines: int = 40) -> str:
+    if not path.is_file():
+        return ""
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+
+
+def browser_stage(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    port = free_port()
+    url = f"http://127.0.0.1:{port}"
+    log_path = tmp / "streamlit_server.log"
+    argv = streamlit_server_argv(str(venv_python(work)), port)
+    print(f"\n--- streamlit server: {' '.join(argv)}", flush=True)
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
+    with open(log_path, "w", encoding="utf-8") as log:
+        proc = subprocess.Popen(argv, cwd=str(work), env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                stderr=subprocess.STDOUT, creationflags=flags)
+    problems = []
+    try:
+        wait_for_server(proc, url, log_path)
+        print(f"--- streamlit server: serving {url}", flush=True)
+        run_step("headless browser check", [str(venv_python(work)), SMOKE_SCRIPT, "--browser-check", url,
+                                            str(tmp / "stage4_browser")], work, env, net_log)
+    except StageFailure as exc:
+        problems.append(str(exc))
+    finally:
+        stop_problem = stop_server(proc)
+    if stop_problem:
+        problems.append(stop_problem)
+    elif "Stopping..." not in tail(log_path):
+        problems.append("streamlit server did not report a clean shutdown ('Stopping...')")
+    if problems:
+        print(tail(log_path))
+        raise StageFailure("; ".join(problems))
+    print("--- streamlit server: clean shutdown", flush=True)
+
+
+def require_empty_net_log(net_log: Path, when: str) -> None:
+    entries = read_log(net_log)
+    if entries:
+        raise StageFailure(f"{net_log.name} {when}: {len(entries)} outbound network attempt(s): {entries[0][:300]}")
+    print(f"--- {net_log.name} {when}: empty (0 outbound Python network attempts)", flush=True)
+
+
+def stage4(work: Path, env: dict, net_log: Path, tmp: Path, skip_playwright: bool = False) -> None:
     py = str(venv_python(work))
-    run_step("app widget check", [py, "scripts/smoke_test.py", "--app-check"], work, env, net_log)
-    run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", ".", "--slice", "3"], work, env, net_log)
+    run_step("unit tests", [py, "-m", "unittest", "discover", "-s", "tests", "-v"], work, env, net_log)
+    run_step("app widget check (AppTest)", [py, SMOKE_SCRIPT, "--app-check"], work, env, net_log)
+    if skip_playwright:
+        print("\n--- headless browser check: SKIPPED (--skip-playwright was passed explicitly)", flush=True)
+    else:
+        browser_stage(work, env, net_log, tmp)
+    require_empty_net_log(net_log, "after stage 4")
+
+
+# ----------------------------------------------------------------------
+# Stage 5: anti-shortcut gate and codebook compilation audit
+# ----------------------------------------------------------------------
+def codebook_audit(config_dir: Path) -> dict:
+    """{codebook file name: compiled rule count} for every YAML codebook in config_dir; StageFailure otherwise."""
+    sys.path.insert(0, str(REPO))
+    import yaml
+    from atlas_engine import AtlasEngine
+
+    paths = sorted([*Path(config_dir).glob("*.yaml"), *Path(config_dir).glob("*.yml")])
+    if not paths:
+        raise StageFailure(f"codebook audit: no YAML codebooks in {config_dir}")
+    compiled = {}
+    for path in paths:
+        try:
+            rules = AtlasEngine(str(path)).compiled_rules
+        except (ValueError, TypeError, KeyError, OSError, yaml.YAMLError) as exc:
+            raise StageFailure(f"codebook audit: {path.name} does not compile: {type(exc).__name__}: {exc}") from exc
+        if not rules:
+            raise StageFailure(f"codebook audit: {path.name} compiled to no rules")
+        compiled[path.name] = len(rules)
+    return compiled
+
+
+def stage5(work: Path, env: dict, net_log: Path, tmp: Path) -> None:
+    py = str(venv_python(work))
+    run_step("anti-shortcut gate", [py, "scripts/anti_shortcut_gate.py", "--repo", str(work), "--slice", "4"],
+             work, env, net_log)
+    run_step("codebook compilation audit", [py, SMOKE_SCRIPT, "--codebook-audit"], work, env, net_log)
 
 
 STAGES = {
-    1: ("packaging, launchers, ingestion", stage1),
-    2: ("engine, discovery, provenance", stage2),
-    3: ("live-wired workbench, docs and figures", stage3),
+    1: ("clean-temp copy and subprocess offline monitor", stage1),
+    2: ("launcher --check-only and broken-venv recovery", stage2),
+    3: ("end-to-end multi-format CLI, reproducibility and tamper detection", stage3),
+    4: ("unit tests, AppTest and headless Playwright Chromium", stage4),
+    5: ("anti-shortcut gate (slice 4) and codebook compilation audit", stage5),
 }
 
 
@@ -740,35 +1308,54 @@ def run_stages(stages, work: Path, env: dict, net_log: Path, tmp: Path, before: 
         print(f"=== STAGE {num}: PASS", flush=True)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--max-stage", type=int, default=3, choices=sorted(STAGES),
-                    help="run stages 1..N (later stages are added in later slices)")
+    ap.add_argument("--max-stage", type=int, default=max(STAGES), choices=sorted(STAGES),
+                    help="run stages 1..N (default: all five)")
+    ap.add_argument("--skip-playwright", action="store_true",
+                    help="skip only the headless-browser check in stage 4 (it runs by default and in CI)")
     ap.add_argument("--pipeline-check", metavar="DIR", help=argparse.SUPPRESS)
     ap.add_argument("--app-check", action="store_true", help=argparse.SUPPRESS)
-    args = ap.parse_args()
+    ap.add_argument("--browser-check", nargs=2, metavar=("URL", "DIR"), help=argparse.SUPPRESS)
+    ap.add_argument("--codebook-audit", action="store_true", help=argparse.SUPPRESS)
+    return ap
+
+
+def report(name: str, failures: list[str]) -> int:
+    if failures:
+        print(f"{name} FAILED ({len(failures)} check(s))")
+        for failure in failures:
+            print(f"    - {failure}")
+        return 1
+    print(f"{name} PASSED")
+    return 0
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if args.app_check:
-        failures = app_check()
-        if failures:
-            print(f"APP CHECK FAILED ({len(failures)} check(s))")
-            return 1
-        print("APP CHECK PASSED")
-        return 0
-
+        return report("APP CHECK", app_check())
     if args.pipeline_check:
         scratch = Path(args.pipeline_check)
         scratch.mkdir(parents=True, exist_ok=False)
-        failures = pipeline_check(scratch)
-        if failures:
-            print(f"PIPELINE CHECK FAILED ({len(failures)} check(s))")
-            return 1
-        print("PIPELINE CHECK PASSED")
-        return 0
+        return report("PIPELINE CHECK", pipeline_check(scratch))
+    if args.browser_check:
+        url, scratch = args.browser_check
+        return report("BROWSER CHECK", browser_check(url, Path(scratch)))
+    if args.codebook_audit:
+        try:
+            compiled = codebook_audit(REPO / "config")
+        except StageFailure as exc:
+            return report("CODEBOOK AUDIT", [str(exc)])
+        for name, n_rules in compiled.items():
+            print(f"    [ok] {name}: {n_rules} domain rule(s) compiled")
+        print(f"    {len(compiled)} codebook(s) compiled")
+        return report("CODEBOOK AUDIT", [])
 
     with tempfile.TemporaryDirectory(prefix="atlas_smoke_") as tmp_name:
         tmp = Path(tmp_name)
-        net_log = tmp / "net_log.jsonl"
+        net_log = tmp / NET_LOG_NAME
         before = repo_venv_fingerprint()
         try:
             try:
@@ -777,12 +1364,16 @@ def main() -> int:
                 problem = shared_venv_problem(before)
                 raise StageFailure(f"{exc}; {problem}" if problem else str(exc)) from exc
             env = guarded_env(work, net_log)
-            stages = [(num, *STAGES[num]) for num in range(1, args.max_stage + 1)]
+            fns = {**{num: fn for num, (_, fn) in STAGES.items()},
+                   4: functools.partial(stage4, skip_playwright=args.skip_playwright)}
+            stages = [(num, STAGES[num][0], fns[num]) for num in range(1, args.max_stage + 1)]
             run_stages(stages, work, env, net_log, tmp, before)
+            require_empty_net_log(net_log, "at the end of the run")
         except StageFailure as exc:
             print(f"\nSMOKE TEST FAILED: {exc}")
             return 1
-    print(f"\nSMOKE TEST PASSED (stages 1..{args.max_stage})")
+    skipped = " (headless browser check SKIPPED by --skip-playwright)" if args.skip_playwright and args.max_stage >= 4 else ""
+    print(f"\nSMOKE TEST PASSED (stages 1..{args.max_stage}){skipped}")
     return 0
 
 

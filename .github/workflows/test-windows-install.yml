@@ -1,4 +1,10 @@
-name: Test Windows Install
+# Cross-platform install + smoke for ATLAS. The filename is kept from the
+# Windows-only workflow so existing GitHub settings and run history still match.
+# Each job provisions .venv through the real launcher in check-only mode, adds
+# Playwright Chromium to that .venv, then runs the unit tests and the 5-stage
+# smoke suite (offline guard, launcher recovery, CLI pipeline, headless-browser
+# upload/download flow, anti-shortcut gate and codebook audit).
+name: ATLAS Install & Smoke (Windows + Ubuntu)
 
 on:
   push:
@@ -7,10 +13,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows-install:
-    name: Run setup.bat + boot ATLAS on windows-latest
+  windows:
+    name: run.bat --check-only + 5-stage smoke on windows-latest
     runs-on: windows-latest
-    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -21,64 +26,69 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Show Python version
+      - name: Provision .venv with run.bat --check-only
         shell: cmd
-        run: python --version
+        # --check-only provisions .venv, installs requirements.txt, writes the
+        # dependency marker and verifies imports, then exits without launching or pausing.
+        run: call run.bat --check-only
 
-      - name: Run setup.bat
-        shell: cmd
-        # Pipe NUL so the trailing `pause` commands don't block CI.
-        run: call setup.bat < NUL
-
-      - name: Verify all imports
+      - name: Verify dependency marker
         shell: cmd
         run: |
-          call venv\Scripts\activate.bat
-          python -c "import streamlit, pandas, numpy, plotly, wordcloud, matplotlib, sklearn, nltk, spellchecker, openpyxl; print('ALL IMPORTS OK')"
+          if not exist .venv\.atlas_deps.sha256 exit /b 1
+          type .venv\.atlas_deps.sha256
 
-      - name: Launch streamlit and probe health endpoint
-        shell: pwsh
-        run: |
-          $venvPython = Join-Path $PWD "venv\Scripts\python.exe"
-          $logPath = Join-Path $PWD "streamlit.log"
-          $proc = Start-Process -FilePath $venvPython `
-            -ArgumentList '-m','streamlit','run','app.py','--server.headless=true','--server.port=8501','--browser.gatherUsageStats=false' `
-            -RedirectStandardOutput $logPath `
-            -RedirectStandardError "streamlit.err.log" `
-            -PassThru
-          Write-Host "Started streamlit PID=$($proc.Id)"
+      - name: Install Playwright into .venv
+        shell: cmd
+        run: .venv\Scripts\python.exe -m pip install --disable-pip-version-check playwright
 
-          $ok = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 2
-            try {
-              $r = Invoke-WebRequest -Uri 'http://localhost:8501/_stcore/health' -UseBasicParsing -TimeoutSec 5
-              if ($r.StatusCode -eq 200) {
-                Write-Host "Health check passed on attempt $($i+1)"
-                $ok = $true
-                break
-              }
-            } catch {
-              Write-Host "attempt $($i+1): $_"
-            }
-          }
+      - name: Install Playwright Chromium
+        shell: cmd
+        run: .venv\Scripts\python.exe -m playwright install chromium
 
-          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          if (-not $ok) {
-            Write-Host "=== streamlit.log ==="
-            if (Test-Path $logPath) { Get-Content $logPath }
-            Write-Host "=== streamlit.err.log ==="
-            if (Test-Path 'streamlit.err.log') { Get-Content 'streamlit.err.log' }
-            throw "Streamlit health check failed"
-          }
+      - name: Unit tests
+        shell: cmd
+        run: .venv\Scripts\python.exe -m unittest discover -s tests -v
 
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: 5-stage smoke suite
+        shell: cmd
+        run: .venv\Scripts\python.exe scripts\smoke_test.py --max-stage 5
+
+  ubuntu:
+    name: run.command --check-only + 5-stage smoke on ubuntu-latest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          name: failure-logs
-          path: |
-            streamlit.log
-            streamlit.err.log
-            venv/pip.log
-          if-no-files-found: ignore
+          python-version: '3.12'
+
+      - name: Provision .venv with run.command --check-only
+        shell: bash
+        run: bash run.command --check-only
+
+      - name: Verify dependency marker
+        shell: bash
+        run: |
+          test -s .venv/.atlas_deps.sha256
+          cat .venv/.atlas_deps.sha256
+
+      - name: Install Playwright into .venv
+        shell: bash
+        run: .venv/bin/python -m pip install --disable-pip-version-check playwright
+
+      - name: Install Playwright Chromium with system dependencies
+        shell: bash
+        run: .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Unit tests
+        shell: bash
+        run: .venv/bin/python -m unittest discover -s tests -v
+
+      - name: 5-stage smoke suite
+        shell: bash
+        run: .venv/bin/python scripts/smoke_test.py --max-stage 5
