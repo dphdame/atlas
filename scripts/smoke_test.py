@@ -17,9 +17,11 @@ Stage 1 (clean-temp copy and subprocess offline monitor):
 Stage 2 (launcher --check-only and broken-venv recovery):
   1. launcher --check-only (run.command on macOS/Linux, run.bat on Windows)
   2. in scratch directories holding only the launcher and requirements.txt, an
-     empty .venv/ without the dependency marker, and a .venv/ with a stale marker
-     and a damaged interpreter, both take the rebuild path; with pip offline
-     (PIP_NO_INDEX=1) the launcher fails fast and removes the incomplete .venv
+     empty .venv/ without the dependency marker, a .venv/ with a stale marker
+     and a damaged interpreter, and a .venv/ with a stale marker and a real
+     interpreter whose site initialization exits -1073741819 (0xC0000005) all
+     take the rebuild path; with pip offline (PIP_NO_INDEX=1) the launcher fails
+     fast and removes the incomplete .venv
 
 Stage 3 (end-to-end multi-format CLI, reproducibility, tamper detection):
   a guarded child (this script with --pipeline-check DIR) writes SOFTWARE_TEST
@@ -83,6 +85,7 @@ import time
 import unicodedata
 from urllib.parse import urlsplit
 import urllib.request
+import venv as venv_module
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -327,8 +330,19 @@ def broken_venv_scenarios() -> dict:
         exe.write_bytes(b"SOFTWARE_TEST damaged interpreter, not a program\n")
         (venv / MARKER_NAME).write_text("0" * 64 + "\n", encoding="utf-8")
 
+    def stale_marker_negative_exit_python(venv: Path) -> None:
+        # A real interpreter whose site initialization exits with STATUS_ACCESS_VIOLATION
+        # (0xC0000005): cmd.exe sees -1073741819, which `if errorlevel 1` treats as success.
+        venv_module.create(venv, symlinks=not IS_WINDOWS, with_pip=False)
+        exe = venv / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
+        purelib = subprocess.check_output(
+            [str(exe), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip()
+        (Path(purelib) / "_atlas_neg_exit.pth").write_text("import os; os._exit(-1073741819)\n", encoding="utf-8")
+        (venv / MARKER_NAME).write_text("0" * 64 + "\n", encoding="utf-8")
+
     return {"empty .venv without marker": empty_venv,
-            "stale marker and damaged interpreter": stale_marker_damaged_python}
+            "stale marker and damaged interpreter": stale_marker_damaged_python,
+            "stale marker and negative-exit interpreter": stale_marker_negative_exit_python}
 
 
 def broken_venv_check(work: Path, env: dict, net_log: Path, tmp: Path) -> None:

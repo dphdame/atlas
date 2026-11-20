@@ -14,10 +14,13 @@ REM only after pip succeeds; a failed install removes the incomplete .venv.
 REM If the core-import check fails - damaged packages that pip still reports as
 REM satisfied - .venv is deleted and rebuilt once; a second failure removes it.
 REM Flow uses goto labels instead of parenthesized blocks so echo text with
-REM parentheses can never close a block early.
+REM parentheses can never close a block early, and %ERRORLEVEL% is read at run time.
+REM Every exit check is an exact comparison with 0: `if errorlevel N` means at least N, so
+REM a negative crash status such as -1073741819 would otherwise count as success.
 REM ==============================================================================
 
 setlocal EnableExtensions
+set "ERRORLEVEL="
 title ATLAS Workbench
 cd /d "%~dp0"
 
@@ -43,12 +46,12 @@ echo ==================================================================
 
 REM Check for Python 3.10+
 where python >nul 2>nul
-if errorlevel 1 goto no_python
+if not "%ERRORLEVEL%"=="0" goto no_python
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
-if errorlevel 1 goto old_python
+if not "%ERRORLEVEL%"=="0" goto old_python
 
 python -c "import hashlib; print(hashlib.sha256(open('requirements.txt', 'rb').read()).hexdigest())" > "%HASH_TMP%"
-if errorlevel 1 goto hash_failed
+if not "%ERRORLEVEL%"=="0" goto hash_failed
 set /p REQ_HASH=<"%HASH_TMP%"
 del "%HASH_TMP%" >nul 2>nul
 
@@ -62,22 +65,22 @@ goto verify
 REM An interpreter that exists but cannot run (damaged or not a program) is rebuilt, never handed to pip.
 if not exist "%VENV_PY%" goto create_venv
 "%VENV_PY%" -c "import sys" >nul 2>nul
-if not errorlevel 1 goto install_deps
+if "%ERRORLEVEL%"=="0" goto install_deps
 echo --^> Existing .venv interpreter is unusable; rebuilding it...
 
 :create_venv
 if exist ".venv" rmdir /s /q ".venv"
 echo --^> Creating local isolated environment in .venv ...
 python -m venv .venv
-if errorlevel 1 goto venv_failed
+if not "%ERRORLEVEL%"=="0" goto venv_failed
 
 :install_deps
 echo --^> Installing dependencies into local environment...
 "%VENV_PY%" -m pip install --disable-pip-version-check -r requirements.txt --quiet
-if not errorlevel 1 goto install_ok
+if "%ERRORLEVEL%"=="0" goto install_ok
 echo --^> Standard pip install failed; retrying with the restricted-Windows pip helper...
 "%VENV_PY%" _pip_helper.py install --disable-pip-version-check -r requirements.txt --quiet
-if errorlevel 1 goto install_failed
+if not "%ERRORLEVEL%"=="0" goto install_failed
 
 :install_ok
 > "%MARKER%" echo %REQ_HASH%
@@ -85,7 +88,7 @@ echo --^> Environment ready.
 
 :verify
 "%VENV_PY%" -c "import streamlit, pandas, yaml, openpyxl, sklearn, altair, docx, pyarrow"
-if errorlevel 1 goto imports_failed
+if not "%ERRORLEVEL%"=="0" goto imports_failed
 echo --^> Environment verified: Python, .venv, core imports.
 if "%CHECK_ONLY%"=="1" goto check_only_done
 

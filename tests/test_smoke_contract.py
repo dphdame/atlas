@@ -35,6 +35,7 @@ import inspect
 import os
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import unicodedata
@@ -310,13 +311,28 @@ class SmokeContractTests(unittest.TestCase):
 
     def test_broken_venv_scenarios_damage_the_interpreter_on_every_platform(self):
         scenarios = self.smoke.broken_venv_scenarios()
-        self.assertEqual(sorted(scenarios), ["empty .venv without marker", "stale marker and damaged interpreter"])
+        self.assertEqual(sorted(scenarios), ["empty .venv without marker", "stale marker and damaged interpreter",
+                                             "stale marker and negative-exit interpreter"])
         with tempfile.TemporaryDirectory() as tmp:
             venv = Path(tmp) / ".venv"
             scenarios["stale marker and damaged interpreter"](venv)
             exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             self.assertTrue(exe.is_file())
             self.assertTrue((venv / ".atlas_deps.sha256").is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / ".venv"
+            scenarios["stale marker and negative-exit interpreter"](venv)
+            exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            self.assertTrue(exe.is_file())
+            self.assertEqual((venv / ".atlas_deps.sha256").read_text(encoding="utf-8"), "0" * 64 + "\n")
+            env = dict(os.environ, PYTHONPATH=str(REPO / "scripts" / "offline_guard"), ATLAS_OFFLINE_GUARD="1",
+                       ATLAS_NET_LOG=str(Path(tmp) / "net_attempts.jsonl"), PYTHONDONTWRITEBYTECODE="1")
+            proc = subprocess.run([str(exe), "-c", "import sys"], env=env, stdin=subprocess.DEVNULL,
+                                  capture_output=True)
+            self.assertNotEqual(proc.returncode, 0, "the interpreter must crash during site initialization")
+            if os.name == "nt":
+                # GetExitCodeProcess reports the DWORD; cmd.exe shows the same value signed as -1073741819.
+                self.assertEqual(proc.returncode & 0xFFFFFFFF, 0xC0000005)
         source = (REPO / "scripts" / "smoke_test.py").read_text(encoding="utf-8")
         check = source[source.index("def broken_venv_check"):source.index("def stage2")]
         self.assertIn('if "Creating local isolated environment" not in output:', check,
@@ -344,6 +360,19 @@ def load_app_helpers(*names):
 FULL_WIDTH_WIDGETS = ("download_button", "button", "dataframe", "altair_chart")
 
 
+def cmd_if_goto(line: str, status: int) -> bool:
+    """Whether cmd.exe takes `line`'s goto when the last command exited with `status`.
+    `if errorlevel N` is true when the status is >= N; `"%ERRORLEVEL%"=="N"` is an exact
+    string comparison of the expanded signed status."""
+    m = re.fullmatch(r'if (not )?errorlevel (-?\d+) goto \w+', line, re.IGNORECASE)
+    if m:
+        return (status >= int(m.group(2))) != bool(m.group(1))
+    m = re.fullmatch(r'if (not )?"%ERRORLEVEL%"=="(-?\d+)" goto \w+', line)
+    if m:
+        return (str(status) == m.group(2)) != bool(m.group(1))
+    raise AssertionError(f"unrecognized exit-status check: {line!r}")
+
+
 class LauncherDamagedInterpreterTests(unittest.TestCase):
     """A .venv interpreter that exists on disk but cannot run must be rebuilt, not handed to pip."""
 
@@ -353,13 +382,47 @@ class LauncherDamagedInterpreterTests(unittest.TestCase):
         self.assertNotIn('if exist "%VENV_PY%" goto install_deps', block,
                          "an existing interpreter must not skip straight to pip")
         probe = block.index('"%VENV_PY%" -c "import sys"')
-        usable = block.index("if not errorlevel 1 goto install_deps", probe)
+        usable = block.index('if "%ERRORLEVEL%"=="0" goto install_deps', probe)
         remove = block.index('if exist ".venv" rmdir /s /q ".venv"', usable)
         create = block.index("python -m venv .venv", remove)
         self.assertLess(probe, usable)
         self.assertLess(usable, remove)
         self.assertLess(remove, create)
         self.assertIn("Creating local isolated environment", block[remove:create])
+
+    def test_run_bat_rejects_negative_and_positive_nonzero_exit_codes(self):
+        text = (REPO / "run.bat").read_text(encoding="utf-8")
+        lines = [ln.strip() for ln in text.splitlines()]
+        code = [ln for ln in lines if ln and not ln.lower().startswith("rem") and not ln.startswith("::")]
+        setlocal = lines.index("setlocal EnableExtensions")
+        self.assertIn('set "ERRORLEVEL="', lines, "a static ERRORLEVEL variable would shadow the real exit code")
+        clear = lines.index('set "ERRORLEVEL="')
+        self.assertLess(setlocal, clear)
+        self.assertLess(clear, lines.index("where python >nul 2>nul"))
+        self.assertEqual([ln for ln in code if "errorlevel 1" in ln.lower()], [],
+                         "`if errorlevel 1` means >= 1, so negative crash codes pass as success")
+        # A negative crash code slips through the old predicate; the emulator must show that.
+        self.assertTrue(cmd_if_goto("if not errorlevel 1 goto install_deps", -1073741819))
+        # (command prefix, exact check on the next line, True if the goto is the success path)
+        checks = [
+            ("where python", 'if not "%ERRORLEVEL%"=="0" goto no_python', False),
+            ('python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10)', 'if not "%ERRORLEVEL%"=="0" goto old_python', False),
+            ('python -c "import hashlib', 'if not "%ERRORLEVEL%"=="0" goto hash_failed', False),
+            ('"%VENV_PY%" -c "import sys"', 'if "%ERRORLEVEL%"=="0" goto install_deps', True),
+            ("python -m venv .venv", 'if not "%ERRORLEVEL%"=="0" goto venv_failed', False),
+            ('"%VENV_PY%" -m pip install', 'if "%ERRORLEVEL%"=="0" goto install_ok', True),
+            ('"%VENV_PY%" _pip_helper.py install', 'if not "%ERRORLEVEL%"=="0" goto install_failed', False),
+            ('"%VENV_PY%" -c "import streamlit', 'if not "%ERRORLEVEL%"=="0" goto imports_failed', False),
+        ]
+        for prefix, expected, goto_is_success in checks:
+            with self.subTest(command=prefix):
+                hits = [i for i, ln in enumerate(code) if ln.startswith(prefix)]
+                self.assertEqual(len(hits), 1, f"expected one {prefix!r} line in run.bat")
+                self.assertEqual(code[hits[0] + 1], expected)
+                for status in (0, -1073741819, -1, 1, 9009):
+                    taken = cmd_if_goto(expected, status)
+                    self.assertEqual(taken == goto_is_success, status == 0,
+                                     f"exit status {status} misclassified by {expected!r}")
 
     def test_run_command_probes_interpreter_before_install(self):
         text = (REPO / "run.command").read_text(encoding="utf-8")
