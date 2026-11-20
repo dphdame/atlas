@@ -61,7 +61,13 @@ if not "%OLD_HASH%"=="%REQ_HASH%" goto provision
 goto verify
 
 :provision
-if exist "%VENV_PY%" goto install_deps
+REM An interpreter that exists but cannot run (damaged or not a program) is rebuilt, never handed to pip.
+if not exist "%VENV_PY%" goto create_venv
+"%VENV_PY%" -c "import sys" >nul 2>nul
+if not errorlevel 1 goto install_deps
+echo --^> Existing .venv interpreter is unusable; rebuilding it...
+
+:create_venv
 if exist ".venv" rmdir /s /q ".venv"
 echo --^> Creating local isolated environment in .venv ...
 python -m venv .venv

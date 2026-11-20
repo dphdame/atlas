@@ -201,8 +201,8 @@ these documents.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python scripts/anti_shortcut_gate.py --repo . --slice 3
-.venv/bin/python scripts/smoke_test.py --max-stage 3
+.venv/bin/python scripts/anti_shortcut_gate.py --repo . --slice 4
+.venv/bin/python scripts/smoke_test.py --max-stage 5
 ```
 
 The smoke test copies the repository to a temporary folder and runs each stage there with the offline

@@ -14,14 +14,17 @@ import contextlib
 import csv
 import hashlib
 import html
+import inspect
 import io
 import math
 import os
 import re
 import tempfile
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import altair as alt
 import pandas as pd
@@ -173,15 +176,39 @@ def detect_text_column(frame):
     return max(pool, key=lambda c: (text_volume(c), -columns.index(c)))
 
 
+def upload_path_key(name):
+    """
+    Collision key for a file name. APFS and NTFS ignore case, and APFS also
+    ignores Unicode normalization, so 'A.txt' / 'a.txt' and NFC / NFD 'café.txt'
+    each name one physical file there.
+    """
+    return unicodedata.normalize("NFC", str(name)).casefold()
+
+
 def safe_upload_name(name, taken):
+    """Basename of an upload, suffixed _2, _3, ... until no name in taken (a set of
+    upload_path_key values) maps to the same physical file; the key is added to taken."""
     base = os.path.basename(str(name).replace("\\", "/")) or "upload"
     candidate, counter = base, 2
-    while candidate in taken:
+    while upload_path_key(candidate) in taken:
         stem, ext = os.path.splitext(base)
         candidate = f"{stem}_{counter}{ext}"
         counter += 1
-    taken.add(candidate)
+    taken.add(upload_path_key(candidate))
     return candidate
+
+
+def stretch_kwargs(widget_fn, streamlit_version: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Full-width sizing keyword for widget_fn. width="stretch" exists from
+    Streamlit 1.50; requirements.txt allows 1.40, where these widgets only take
+    use_container_width (st.dataframe's width there is an int).
+    """
+    parts = re.findall(r"\d+", streamlit_version or st.__version__)[:2]
+    version = tuple(int(p) for p in parts) + (0,) * (2 - len(parts))
+    if version >= (1, 50) and "width" in inspect.signature(widget_fn).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
 
 
 @st.cache_data(show_spinner=False)
@@ -209,7 +236,13 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
     relative path and each source_sha256 is the SHA-256 of the exact bytes.
     The engine's own export (xlsx with audit-stamp comments, provenance manifest,
     quotes CSV) is produced in the same temporary root and returned as bytes.
+    Two relative paths that one case- or normalization-insensitive filesystem
+    maps to the same file are refused, so no payload can overwrite another.
     """
+    keys = [upload_path_key(rel) for rel, _ in inputs]
+    if len(set(keys)) != len(keys):
+        clashing = sorted({rel for rel, _ in inputs if keys.count(upload_path_key(rel)) > 1})
+        raise ValueError(f"Input paths name the same file on case-insensitive filesystems: {clashing}")
     with tempfile.TemporaryDirectory(prefix="atlas_run_") as tmp:
         root = Path(tmp) / "corpus"
         paths = []
@@ -418,7 +451,7 @@ with st.sidebar:
         if guide.is_file():
             st.download_button(
                 label=label, data=guide.read_bytes(), file_name=filename,
-                mime="text/markdown", width="stretch", key=f"guide_{filename}",
+                mime="text/markdown", **stretch_kwargs(st.download_button), key=f"guide_{filename}",
             )
 
 
@@ -563,13 +596,16 @@ with tab_thematic:
                 y=alt.Y("domain_name:N", sort="-x"),
                 text=alt.Text("matching_turns:Q", format="d"),
             )
-            st.altair_chart((chart + labels).properties(height=max(160, 42 * len(freq))), width="stretch")
+            st.altair_chart(
+                (chart + labels).properties(height=max(160, 42 * len(freq))),
+                **stretch_kwargs(st.altair_chart),
+            )
             st.caption("Bar labels show matching participant turns per domain.")
             st.markdown("##### Domain frequency table")
             st.dataframe(
                 freq[["domain_id", "domain_name", "documents_reporting", "total_documents",
                       "prevalence_pct", "matching_turns", "total_mentions"]],
-                width="stretch", hide_index=True,
+                **stretch_kwargs(st.dataframe), hide_index=True,
                 column_config={
                     "domain_id": "Domain ID", "domain_name": "Domain",
                     "documents_reporting": "Units reporting", "total_documents": "Analytical units (N)",
@@ -603,7 +639,7 @@ with tab_thematic:
                 st.dataframe(
                     shown[["domain_name", "speaker", "source_id", "unit_id", "line_number",
                            "match_char_start", "match_char_end", "match_text", "text", "source_sha256"]],
-                    width="stretch", hide_index=True,
+                    **stretch_kwargs(st.dataframe), hide_index=True,
                     column_config={
                         "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
                         "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
@@ -660,7 +696,7 @@ with tab_thematic:
                     }
                     for t in topics
                 ]),
-                width="stretch", hide_index=True,
+                **stretch_kwargs(st.dataframe), hide_index=True,
                 column_config={
                     "topic_id": "Topic", "top_terms": "Top terms", "turn_count": "Turns",
                     "share_pct": st.column_config.NumberColumn("Share (%)", format="%.1f"),
@@ -677,11 +713,11 @@ with tab_thematic:
             d1.download_button(
                 "📥 Download Discovered Codebook (.yaml)", data=codebook_yaml,
                 file_name="atlas_discovered_codebook.yaml", mime="application/x-yaml",
-                width="stretch",
+                **stretch_kwargs(st.download_button),
             )
             d2.button(
                 "⚡ Apply Discovered Codebook to Engine", on_click=apply_discovered_codebook,
-                args=(discovered_label, codebook_yaml), width="stretch",
+                args=(discovered_label, codebook_yaml), **stretch_kwargs(st.button),
                 help="Adds this draft to the codebook list and re-codes the corpus with it.",
             )
 
@@ -726,10 +762,13 @@ with tab_econometric:
         whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
             x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
         )
-        st.altair_chart((bars + whiskers).properties(height=max(160, 42 * len(matrix))), width="stretch")
+        st.altair_chart(
+            (bars + whiskers).properties(height=max(160, 42 * len(matrix))),
+            **stretch_kwargs(st.altair_chart),
+        )
         st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
         st.dataframe(
-            matrix, width="stretch", hide_index=True,
+            matrix, **stretch_kwargs(st.dataframe), hide_index=True,
             column_config={
                 "domain_id": "Domain ID", "domain_name": "Domain",
                 "documents_reporting": "Units reporting", "n_units": "N (analytical units)",
@@ -752,16 +791,16 @@ with tab_econometric:
     e1.download_button(
         "📥 actuarial_parameter_matrix.xlsx", data=results["exports"]["actuarial_parameter_matrix.xlsx"],
         file_name="actuarial_parameter_matrix.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", **stretch_kwargs(st.download_button),
         help="Each prevalence cell carries an ATLAS VERIFICATION AUDIT STAMP comment.",
     )
     e2.download_button(
         "📥 provenance_manifest.json", data=results["exports"]["provenance_manifest.json"],
-        file_name="provenance_manifest.json", mime="application/json", width="stretch",
+        file_name="provenance_manifest.json", mime="application/json", **stretch_kwargs(st.download_button),
     )
     e3.download_button(
         "📥 verbatim_quotes_inventory.csv", data=results["exports"]["verbatim_quotes_inventory.csv"],
-        file_name="verbatim_quotes_inventory.csv", mime="text/csv", width="stretch",
+        file_name="verbatim_quotes_inventory.csv", mime="text/csv", **stretch_kwargs(st.download_button),
     )
     with st.expander("Source files and SHA-256 digests"):
         st.dataframe(
@@ -769,7 +808,7 @@ with tab_econometric:
                 [{"source_id": k, "sha256": v} for k, v in results["file_hashes"].items()],
                 columns=["source_id", "sha256"],
             ),
-            width="stretch", hide_index=True,
+            **stretch_kwargs(st.dataframe), hide_index=True,
         )
 
 

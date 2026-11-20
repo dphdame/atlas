@@ -28,17 +28,23 @@ mechanics only; nothing asserted is an empirical finding.
 Run: .venv/bin/python -m unittest tests/test_smoke_contract.py -v
 """
 
+import ast
+import hashlib
 import importlib.util
+import inspect
 import os
 import re
 import socket
 import sys
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 
 import openpyxl
+import streamlit as st
 import yaml
+from streamlit.testing.v1 import AppTest
 
 REPO = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO / ".github" / "workflows" / "test-windows-install.yml"
@@ -318,6 +324,178 @@ class SmokeContractTests(unittest.TestCase):
 
     def test_workflow_sets_no_elapsed_time_ceiling(self):
         self.assertNotIn("timeout-minutes", WORKFLOW.read_text(encoding="utf-8"))
+
+
+def load_app_helpers(*names):
+    """Compile app.py's top-level imports and the named helper functions, without
+    running the Streamlit page script itself."""
+    tree = ast.parse((REPO / "app.py").read_text(encoding="utf-8"))
+    body = [node for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            or (isinstance(node, ast.FunctionDef) and node.name in names)]
+    missing = set(names) - {node.name for node in body if isinstance(node, ast.FunctionDef)}
+    if missing:
+        raise AssertionError(f"app.py defines no top-level function(s): {sorted(missing)}")
+    namespace = {"__name__": "atlas_app_helpers", "__file__": str(REPO / "app.py")}
+    exec(compile(ast.Module(body=body, type_ignores=[]), str(REPO / "app.py"), "exec"), namespace)
+    return namespace
+
+
+FULL_WIDTH_WIDGETS = ("download_button", "button", "dataframe", "altair_chart")
+
+
+class LauncherDamagedInterpreterTests(unittest.TestCase):
+    """A .venv interpreter that exists on disk but cannot run must be rebuilt, not handed to pip."""
+
+    def test_run_bat_probes_interpreter_before_install(self):
+        text = (REPO / "run.bat").read_text(encoding="utf-8")
+        block = text[text.index(":provision"):text.index(":install_deps")]
+        self.assertNotIn('if exist "%VENV_PY%" goto install_deps', block,
+                         "an existing interpreter must not skip straight to pip")
+        probe = block.index('"%VENV_PY%" -c "import sys"')
+        usable = block.index("if not errorlevel 1 goto install_deps", probe)
+        remove = block.index('if exist ".venv" rmdir /s /q ".venv"', usable)
+        create = block.index("python -m venv .venv", remove)
+        self.assertLess(probe, usable)
+        self.assertLess(usable, remove)
+        self.assertLess(remove, create)
+        self.assertIn("Creating local isolated environment", block[remove:create])
+
+    def test_run_command_probes_interpreter_before_install(self):
+        text = (REPO / "run.command").read_text(encoding="utf-8")
+        block = text[text.index("provision() {"):]
+        block = block[:block.index("\n}\n")]
+        probe = block.index('"$VENV_PY" -c "import sys"')
+        remove = block.index("rm -rf .venv", probe)
+        create = block.index("python3 -m venv .venv", remove)
+        install = block.index("pip install", create)
+        self.assertLess(probe, remove)
+        self.assertLess(remove, create)
+        self.assertLess(create, install)
+
+
+UPLOAD_CODEBOOK = "sdoh_basic_needs.yaml"
+UPLOAD_MATCHING = b"Participant: The bus was late again and I missed work.\n"
+UPLOAD_NON_MATCHING = b"Participant: The weather was pleasant on the walk over.\n"
+
+
+class UploadNameCollisionTests(unittest.TestCase):
+    """Names that a case- or normalization-insensitive filesystem (APFS, NTFS) maps to one
+    physical file must be disambiguated so every upload keeps its own bytes.
+    SOFTWARE_TEST fixtures: they demonstrate software mechanics only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.safe_upload_name = staticmethod(load_app_helpers("safe_upload_name", "upload_path_key")["safe_upload_name"])
+
+    def assert_distinct_on_disk(self, names):
+        taken = set()
+        out = [self.safe_upload_name(name, taken) for name in names]
+        keys = {unicodedata.normalize("NFC", n).casefold() for n in out}
+        self.assertEqual(len(keys), len(names), f"{names} -> {out} share a physical file")
+        return out
+
+    def test_case_variants_are_disambiguated(self):
+        self.assertEqual(self.assert_distinct_on_disk(["A.txt", "a.txt"]), ["A.txt", "a_2.txt"])
+        self.assert_distinct_on_disk(["Notes.TXT", "notes.txt", "NOTES.txt"])
+
+    def test_unicode_normalization_variants_are_disambiguated(self):
+        first, second = self.assert_distinct_on_disk(["café.txt", "café.txt"])
+        self.assertEqual(first, "café.txt")
+        self.assertTrue(second.endswith("_2.txt"), second)
+        self.assert_distinct_on_disk(["CAFÉ.txt", "café.txt", "Café.TXT"])
+
+    def test_suffix_cannot_collide_with_a_later_case_variant(self):
+        self.assert_distinct_on_disk(["a.txt", "A.txt", "A_2.txt", "a_2.TXT"])
+
+    def test_case_variant_uploads_keep_both_payloads_through_the_app(self):
+        at = AppTest.from_file(str(REPO / "app.py"), default_timeout=30)
+        at.run()
+        box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
+        box.select(next(o for o in box.options if "Upload" in o))
+        at.run()
+        next(s for s in at.selectbox if s.label == "Active YAML Codebook").select(UPLOAD_CODEBOOK)
+        at.run()
+        at.file_uploader[0].set_value([
+            ("A.txt", UPLOAD_MATCHING, "text/plain"),
+            ("a.txt", UPLOAD_NON_MATCHING, "text/plain"),
+        ])
+        at.run()
+        # Control: the matching payload alone is coded, so a zero below can only mean it was lost.
+        from atlas_engine import AtlasEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "A.txt").write_bytes(UPLOAD_MATCHING)
+            control = AtlasEngine(str(REPO / "config" / UPLOAD_CODEBOOK)).process_corpus(
+                [str(Path(tmp) / "A.txt")], root_dir=tmp)
+        self.assertEqual(int(control["frequencies_df"]["documents_reporting"].sum()), 1)
+        self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
+        self.assertEqual(len(at.error), 0, [e.value for e in at.error])
+        n_units = next(m for m in at.metric if m.label == "Analytical Units (N)")
+        self.assertEqual(int(str(n_units.value)), 2)
+
+        frames = [df.value for df in at.dataframe]
+        freq = next(f for f in frames if {"domain_id", "prevalence_pct", "documents_reporting"} <= set(f.columns))
+        self.assertEqual(int(freq["documents_reporting"].sum()), 1, freq.to_string())
+        self.assertAlmostEqual(float(freq["prevalence_pct"].max()), 50.0, places=1)
+
+        hashes = next(f for f in frames if list(f.columns) == ["source_id", "sha256"])
+        self.assertEqual(len(hashes), 2, hashes.to_string())
+        self.assertEqual(set(hashes["sha256"]), {hashlib.sha256(UPLOAD_MATCHING).hexdigest(),
+                                                 hashlib.sha256(UPLOAD_NON_MATCHING).hexdigest()})
+
+
+class StreamlitWidthCompatibilityTests(unittest.TestCase):
+    """requirements.txt allows streamlit>=1.40.0, but width="stretch" only exists from 1.50."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.stretch_kwargs = staticmethod(load_app_helpers("stretch_kwargs")["stretch_kwargs"])
+
+    def test_streamlit_140_gets_use_container_width(self):
+        for name in FULL_WIDTH_WIDGETS:
+            for version in ("1.40.0", "1.49.9"):
+                with self.subTest(widget=name, version=version):
+                    self.assertEqual(self.stretch_kwargs(getattr(st, name), version), {"use_container_width": True})
+
+    def test_kwargs_bind_to_a_streamlit_140_signature(self):
+        def download_button_140(label, data, *, use_container_width=False):
+            return use_container_width
+
+        kwargs = self.stretch_kwargs(download_button_140, "1.40.0")
+        inspect.signature(download_button_140).bind("label", b"data", **kwargs)
+        self.assertTrue(download_button_140("label", b"data", **kwargs))
+        # A newer version string must still not pass width= to a function without it.
+        kwargs = self.stretch_kwargs(download_button_140, "1.67.0")
+        inspect.signature(download_button_140).bind("label", b"data", **kwargs)
+
+    def test_streamlit_150_plus_gets_width_stretch(self):
+        for version in ("1.50.0", "1.67.0", None):
+            for name in FULL_WIDTH_WIDGETS:
+                with self.subTest(widget=name, version=version):
+                    self.assertEqual(self.stretch_kwargs(getattr(st, name), version), {"width": "stretch"})
+
+    def test_every_full_width_widget_call_uses_stretch_kwargs(self):
+        tree = ast.parse((REPO / "app.py").read_text(encoding="utf-8"))
+        calls = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                 and node.func.attr in FULL_WIDTH_WIDGETS]
+        self.assertGreaterEqual(len(calls), 12)
+        for call in calls:
+            where = f"app.py:{call.lineno} {ast.unparse(call.func)}"
+            sizing = [kw.arg for kw in call.keywords if kw.arg in ("width", "use_container_width")]
+            self.assertEqual(sizing, [], f"{where} passes a bare sizing keyword")
+            spread = [ast.unparse(kw.value) for kw in call.keywords if kw.arg is None]
+            self.assertIn(f"stretch_kwargs(st.{call.func.attr})", spread, where)
+
+
+class ReadmeCommandTests(unittest.TestCase):
+    def test_readme_runs_final_slice_gate_and_all_smoke_stages(self):
+        text = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("scripts/anti_shortcut_gate.py --repo . --slice 4", text)
+        self.assertIn("scripts/smoke_test.py --max-stage 5", text)
+        self.assertNotIn("--slice 3", text)
+        self.assertNotIn("--max-stage 3", text)
 
 
 if __name__ == "__main__":
