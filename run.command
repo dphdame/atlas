@@ -68,7 +68,11 @@ if [ -f "$MARKER" ]; then
 fi
 
 provision() {
-    if [ ! -x "$VENV_PY" ]; then
+    # An interpreter that exists but cannot run (damaged or not a program) is rebuilt, never handed to pip.
+    if ! "$VENV_PY" -c "import sys" > /dev/null 2>&1; then
+        if [ -e "$VENV_PY" ]; then
+            echo "--> Existing .venv interpreter is unusable; rebuilding it..."
+        fi
         rm -rf .venv
         echo "--> Creating local isolated environment (.venv)..."
         if ! python3 -m venv .venv; then
