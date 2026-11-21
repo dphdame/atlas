@@ -211,6 +211,47 @@ def stretch_kwargs(widget_fn, streamlit_version: Optional[str] = None) -> Dict[s
     return {"use_container_width": True}
 
 
+def describe_prevalence_chart(
+    df: pd.DataFrame,
+    total_units: int,
+    *,
+    include_ci: bool = False,
+) -> str:
+    """
+    Plain-text summary of a domain-prevalence bar chart for screen readers (the Vega-Lite
+    description) and the visible caption. Deterministic: built only from df, which needs
+    domain_name, documents_reporting and prevalence_pct (plus ci95_low_pct and
+    ci95_high_pct when include_ci). Lists the three highest-prevalence matched domains,
+    ordered by prevalence descending, then domain name.
+    """
+    if df is None or len(df) == 0:
+        return "No domains defined in the active codebook."
+    k = len(df)
+    domains = "domain" if k == 1 else "domains"
+    if total_units <= 0:
+        return f"Horizontal bar chart with 0 analytical units, so no prevalence is defined for the {k} coded {domains}."
+    units = "unit" if total_units == 1 else "units"
+    rows = df.assign(_name=df["domain_name"].astype(str)).sort_values(
+        ["prevalence_pct", "_name"], ascending=[False, True], kind="mergesort")
+    matched = rows[rows["documents_reporting"].astype(int) > 0]
+    if matched.empty:
+        return (f"Horizontal bar chart across {total_units} analytical {units} showing 0% prevalence "
+                f"across all {k} coded {domains}.")
+    listed = []
+    for _, r in matched.head(3).iterrows():
+        detail = f"{int(r['documents_reporting'])} of {total_units} {units}"
+        if include_ci:
+            detail += f", 95% CI {float(r['ci95_low_pct']):.1f}%–{float(r['ci95_high_pct']):.1f}%"
+        listed.append(f"{r['_name']} {float(r['prevalence_pct']):.1f}% ({detail})")
+    text = (f"Horizontal bar chart across {total_units} analytical {units}. "
+            f"Highest prevalence: {'; '.join(listed)}.")
+    if len(matched) > 3:
+        text += f" Other matched domains not listed: {len(matched) - 3}."
+    if len(matched) < k:
+        text += f" Domains with 0% prevalence: {k - len(matched)} of {k}."
+    return text
+
+
 @st.cache_data(show_spinner=False)
 def read_table_columns(name, payload):
     """Columns and rows of an uploaded table exactly as the parser reads them."""
@@ -575,10 +616,12 @@ with tab_thematic:
                 y=alt.Y("domain_name:N", sort="-x"),
                 text=alt.Text("matching_turns:Q", format="d"),
             )
+            freq_summary = describe_prevalence_chart(freq, total_documents, include_ci=False)
             st.altair_chart(
-                (chart + labels).properties(height=max(160, 42 * len(freq))),
+                (chart + labels).properties(height=max(160, 42 * len(freq)), description=freq_summary),
                 **stretch_kwargs(st.altair_chart),
             )
+            st.caption(f"Chart summary: {freq_summary}")
             st.caption("Bar labels show matching participant turns per domain.")
             st.markdown("##### Domain frequency table")
             st.dataframe(
@@ -741,10 +784,12 @@ with tab_econometric:
         whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
             x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
         )
+        ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=True)
         st.altair_chart(
-            (bars + whiskers).properties(height=max(160, 42 * len(matrix))),
+            (bars + whiskers).properties(height=max(160, 42 * len(matrix)), description=ci_summary),
             **stretch_kwargs(st.altair_chart),
         )
+        st.caption(f"Chart summary: {ci_summary}")
         st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
         st.dataframe(
             matrix, **stretch_kwargs(st.dataframe), hide_index=True,

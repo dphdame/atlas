@@ -36,7 +36,7 @@ makes no network requests and the page loads no remote assets; see
 [Privacy and network use](../README.md#privacy-and-network-use) for what Streamlit and the operating
 system do around it.
 
-![ATLAS pipeline](figures/atlas_pipeline_architecture.png)
+![Flow diagram of the ATLAS pipeline from transcript and table inputs through UniversalTranscriptParser, then atlas_discover topic discovery alongside AtlasEngine codebook matching, to exports checked by verify_workbook_integrity](figures/atlas_pipeline_architecture.png)
 
 ---
 
@@ -75,7 +75,7 @@ machine, but exports contain verbatim text.
 
 ## 4. The sidebar
 
-![SOFTWARE_TEST workbench walkthrough](figures/atlas_dashboard_ui_walkthrough.png)
+![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](figures/atlas_dashboard_ui_walkthrough.png)
 
 **Corpus Dataset**
 
@@ -121,7 +121,7 @@ span highlighted, plus `source_id`, `unit_id`, line, `match_char_start`–`match
 `source_sha256`. For the SOFTWARE_TEST survey sample the single quote is R001, line 2, span 7–28
 (`se agotó el beneficio`), file SHA-256 beginning `02a7a3c8239a`.
 
-![SOFTWARE_TEST context fence](figures/atlas_codebook_context_fence.png)
+![SOFTWARE_TEST context-fence diagram listing PFL_GAP roots and fence words, then two survey rows where a matched root counts only when a fence word appears in the same turn](figures/atlas_codebook_context_fence.png)
 
 ### Unsupervised Topic Discovery (Medoids)
 Set **Number of topics (k)**. ATLAS fits LDA on the participant turns and shows, per topic, its top
@@ -165,7 +165,7 @@ A green banner confirms that `verify_workbook_integrity` found the workbook cons
 a red banner lists the mismatches. The **Source files and SHA-256 digests** expander lists every input
 file's hash for comparison with the originals.
 
-![SOFTWARE_TEST audit bridge](figures/atlas_audit_bridge.png)
+![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](figures/atlas_audit_bridge.png)
 
 ---
 

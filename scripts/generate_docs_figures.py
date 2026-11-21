@@ -12,9 +12,12 @@ Figures are HTML/CSS (grid/flexbox) plus inline SVG, rendered by Playwright's
 headless Chromium at device_scale_factor=2. Before each screenshot the page is
 checked in the browser and generation fails if any text sits outside a
 data-node element, a node holds more than 10 words or more than one sentence,
-rendered text is smaller than 18px, or a text colour is outside the WCAG 2.1 AA
+rendered text is smaller than 22px, a text colour is outside the WCAG 2.1 AA
 palette (navy #1E3A8A, teal #0F766E, slate #0F172A / #334155, red #B91C1C,
-white on navy/teal fills).
+white on navy/teal fills), the canvas is wider than 1250px (so a PNG stays
+legible in GitHub's ~890px README column), any element or SVG label overflows
+its box, or a card border / bar track misses the slate #64748B outline that
+gives 4.76:1 non-text contrast on white (WCAG 1.4.11).
 
 Usage:
   .venv/bin/python scripts/generate_docs_figures.py            # write PNGs
@@ -57,6 +60,8 @@ TEAL = "#0F766E"
 INK = "#0F172A"
 SLATE = "#334155"
 RED = "#B91C1C"
+OUTLINE = "#64748B"  # slate-500: 4.76:1 on white, for card borders and bar tracks (WCAG 1.4.11)
+TRACK = "#F1F5F9"
 ALLOWED_TEXT_COLORS = {
     "rgb(30, 58, 138)", "rgb(15, 118, 110)", "rgb(15, 23, 42)", "rgb(51, 65, 85)",
     "rgb(185, 28, 28)", "rgb(255, 255, 255)",
@@ -158,28 +163,29 @@ def page(body: str, width: int) -> str:
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ background: #FFFFFF; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: {INK}; }}
 #figure {{ width: {width}px; padding: 36px 44px 32px; background: #FFFFFF; }}
-.label {{ display: inline-block; font-size: 18px; font-weight: 700; letter-spacing: 0.04em; color: #FFFFFF;
+.label {{ display: inline-block; font-size: 22px; font-weight: 700; letter-spacing: 0.04em; color: #FFFFFF;
   background: {TEAL}; padding: 6px 14px; border-radius: 4px; margin-bottom: 14px; }}
-h1 {{ font-size: 34px; font-weight: 800; color: {NAVY}; margin-bottom: 6px; }}
-.sub {{ font-size: 20px; color: {SLATE}; margin-bottom: 26px; }}
-.card {{ border: 2px solid #CBD5E1; border-radius: 10px; padding: 18px 20px; background: #FFFFFF; }}
+h1 {{ font-size: 36px; font-weight: 800; color: {NAVY}; margin-bottom: 6px; }}
+.sub {{ font-size: 22px; color: {SLATE}; margin-bottom: 26px; }}
+.card {{ border: 2px solid {OUTLINE}; border-radius: 10px; padding: 18px 20px; background: #FFFFFF; }}
 .card.navy {{ border-top: 8px solid {NAVY}; }}
 .card.teal {{ border-top: 8px solid {TEAL}; }}
-.kicker {{ font-size: 18px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: {TEAL};
+.kicker {{ font-size: 22px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: {TEAL};
   margin-bottom: 8px; }}
 .big {{ font-size: 40px; font-weight: 800; color: {NAVY}; }}
-.line {{ font-size: 20px; color: {SLATE}; margin-top: 6px; }}
-.mono {{ font-family: Menlo, Consolas, monospace; font-size: 18px; color: {SLATE}; }}
-.quote {{ font-size: 22px; color: {INK}; font-style: italic; line-height: 1.4; }}
+.line {{ font-size: 22px; color: {SLATE}; margin-top: 6px; }}
+.mono {{ font-family: Menlo, Consolas, monospace; font-size: 22px; color: {SLATE}; margin-top: 6px; }}
+.quote {{ font-size: 24px; color: {INK}; font-style: italic; line-height: 1.4; }}
 mark {{ background: #FEF08A; color: {INK}; padding: 0 3px; border-radius: 3px; font-style: normal; font-weight: 700; }}
-.chip {{ display: inline-block; font-size: 18px; font-weight: 700; padding: 5px 12px; border-radius: 999px;
+.chip {{ display: inline-block; font-size: 22px; font-weight: 700; padding: 5px 12px; border-radius: 999px;
   margin: 4px 6px 4px 0; color: #FFFFFF; background: {NAVY}; }}
 .chip.teal {{ background: {TEAL}; }}
 .chip.outline {{ background: #FFFFFF; color: {NAVY}; border: 2px solid {NAVY}; }}
 .ok {{ color: {TEAL}; font-weight: 800; }}
 .no {{ color: {RED}; font-weight: 800; }}
 .arrow {{ font-size: 40px; color: {SLATE}; display: flex; align-items: center; justify-content: center; }}
-.foot {{ font-size: 18px; color: {SLATE}; margin-top: 22px; }}
+.verdict {{ font-size: 30px; font-weight: 800; text-align: center; }}
+.foot {{ font-size: 22px; color: {SLATE}; margin-top: 22px; }}
 </style></head><body><div id="figure">{body}</div></body></html>"""
 
 
@@ -206,10 +212,10 @@ def fig_context_fence(d: dict) -> str:
         rid = r["unit_id"].split("::")[-1]
         fence = (f'<div class="line ok" data-node>✓ Fence word in turn: {e(r["fence"])}</div>' if r["fence"]
                  else '<div class="line no" data-node>✕ No fence word in turn</div>')
-        verdict = ('<div class="big ok" data-node>✓ Counted</div>' if r["counted"]
-                   else '<div class="big no" data-node>✕ Not counted</div>')
+        verdict = ('<div class="verdict ok" data-node>✓ Counted</div>' if r["counted"]
+                   else '<div class="verdict no" data-node>✕ Not counted</div>')
         rows_html.append(f"""
-<div style="display:grid;grid-template-columns:1.7fr 1fr 0.8fr;gap:18px;margin-bottom:18px;">
+<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:18px;margin-bottom:18px;">
   <div class="card teal"><div class="kicker" data-node>Row {e(rid)} · line {r['line_number']}</div>
     <div class="quote" data-node>{highlight(r['text'], r['match_char_start'], r['match_char_end'])}</div></div>
   <div class="card"><div class="line ok" data-node>✓ Root matched</div>{fence}</div>
@@ -229,34 +235,35 @@ def fig_context_fence(d: dict) -> str:
 {''.join(rows_html)}
 <div class="foot" data-node>Highlighted span = match_char_start to match_char_end.</div>
 <div class="foot" data-node>Accents fold before matching: agotó matches root agoto.</div>"""
-    return page(body, 1500)
+    return page(body, 1200)
 
 
 def fig_distribution(d: dict) -> str:
     survey = d["survey"]
     freq = survey["frequencies_df"]
     n = int(survey["total_documents"])
-    bar_w, row_h, label_w = 620, 64, 520
+    # Inner width 1220 - 2 * 44 padding = 1132: track 28..728, value text from 744.
+    svg_w, x0, bar_w, row_h = 1132, 28, 700, 92
     svg_rows = []
     for i, (_, r) in enumerate(freq.iterrows()):
         y = i * row_h
         w = bar_w * float(r["prevalence_pct"]) / 100.0
         se = binomial_se(int(r["documents_reporting"]), n)
         svg_rows.append(
-            f'<text data-node x="{label_w - 14}" y="{y + 38}" text-anchor="end" font-size="20" fill="{INK}">'
-            f'{e(r["domain_name"])}</text>'
-            f'<rect x="{label_w}" y="{y + 12}" width="{bar_w}" height="38" fill="#F1F5F9"/>'
-            f'<rect x="{label_w}" y="{y + 12}" width="{w:.1f}" height="38" fill="{NAVY}"/>'
-            f'<text data-node x="{label_w + bar_w + 16}" y="{y + 38}" font-size="20" fill="{SLATE}">'
+            f'<text data-node x="{x0}" y="{y + 26}" font-size="22" fill="{INK}">{e(r["domain_name"])}</text>'
+            f'<rect x="{x0}" y="{y + 38}" width="{bar_w}" height="34" fill="{TRACK}" '
+            f'stroke="{OUTLINE}" stroke-width="1.5"/>'
+            f'<rect x="{x0}" y="{y + 38}" width="{w:.1f}" height="34" fill="{NAVY}"/>'
+            f'<text data-node x="{x0 + bar_w + 16}" y="{y + 63}" font-size="22" fill="{SLATE}">'
             f'{int(r["documents_reporting"])} of {n} units · {float(r["prevalence_pct"]):.1f}% · SE {se:.3f}</text>'
         )
-    height = row_h * len(freq) + 50
+    height = row_h * len(freq) + 40
     axis = "".join(
-        f'<text data-node x="{label_w + bar_w * t / 100:.0f}" y="{height - 6}" text-anchor="middle" '
-        f'font-size="18" fill="{SLATE}">{t}%</text>'
+        f'<text data-node x="{x0 + bar_w * t / 100:.0f}" y="{height - 6}" text-anchor="middle" '
+        f'font-size="22" fill="{SLATE}">{t}%</text>'
         for t in (0, 25, 50, 75, 100)
     )
-    svg = (f'<svg width="1440" height="{height}" xmlns="http://www.w3.org/2000/svg" role="img">'
+    svg = (f'<svg width="{svg_w}" height="{height}" xmlns="http://www.w3.org/2000/svg" role="img">'
            f'{"".join(svg_rows)}{axis}</svg>')
     body = header(
         "Domain prevalence on the SOFTWARE_TEST survey",
@@ -265,7 +272,7 @@ def fig_distribution(d: dict) -> str:
         f'<div class="foot" data-node>Prevalence = units with a matching turn ÷ N.</div>'
         f'<div class="foot" data-node>Zero bars mean no fixture turn matched that rule.</div>'
     )
-    return page(body, 1540)
+    return page(body, 1220)
 
 
 def fig_audit_bridge(d: dict) -> str:
@@ -277,37 +284,42 @@ def fig_audit_bridge(d: dict) -> str:
     stamp_title = comment.splitlines()[0]
     status = "PASS" if d["integrity_ok"] else "FAIL"
     cards = [
-        ("Verbatim quote", "teal",
+        ("1. Verbatim quote", "teal",
          f'<div class="quote" data-node>{highlight(q["text"], int(q["match_char_start"]), int(q["match_char_end"]))}</div>'
          f'<div class="line" data-node>{e(Path(q["source_id"]).name)} · line {int(q["line_number"])}</div>'
          f'<div class="line" data-node>chars {int(q["match_char_start"])}–{int(q["match_char_end"])}</div>'
          f'<div class="mono" data-node>file SHA-256 {e(short_sha(q["source_sha256"]))}</div>'),
-        ("Frequency row", "navy",
+        ("2. Frequency row", "navy",
          f'<div class="line" data-node>{e(q["domain_id"])}</div>'
          f'<div class="big" data-node>{float(row["prevalence_pct"]):.1f}%</div>'
          f'<div class="line" data-node>{int(row["documents_reporting"])} of {int(row["total_documents"])} units</div>'
          f'<div class="line" data-node>{int(row["matching_turns"])} matching turn</div>'),
-        ("Excel cell comment", "navy",
+        ("3. Excel cell comment", "navy",
          f'<div class="line" data-node>{e(stamp_title)}</div>'
          f'<div class="mono" data-node>digest {e(short_sha(digest))}</div>'
          f'<div class="line" data-node>Prevalence cell, actuarial_parameter_matrix.xlsx</div>'),
-        ("Integrity check", "teal",
+        ("4. Integrity check", "teal",
          f'<div class="line" data-node>verify_workbook_integrity()</div>'
          f'<div class="big {"ok" if d["integrity_ok"] else "no"}" data-node>{"✓" if d["integrity_ok"] else "✕"} {status}</div>'
          f'<div class="line" data-node>Recomputes digest from manifest</div>'),
     ]
-    parts = []
-    for i, (kicker, tone, inner) in enumerate(cards):
-        if i:
-            parts.append('<div class="arrow" data-node>→</div>')
-        parts.append(f'<div class="card {tone}"><div class="kicker" data-node>{e(kicker)}</div>{inner}</div>')
+    boxes = [f'<div class="card {tone}"><div class="kicker" data-node>{e(kicker)}</div>{inner}</div>'
+             for kicker, tone, inner in cards]
+    right = '<div class="arrow" data-node>→</div>'
+    # Inner width 1200 - 2 * 44 = 1112; columns 524 | 64 | 524, so step 2 is centred at x = 850
+    # and step 3 at x = 262. The elbow runs down from step 2, left, and down into step 3.
+    elbow = (f'<svg width="1112" height="64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;">'
+             f'<path d="M850 4 V30 H262 V48" fill="none" stroke="{SLATE}" stroke-width="4"/>'
+             f'<path d="M250 46 L262 62 L274 46 Z" fill="{SLATE}"/></svg>')
+    parts = [boxes[0], right, boxes[1], f'<div style="grid-column:1 / -1;">{elbow}</div>',
+             boxes[2], right, boxes[3]]
     body = header(
         "Audit bridge: quote to verified spreadsheet cell",
         f"SOFTWARE_TEST survey CSV · {PFL} · AtlasEngine.export_results",
-    ) + (f'<div style="display:grid;grid-template-columns:1.35fr 50px 1fr 50px 1.1fr 50px 1fr;'
+    ) + (f'<div style="display:grid;grid-template-columns:1fr 64px 1fr;'
          f'align-items:stretch;">{"".join(parts)}</div>'
          '<div class="foot" data-node>Editing a count or comment makes the check fail.</div>')
-    return page(body, 1700)
+    return page(body, 1200)
 
 
 def fig_dashboard(d: dict) -> str:
@@ -333,8 +345,8 @@ def fig_dashboard(d: dict) -> str:
         "ATLAS workbench walkthrough",
         f"Survey CSV sample · {PFL} · values computed by AtlasEngine",
     ) + f"""
-<div style="display:grid;grid-template-columns:400px 1fr;gap:24px;">
-  <div class="card" style="background:#F1F5F9;">
+<div style="display:grid;grid-template-columns:420px 1fr;gap:24px;">
+  <div class="card" style="background:#F1F5F9;align-self:start;">
     <div class="kicker" data-node>Sidebar</div>
     <div style="margin-top:10px;">{step(1)}<span class="line" data-node>Corpus Dataset</span></div>
     <div class="mono" style="margin:6px 0 14px 0;" data-node>Survey CSV (SOFTWARE_TEST)</div>
@@ -344,7 +356,7 @@ def fig_dashboard(d: dict) -> str:
   </div>
   <div>
     <div style="margin-bottom:12px;">{step(3)}<span class="line" data-node>Tab 1 KPI cards, live per run</span></div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">{kpi_html}</div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:18px;">{kpi_html}</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px;">
       <div class="card teal">{step(4)}<span class="line" data-node>Prevalence chart and table</span></div>
       <div class="card teal">{step(5)}<span class="line" data-node>Quote browser with SHA-256</span></div>
@@ -359,7 +371,7 @@ def fig_dashboard(d: dict) -> str:
     </div>
   </div>
 </div>"""
-    return page(body, 1600)
+    return page(body, 1220)
 
 
 def fig_pipeline(_: dict) -> str:
@@ -392,7 +404,7 @@ def fig_pipeline(_: dict) -> str:
             "xlsx with audit-stamp comments; manifest; quotes CSV",
             "verify_workbook_integrity recomputes every digest"])
     )
-    return page(body, 1300)
+    return page(body, 1160)
 
 
 FIGURES = {
@@ -422,35 +434,77 @@ QA_SCRIPT = """
     if (!el.closest('[data-node]')) problems.push(`text outside a data-node: ${t}`);
     const cs = getComputedStyle(el);
     const size = parseFloat(cs.fontSize);
-    if (size < 18) problems.push(`font ${size}px < 18px: ${t}`);
+    if (size < 22) problems.push(`font ${size}px < 22px: ${t}`);
     const color = el.namespaceURI === 'http://www.w3.org/2000/svg' ? cs.fill : cs.color;
     if (!allowed.includes(color)) problems.push(`text colour ${color} outside palette: ${t}`);
   }
+  const describe = (el) => `<${el.tagName.toLowerCase()}${typeof el.className === 'string' && el.className.trim()
+    ? '.' + el.className.trim().replace(/\\s+/g, '.') : ''}> ${el.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60)}`;
+  const figure = document.getElementById('figure');
+  const figureWidth = figure.getBoundingClientRect().width;
+  if (figureWidth > 1250) problems.push(`#figure width ${figureWidth}px > 1250px`);
+  [figure, ...figure.querySelectorAll('*')].forEach(el => {
+    if (!(el instanceof HTMLElement) || getComputedStyle(el).display === 'inline') return;
+    if (el.scrollWidth > el.clientWidth + 2)
+      problems.push(`horizontal overflow (${el.scrollWidth} > ${el.clientWidth}): ${describe(el)}`);
+  });
+  document.querySelectorAll('.card').forEach(el => {
+    const cs = getComputedStyle(el);
+    for (const side of ['Left', 'Right', 'Bottom']) {
+      const c = cs[`border${side}Color`];
+      if (c !== 'rgb(100, 116, 139)')
+        problems.push(`card border ${side.toLowerCase()} colour ${c} is not rgb(100, 116, 139): ${describe(el)}`);
+    }
+  });
+  document.querySelectorAll('svg rect').forEach(r => {
+    if ((r.getAttribute('fill') || '').toUpperCase() === '#F1F5F9'
+        && (r.getAttribute('stroke') || '').toUpperCase() !== '#64748B')
+      problems.push('bar track rect without stroke #64748B');
+  });
+  document.querySelectorAll('svg').forEach(svg => {
+    const w = svg.width.baseVal.value, h = svg.height.baseVal.value;
+    const boxes = [...svg.querySelectorAll('text')].map(t => ({t: t.textContent.trim(), b: t.getBBox()}));
+    boxes.forEach(({t, b}) => {
+      if (b.x < 0 || b.y < 0 || b.x + b.width > w + 0.5 || b.y + b.height > h + 0.5)
+        problems.push(`SVG text past the SVG bounds (${w}x${h}): ${t}`);
+    });
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i].b, b = boxes[j].b;
+      if (a.x < b.x + b.width - 1 && b.x < a.x + a.width - 1 && a.y < b.y + b.height - 1 && b.y < a.y + a.height - 1)
+        problems.push(`SVG text overlap: ${boxes[i].t} / ${boxes[j].t}`);
+    }
+  });
   return problems;
 }
 """
 
 
+DEFAULT_BROWSERS = Path.home() / "code" / "playwright-browsers"
+
+
+def launch_chromium(pw):
+    """Launch headless Chromium. If the pinned build is absent, use the newest headless
+    shell already installed under PLAYWRIGHT_BROWSERS_PATH rather than downloading one."""
+    launch_args = {}
+    if not Path(pw.chromium.executable_path).exists():
+        root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", DEFAULT_BROWSERS))
+        shells = sorted(root.glob("chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell"))
+        if not shells:
+            raise SystemExit(f"no Chromium headless shell under {root}; run `playwright install chromium`")
+        launch_args["executable_path"] = str(shells[-1])
+        print(f"using installed browser {shells[-1].parent.parent.name}")
+    return pw.chromium.launch(**launch_args)
+
+
 def render(figures: dict, out_dir: Path) -> None:
-    default_browsers = Path.home() / "code" / "playwright-browsers"
-    if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and default_browsers.is_dir():
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(default_browsers)
+    if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and DEFAULT_BROWSERS.is_dir():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(DEFAULT_BROWSERS)
     from playwright.sync_api import sync_playwright
 
     out_dir.mkdir(parents=True, exist_ok=True)
     failures = []
     with sync_playwright() as pw:
-        launch_args = {}
-        if not Path(pw.chromium.executable_path).exists():
-            # The pinned build is absent: use the newest headless shell already installed
-            # under PLAYWRIGHT_BROWSERS_PATH rather than downloading one.
-            root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", default_browsers))
-            shells = sorted(root.glob("chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell"))
-            if not shells:
-                raise SystemExit(f"no Chromium headless shell under {root}; run `playwright install chromium`")
-            launch_args["executable_path"] = str(shells[-1])
-            print(f"using installed browser {shells[-1].parent.parent.name}")
-        browser = pw.chromium.launch(**launch_args)
+        browser = launch_chromium(pw)
         context = browser.new_context(viewport={"width": 1800, "height": 1200}, device_scale_factor=2)
         page_ = context.new_page()
         for name, markup in figures.items():

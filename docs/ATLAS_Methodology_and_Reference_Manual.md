@@ -17,7 +17,7 @@ domain, and keeps a line-level, hash-anchored trail from every number back to th
 
 ### 2. Framework: inductive discovery, then deductive measurement
 
-![Exhibit 1: ATLAS pipeline](figures/atlas_pipeline_architecture.png)
+![Flow diagram of the ATLAS pipeline from transcript and table inputs through UniversalTranscriptParser, then atlas_discover topic discovery alongside AtlasEngine codebook matching, to exports checked by verify_workbook_integrity](figures/atlas_pipeline_architecture.png)
 *Exhibit 1: Modules and what each adds. Inputs are parsed into turns; discovery and coding run on the
 participant turns; exports are verified against a manifest.*
 
@@ -132,12 +132,12 @@ Quote inventory (SOFTWARE_TEST):
 | :--- | :--- | ---: | :--- | :---: | :--- | :--- | :--- |
 | `PFL_GAP` | `data/samples/software_test_survey.csv::R001` | 2 | participant | 7–28 | se agotó el beneficio | `02a7a3c8239a` | Cuando se agotó el beneficio, busqué otro trabajo. |
 
-![Exhibit 2: SOFTWARE_TEST context fence](figures/atlas_codebook_context_fence.png)
+![SOFTWARE_TEST context-fence diagram listing PFL_GAP roots and fence words, then two survey rows where a matched root counts only when a fence word appears in the same turn](figures/atlas_codebook_context_fence.png)
 *Exhibit 2 (SOFTWARE_TEST): `PFL_GAP` has context fences and no window. R001 contains a root and the
 fence `trabajo`, so it counts. R005 contains the root `protección laboral` but no fence term, so it does
 not; with the fences removed the same rule matches R005 as well.*
 
-![Exhibit 3: SOFTWARE_TEST domain prevalence](figures/atlas_labor_market_distribution.png)
+![SOFTWARE_TEST horizontal bar chart of domain prevalence for each pfl_case_study_codebook.yaml domain on the survey sample, with each bar labeled by units reporting, percent and binomial standard error](figures/atlas_labor_market_distribution.png)
 *Exhibit 3 (SOFTWARE_TEST): prevalence by domain for the table above, with binomial SE.*
 
 #### 5.2 SOFTWARE_TEST — bilingual interview `.txt` + Zoom `.vtt` × `pfl_case_study_codebook.yaml`
@@ -191,7 +191,7 @@ comment; any edit is reported as a reason. It does not re-verify the quote sheet
 For the SOFTWARE_TEST survey run the `PFL_GAP` comment reads `Documents: 1 / 6`, `Matching Turns: 1`,
 `Verification SHA-256: 821bd24c51ea…`, and the integrity check passes.
 
-![Exhibit 4: SOFTWARE_TEST audit bridge](figures/atlas_audit_bridge.png)
+![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](figures/atlas_audit_bridge.png)
 *Exhibit 4 (SOFTWARE_TEST): from verbatim span and file hash to frequency row, audit-stamp comment and
 integrity check.*
 
@@ -210,7 +210,7 @@ table, quote browser, topic discovery with codebook download/apply, parameter ma
 downloads. It loads no remote assets. Text uses navy `#1E3A8A` (10.4:1 on white) and teal `#0F766E`
 (5.5:1 on white), and every chart has a table alongside it.
 
-![Exhibit 5: SOFTWARE_TEST workbench walkthrough](figures/atlas_dashboard_ui_walkthrough.png)
+![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](figures/atlas_dashboard_ui_walkthrough.png)
 *Exhibit 5 (SOFTWARE_TEST): sidebar controls, KPI values for the survey sample, and the export files.*
 
 ---

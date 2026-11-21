@@ -250,7 +250,7 @@ ATLAS creates an automated proof sheet for every run:
 3. **Deterministic Reproducibility:** Because ATLAS applies fixed matching rules rather than a probabilistic language model, re-running the same codebook on the same files yields identical counts and percentages every time.
 4. **Workbook Check:** Each prevalence cell in the Excel export carries an audit-stamp comment, and ATLAS re-checks the workbook against its provenance manifest; the result is shown in Tab 2.
 
-![SOFTWARE_TEST audit bridge](figures/atlas_audit_bridge.png)
+![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](figures/atlas_audit_bridge.png)
 *SOFTWARE_TEST illustration of the audit trail on a built-in sample; mechanics only.*
 
 Attaching this proof sheet to a grant report protects the agency and builds long-term funder trust.

@@ -27,7 +27,7 @@ requests; see [Privacy and network use](#privacy-and-network-use) for what that 
 > comes from the built-in `SOFTWARE_TEST` fixtures in `data/samples/`. They demonstrate software
 > mechanics only and are not empirical research findings.
 
-![ATLAS pipeline: inputs, parser, discovery and engine, exports](docs/figures/atlas_pipeline_architecture.png)
+![Flow diagram of the ATLAS pipeline from transcript and table inputs through UniversalTranscriptParser, then atlas_discover topic discovery alongside AtlasEngine codebook matching, to exports checked by verify_workbook_integrity](docs/figures/atlas_pipeline_architecture.png)
 
 ---
 
@@ -58,7 +58,7 @@ Installing dependencies needs a network connection; analysis does not.
 
 ## The workbench (`app.py`)
 
-![ATLAS workbench walkthrough on the SOFTWARE_TEST survey sample](docs/figures/atlas_dashboard_ui_walkthrough.png)
+![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](docs/figures/atlas_dashboard_ui_walkthrough.png)
 
 **Sidebar**
 * **Corpus Dataset:** three built-in `SOFTWARE_TEST` samples (bilingual interview `.txt` + Zoom `.vtt`;
@@ -97,7 +97,7 @@ skipped, so N = 6 analytical units and 6 participant turns.
 | `PFL_PORTAL` | Administrative Portal & Certification Delays | 0 | 6 | 0.0 | 0.000 | 0 |
 | `PFL_STIGMA` | Workplace Stigma & Informal Retaliation | 0 | 6 | 0.0 | 0.000 | 0 |
 
-![SOFTWARE_TEST domain prevalence on the survey sample](docs/figures/atlas_labor_market_distribution.png)
+![SOFTWARE_TEST horizontal bar chart of domain prevalence for each pfl_case_study_codebook.yaml domain on the survey sample, with each bar labeled by units reporting, percent and binomial standard error](docs/figures/atlas_labor_market_distribution.png)
 
 ---
 
@@ -120,7 +120,7 @@ skipped, so N = 6 analytical units and 6 participant turns.
   three questions in a transcript. Speakerless lines matching an `interviewer_prompt_patterns` regex are
   also excluded.
 
-![SOFTWARE_TEST context-fence example](docs/figures/atlas_codebook_context_fence.png)
+![SOFTWARE_TEST context-fence diagram listing PFL_GAP roots and fence words, then two survey rows where a matched root counts only when a fence word appears in the same turn](docs/figures/atlas_codebook_context_fence.png)
 
 ### `source_id` and `unit_id`
 * `source_id` identifies a file: its POSIX path relative to `root_dir` (for example
@@ -139,7 +139,7 @@ digests and statements from the manifest and checks every cell of the frequency 
 an edited count, comment or statement is reported. It does not re-verify the quote sheet or re-hash the
 source files; compare `source_sha256` with the files on disk for that.
 
-![SOFTWARE_TEST audit bridge from quote to verified workbook cell](docs/figures/atlas_audit_bridge.png)
+![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](docs/figures/atlas_audit_bridge.png)
 
 ---
 

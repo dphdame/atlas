@@ -30,6 +30,7 @@ Run: .venv/bin/python -m unittest tests/test_smoke_contract.py -v
 
 import ast
 import hashlib
+import html
 import importlib.util
 import inspect
 import os
@@ -550,6 +551,273 @@ class StreamlitWidthCompatibilityTests(unittest.TestCase):
             self.assertEqual(sizing, [], f"{where} passes a bare sizing keyword")
             spread = [ast.unparse(kw.value) for kw in call.keywords if kw.arg is None]
             self.assertIn(f"stretch_kwargs(st.{call.func.attr})", spread, where)
+
+
+FIGURE_WIDTHS = {
+    "atlas_pipeline_architecture.png": 1160,
+    "atlas_codebook_context_fence.png": 1200,
+    "atlas_labor_market_distribution.png": 1220,
+    "atlas_audit_bridge.png": 1200,
+    "atlas_dashboard_ui_walkthrough.png": 1220,
+}
+# Each alt text must name what its own diagram shows.
+FIGURE_ALT_KEYWORDS = {
+    "atlas_pipeline_architecture.png": ("pipeline", "UniversalTranscriptParser", "AtlasEngine"),
+    "atlas_codebook_context_fence.png": ("context-fence", "PFL_GAP", "fence word"),
+    "atlas_labor_market_distribution.png": ("bar chart", "prevalence", "standard error"),
+    "atlas_audit_bridge.png": ("audit bridge", "SHA-256", "verify_workbook_integrity"),
+    "atlas_dashboard_ui_walkthrough.png": ("workbench", "sidebar", "KPI"),
+}
+EMBED_COUNTS = {
+    "README.md": 5,
+    "docs/ATLAS_User_Guide.md": 4,
+    "docs/ATLAS_Methodology_and_Reference_Manual.md": 5,
+    "docs/ATLAS_Practitioner_Field_Guide_Program_Evaluation.md": 1,
+}
+PROMOTIONAL_WORDS = ("powerful", "seamless", "cutting-edge", "revolutionary", "effortless", "best-in-class",
+                     "world-class", "game-chang", "unlock", "supercharge", "blazing", "stunning", "robust")
+CSS_FONT_FLOORS = {".label": 22, ".kicker": 22, ".mono": 22, ".chip": 22, ".foot": 22, ".line": 22, ".sub": 22,
+                   ".quote": 24, "h1": 36, ".big": 40}
+
+
+def load_figures_module():
+    spec = importlib.util.spec_from_file_location("atlas_docs_figures", REPO / "scripts" / "generate_docs_figures.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def png_size(path: Path):
+    raw = path.read_bytes()[:24]
+    if raw[:8] != b"\x89PNG\r\n\x1a\n" or raw[12:16] != b"IHDR":
+        raise AssertionError(f"{path.name} is not a PNG")
+    return int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
+
+
+# A page that breaks every documentation-figure rule once. SOFTWARE_TEST markup.
+QA_NEGATIVE_MARKUP = """<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+<div id="figure" style="width:1400px;font-family:Helvetica,Arial,sans-serif;">
+  <div class="card" style="border:2px solid #CBD5E1;padding:10px;">
+    <div data-node style="font-size:18px;color:#0F172A;">Small text</div></div>
+  <div data-node style="width:120px;white-space:nowrap;font-size:22px;color:#0F172A;">
+    SOFTWARE_TEST_unbreakable_token_that_cannot_wrap</div>
+  <svg width="300" height="60" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="200" height="20" fill="#F1F5F9"/>
+    <text data-node x="240" y="40" font-size="22" fill="#0F172A">Clipped label</text>
+    <text data-node x="10" y="40" font-size="22" fill="#0F172A">First</text>
+    <text data-node x="20" y="44" font-size="22" fill="#0F172A">Second</text>
+  </svg>
+</div></body></html>"""
+
+
+class ADAAccessibilityTests(unittest.TestCase):
+    """WCAG 2.1 AA: 1.1.1 alt text on the static figures, 1.4.11 non-text contrast and
+    GitHub-column legibility for docs/figures/*.png, and a deterministic text summary
+    (no AI, no network) for both live Altair charts. SOFTWARE_TEST fixtures only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.figs = load_figures_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            cls.data = cls.figs.compute(Path(tmp))
+        cls.markup = {name: build(cls.data) for name, build in cls.figs.FIGURES.items()}
+
+    @staticmethod
+    def helper():
+        return load_app_helpers("describe_prevalence_chart")["describe_prevalence_chart"]
+
+    def describe(self, *args, **kwargs):
+        return self.helper()(*args, **kwargs)
+
+    # ---- WCAG 1.1.1: alt text on every static figure embed -------------------------
+    def test_all_fifteen_figure_embeds_have_descriptive_alt_text(self):
+        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]*figures/(atlas_[a-z_]+\.png))\)")
+        total = 0
+        for rel, expected in EMBED_COUNTS.items():
+            embeds = pattern.findall((REPO / rel).read_text(encoding="utf-8"))
+            self.assertEqual(len(embeds), expected, f"{rel}: figure embed count")
+            total += len(embeds)
+            for alt_text, _, name in embeds:
+                with self.subTest(doc=rel, figure=name):
+                    self.assertIn(name, FIGURE_WIDTHS)
+                    self.assertGreaterEqual(len(alt_text.split()), 12, f"alt text too short: {alt_text!r}")
+                    self.assertLessEqual(len(re.findall(r"[.!?](\s|$)", alt_text)), 1, f"multi-sentence: {alt_text!r}")
+                    self.assertIsNone(re.search(r"2,?500", alt_text), alt_text)
+                    for word in PROMOTIONAL_WORDS:
+                        self.assertNotIn(word, alt_text.lower())
+                    for keyword in FIGURE_ALT_KEYWORDS[name]:
+                        self.assertIn(keyword.lower(), alt_text.lower(), f"{name} alt text must mention {keyword!r}")
+        self.assertEqual(total, 15)
+
+    # ---- Figure markup: width, font floors, contrast --------------------------------
+    def test_figure_canvas_widths_fit_the_github_column(self):
+        self.assertEqual(set(self.markup), set(FIGURE_WIDTHS))
+        for name, html_text in self.markup.items():
+            with self.subTest(figure=name):
+                width = int(re.search(r"#figure \{ width: (\d+)px", html_text).group(1))
+                self.assertEqual(width, FIGURE_WIDTHS[name])
+                self.assertLessEqual(width, 1250)
+
+    def test_every_font_size_is_at_least_22px(self):
+        for name, html_text in self.markup.items():
+            with self.subTest(figure=name):
+                css_sizes = [int(s) for s in re.findall(r"font-size:\s*(\d+)px", html_text)]
+                svg_sizes = [int(s) for s in re.findall(r'font-size="(\d+)"', html_text)]
+                self.assertTrue(css_sizes)
+                self.assertGreaterEqual(min(css_sizes + svg_sizes), 22)
+        css = self.markup["atlas_pipeline_architecture.png"]
+        for selector, size in CSS_FONT_FLOORS.items():
+            with self.subTest(selector=selector):
+                rule = re.search(rf"(?m)^{re.escape(selector)} \{{([^}}]*)\}}", css)
+                self.assertIsNotNone(rule, selector)
+                self.assertEqual(int(re.search(r"font-size:\s*(\d+)px", rule.group(1)).group(1)), size)
+
+    def test_non_text_contrast_card_borders_and_bar_tracks(self):
+        for name, html_text in self.markup.items():
+            with self.subTest(figure=name):
+                card = re.search(r"(?m)^\.card \{([^}]*)\}", html_text).group(1)
+                self.assertIn("border: 2px solid #64748B", card)
+                self.assertNotIn("#CBD5E1", html_text.upper())
+                for rect in re.findall(r"<rect\b[^>]*>", html_text):
+                    if 'fill="#F1F5F9"' in rect:
+                        self.assertIn('stroke="#64748B"', rect)
+                        self.assertIn('stroke-width="1.5"', rect)
+        self.assertIn('fill="#F1F5F9"', self.markup["atlas_labor_market_distribution.png"])
+
+    def test_audit_bridge_uses_numbered_steps(self):
+        text = self.markup["atlas_audit_bridge.png"]
+        steps = ["1. Verbatim quote", "2. Frequency row", "3. Excel cell comment", "4. Integrity check"]
+        positions = [text.index(e) for e in (html.escape(s) for s in steps)]
+        self.assertEqual(positions, sorted(positions))
+
+    # ---- Rendered figures in Chromium: QA gate and 2x2 layout -----------------------
+    def test_browser_qa_gate_and_layout(self):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser = self.figs.launch_chromium(pw)
+            try:
+                page_ = browser.new_page(viewport={"width": 1800, "height": 1200})
+                page_.set_content(QA_NEGATIVE_MARKUP)
+                problems = "\n".join(page_.evaluate(self.figs.QA_SCRIPT, sorted(self.figs.ALLOWED_TEXT_COLORS)))
+                for needle in ("< 22px", "> 1250px", "horizontal overflow", "card border", "bar track",
+                               "past the SVG", "SVG text overlap"):
+                    self.assertIn(needle, problems, f"QA gate missed {needle!r}:\n{problems}")
+
+                for name, markup in self.markup.items():
+                    with self.subTest(figure=name):
+                        page_.set_content(markup)
+                        self.assertEqual(page_.evaluate(self.figs.QA_SCRIPT, sorted(self.figs.ALLOWED_TEXT_COLORS)), [])
+                        width = page_.evaluate("() => document.getElementById('figure').getBoundingClientRect().width")
+                        self.assertEqual(round(width), FIGURE_WIDTHS[name])
+
+                page_.set_content(self.markup["atlas_audit_bridge.png"])
+                boxes = page_.evaluate(
+                    "() => [...document.querySelectorAll('#figure .card')].map(c => c.getBoundingClientRect())"
+                    ".map(r => ({x: Math.round(r.left), y: Math.round(r.top)}))")
+                self.assertEqual(len(boxes), 4)
+                self.assertEqual(boxes[0]["y"], boxes[1]["y"])
+                self.assertEqual(boxes[2]["y"], boxes[3]["y"])
+                self.assertLess(boxes[0]["y"], boxes[2]["y"])
+                self.assertEqual(boxes[0]["x"], boxes[2]["x"])
+                self.assertEqual(boxes[1]["x"], boxes[3]["x"])
+                self.assertLess(boxes[0]["x"], boxes[1]["x"])
+            finally:
+                browser.close()
+
+    def test_committed_pngs_match_canvas_widths(self):
+        for name, width in FIGURE_WIDTHS.items():
+            with self.subTest(figure=name):
+                px_w, px_h = png_size(REPO / "docs" / "figures" / name)
+                self.assertEqual(px_w, 2 * width, "device_scale_factor=2 screenshot of the #figure canvas")
+                self.assertLessEqual(px_w, 2500)
+                self.assertGreater(px_h, 0)
+
+    # ---- describe_prevalence_chart: deterministic chart summary ---------------------
+    def frame(self, rows, ci=False):
+        import pandas as pd
+
+        cols = ["domain_id", "domain_name", "documents_reporting", "prevalence_pct"]
+        if ci:
+            cols += ["ci95_low_pct", "ci95_high_pct"]
+        return pd.DataFrame(rows, columns=cols)
+
+    def test_describe_empty_and_zero_cases(self):
+        self.assertEqual(self.describe(self.frame([]), 10), "No domains defined in the active codebook.")
+        self.assertEqual(self.describe(self.frame([]), 0, include_ci=True), "No domains defined in the active codebook.")
+        zero = self.frame([("A", "SOFTWARE_TEST Alpha", 0, 0.0), ("B", "SOFTWARE_TEST Beta", 0, 0.0)])
+        self.assertEqual(self.describe(zero, 6),
+                         "Horizontal bar chart across 6 analytical units showing 0% prevalence across all 2 coded domains.")
+        no_units = self.describe(zero, 0)
+        self.assertIn("0 analytical units", no_units)
+        self.assertIn("2 coded domains", no_units)
+        self.assertNotIn("%", no_units.replace("0%", ""))
+
+    def test_describe_sorts_by_prevalence_then_name_and_counts_zero_domains(self):
+        df = self.frame([
+            ("A", "SOFTWARE_TEST Delta", 3, 30.0), ("B", "SOFTWARE_TEST Zero", 0, 0.0),
+            ("C", "SOFTWARE_TEST Gamma", 5, 50.0), ("D", "SOFTWARE_TEST Alpha", 3, 30.0),
+        ])
+        before = df.copy()
+        text = self.describe(df, 10)
+        self.assertEqual(text, (
+            "Horizontal bar chart across 10 analytical units. Highest prevalence: "
+            "SOFTWARE_TEST Gamma 50.0% (5 of 10 units); SOFTWARE_TEST Alpha 30.0% (3 of 10 units); "
+            "SOFTWARE_TEST Delta 30.0% (3 of 10 units). Domains with 0% prevalence: 1 of 4."))
+        self.assertTrue(df.equals(before), "the helper must not modify its input")
+        self.assertEqual(self.describe(df, 10), text, "same input, same text")
+
+    def test_describe_lists_three_and_counts_the_rest(self):
+        df = self.frame([(c, f"SOFTWARE_TEST {c}", n, n * 10.0) for c, n in zip("ABCDE", (1, 2, 3, 4, 5))])
+        text = self.describe(df, 10)
+        self.assertIn("SOFTWARE_TEST E 50.0% (5 of 10 units); SOFTWARE_TEST D 40.0% (4 of 10 units); "
+                      "SOFTWARE_TEST C 30.0% (3 of 10 units).", text)
+        self.assertIn("Other matched domains not listed: 2.", text)
+        self.assertNotIn("Domains with 0% prevalence", text)
+
+    def test_describe_with_confidence_interval(self):
+        df = self.frame([("A", "SOFTWARE_TEST Alpha", 1, 16.7, 0.0, 46.5), ("B", "SOFTWARE_TEST Beta", 0, 0.0, 0.0, 0.0)],
+                        ci=True)
+        self.assertEqual(self.describe(df, 6, include_ci=True), (
+            "Horizontal bar chart across 6 analytical units. Highest prevalence: "
+            "SOFTWARE_TEST Alpha 16.7% (1 of 6 units, 95% CI 0.0%–46.5%). Domains with 0% prevalence: 1 of 2."))
+        self.assertNotIn("95% CI", self.describe(df, 6))
+
+    def test_describe_is_pure_python(self):
+        source = ast.get_source_segment((REPO / "app.py").read_text(encoding="utf-8"), next(
+            n for n in ast.parse((REPO / "app.py").read_text(encoding="utf-8")).body
+            if isinstance(n, ast.FunctionDef) and n.name == "describe_prevalence_chart"))
+        for banned in ("http", "requests", "urllib", "socket", "openai", "anthropic", "random", "time."):
+            self.assertNotIn(banned, source)
+        self.assertIsNone(re.search(r"\bst\.", source), "the helper must not call Streamlit")
+
+    # ---- Both live charts carry the summary as Vega-Lite description and caption ----
+    def test_live_charts_carry_matching_summaries(self):
+        import json
+
+        at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
+        at.run()
+        box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
+        box.select(next(o for o in box.options if "Survey" in o))
+        at.run()
+        self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
+        charts = at.get("vega_lite_chart")
+        self.assertEqual(len(charts), 2)
+        descriptions = [json.loads(c.proto.spec).get("description", "") for c in charts]
+        captions = [c.value for c in at.caption]
+        frames = [df.value for df in at.dataframe]
+        freq = next(f for f in frames if {"domain_name", "prevalence_pct", "documents_reporting"} <= set(f.columns)
+                    and "ci95_low_pct" not in f.columns)
+        matrix = next(f for f in frames if "ci95_low_pct" in f.columns)
+        n_units = int(str(next(m for m in at.metric if m.label == "Analytical Units (N)").value))
+        self.assertEqual(descriptions[0], self.describe(freq, n_units))
+        self.assertEqual(descriptions[1], self.describe(matrix, n_units, include_ci=True))
+        self.assertIn(f"(1 of {n_units} units)", descriptions[0])
+        self.assertNotIn("95% CI", descriptions[0])
+        self.assertIn("95% CI", descriptions[1])
+        for text in descriptions:
+            self.assertTrue(text.startswith(f"Horizontal bar chart across {n_units} analytical units"), text)
+            self.assertIn(f"Chart summary: {text}", captions)
 
 
 class ReadmeCommandTests(unittest.TestCase):
