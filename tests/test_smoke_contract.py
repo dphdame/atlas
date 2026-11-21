@@ -441,6 +441,22 @@ class LauncherDamagedInterpreterTests(unittest.TestCase):
 UPLOAD_CODEBOOK = "sdoh_basic_needs.yaml"
 UPLOAD_MATCHING = b"Participant: The bus was late again and I missed work.\n"
 UPLOAD_NON_MATCHING = b"Participant: The weather was pleasant on the walk over.\n"
+MARKDOWN_IMAGE_DOMAIN = "Transit ![marker](https://example.invalid/pixel.png)"
+WORD_JOINER = "\u2060"
+# The literal-autolink patterns in Streamlit 1.67's StreamlitMarkdown bundle (JS \w is ASCII).
+GFM_AUTOLINK_LITERALS = (
+    re.compile(r"(https?://|www(?=\.))([-.\w]+)", re.IGNORECASE | re.ASCII),
+    re.compile(r"([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)", re.ASCII),
+)
+MARKDOWN_DOMAIN_CODEBOOK = (
+    'program_name: "SOFTWARE_TEST Markdown Domain"\n'
+    'version: "1.0"\n'
+    "topics:\n"
+    "  transit_markdown:\n"
+    '    label: "Transit ![marker](https://example.invalid/pixel.png)"\n'
+    "    keywords:\n"
+    '      - "bus"\n'
+).encode("utf-8")
 
 
 class UploadNameCollisionTests(unittest.TestCase):
@@ -815,9 +831,114 @@ class ADAAccessibilityTests(unittest.TestCase):
         self.assertIn(f"(1 of {n_units} units)", descriptions[0])
         self.assertNotIn("95% CI", descriptions[0])
         self.assertIn("95% CI", descriptions[1])
+        escape = self.escape()
         for text in descriptions:
             self.assertTrue(text.startswith(f"Horizontal bar chart across {n_units} analytical units"), text)
-            self.assertIn(f"Chart summary: {text}", captions)
+            self.assertIn(f"Chart summary: {escape(text)}", captions)
+
+    # ---- Visible captions are Markdown; uploaded domain names must stay literal -----
+    @staticmethod
+    def escape():
+        return load_app_helpers("escape_markdown_text")["escape_markdown_text"]
+
+    @staticmethod
+    def unescape(text):
+        """What the renderer passes on as text after resolving CommonMark backslash escapes."""
+        return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)
+
+    def displayed(self, text):
+        """Visible glyphs: the resolved text without U+2060 WORD JOINER, which renders as nothing."""
+        return self.unescape(text).replace(WORD_JOINER, "")
+
+    def assert_inert(self, escaped):
+        """Every Markdown/Streamlit metacharacter in escaped is backslash-escaped."""
+        bare = re.sub(r"\\.", "", escaped)
+        self.assertIsNone(re.search(r"[\\\[\]()!*_`$~<>#|:+\-{}&@.]", bare), f"unescaped markup in {escaped!r}")
+        self.assertNotIn("\n", escaped)
+        self.assertNotIn("\r", escaped)
+        # Streamlit's GFM autolink literals run on text after escapes resolve (StreamlitMarkdown bundle).
+        for pattern in GFM_AUTOLINK_LITERALS:
+            self.assertIsNone(pattern.search(self.unescape(escaped)), f"autolink forms in {escaped!r}")
+
+    def test_escape_markdown_text_neutralizes_inline_markup(self):
+        escape = self.escape()
+        payloads = [
+            MARKDOWN_IMAGE_DOMAIN,
+            "[link](https://example.invalid)",
+            "bare https://example.invalid/x and www.example.invalid and someone@example.invalid",
+            "$x+y$", ":red[alert]", ":material/home: and :smile:", "<img src=x>", "*emph* _u_ ~~s~~ `code`",
+            "a | b # c {d} e+f g-h", "C:\\path\\to [x]", "&amp; &#58;",
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                out = escape(payload)
+                self.assert_inert(out)
+                self.assertEqual(self.displayed(out), payload, "escaping must not change the displayed text")
+        self.assertTrue(escape(MARKDOWN_IMAGE_DOMAIN).startswith("Transit \\!\\[marker\\]\\("))
+        self.assertTrue(escape("[link](https://example.invalid)").startswith("\\[link\\]\\(https\\:"))
+        self.assertEqual(escape("HTTPS://x www.y a@b.c"),
+                         f"HTTPS\\:{WORD_JOINER}\\/\\/x www{WORD_JOINER}\\.y a\\@{WORD_JOINER}b\\.c")
+        self.assertEqual(escape("$x+y$"), "\\$x\\+y\\$")
+        self.assertEqual(escape(":red[alert]"), "\\:red\\[alert\\]")
+        self.assertEqual(escape("<img src=x>"), "\\<img src\\=x\\>")
+        self.assertEqual(escape("C:\\d"), "C\\:\\\\d", "the backslash itself is escaped first")
+        self.assertEqual(escape("Plain words 50 units"), "Plain words 50 units")
+        self.assertEqual(escape(""), "")
+
+    def test_escape_markdown_text_collapses_line_breaks(self):
+        escape = self.escape()
+        out = escape("Transit\n# Heading\r\n- item\r> quote\n\n1. step")
+        self.assert_inert(out)
+        self.assertEqual(self.displayed(out), "Transit # Heading - item > quote 1. step")
+        self.assertEqual(escape("a\u2028b\u2029c\x0bd\x0ce\x85f"), "a b c d e f")
+
+    def test_describe_tolerates_missing_numbers(self):
+        import pandas as pd
+
+        df = self.frame([("A", "SOFTWARE_TEST Alpha", 2, float("nan"), float("nan"), 50.0),
+                         ("B", "SOFTWARE_TEST Beta", None, 10.0, 0.0, 30.0),
+                         ("C", "SOFTWARE_TEST Gamma", 1, 10.0, None, float("inf"))], ci=True)
+        df["documents_reporting"] = df["documents_reporting"].astype(object)
+        text = self.describe(df, 10, include_ci=True)
+        self.assertNotIn("nan", text.lower())
+        self.assertNotIn("inf", text.lower())
+        self.assertIn("SOFTWARE_TEST Gamma 10.0% (1 of 10 units, 95% CI n/a–n/a)", text)
+        self.assertIn("SOFTWARE_TEST Alpha n/a (2 of 10 units, 95% CI n/a–50.0%)", text)
+        self.assertIn("Domains with 0% prevalence: 1 of 3.", text, "a missing count is not a reporting unit")
+        self.assertTrue(pd.isna(df.loc[0, "prevalence_pct"]), "the helper must not modify its input")
+
+    def test_markdown_domain_name_is_literal_in_both_captions(self):
+        import json
+
+        at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
+        at.run()
+        box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
+        box.select(next(o for o in box.options if "Upload" in o))
+        at.run()
+        next(s for s in at.selectbox if s.label == "Active YAML Codebook").select("Upload Custom Codebook (.yaml)")
+        at.run()
+        next(u for u in at.file_uploader if u.label.startswith("Upload Transcript")).set_value(
+            [("software_test_markdown_domain.txt", UPLOAD_MATCHING, "text/plain")])
+        next(u for u in at.file_uploader if u.label.startswith("Upload Custom Codebook")).set_value(
+            ("software_test_markdown_domain.yaml", MARKDOWN_DOMAIN_CODEBOOK, "application/x-yaml"))
+        at.run()
+        self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
+        self.assertEqual(len(at.error), 0, [e.value for e in at.error])
+
+        descriptions = [json.loads(c.proto.spec).get("description", "") for c in at.get("vega_lite_chart")]
+        self.assertEqual(len(descriptions), 2)
+        summaries = [c.value for c in at.caption if c.value.startswith("Chart summary: ")]
+        self.assertEqual(len(summaries), 2, "Tab 1 and Tab 2 each carry one chart-summary caption")
+        for description, caption in zip(descriptions, summaries):
+            with self.subTest(caption=caption):
+                # Vega-Lite description: plain text, the domain name verbatim.
+                self.assertIn(f"{MARKDOWN_IMAGE_DOMAIN} 100.0% (1 of 1 unit", description)
+                # Visible caption: the same text, escaped so Markdown displays it literally.
+                self.assertNotIn("![marker](", caption)
+                self.assertNotIn("](https://", caption)
+                self.assertEqual(caption, f"Chart summary: {self.escape()(description)}")
+                self.assert_inert(caption[len("Chart summary: "):])
+                self.assertEqual(self.displayed(caption), f"Chart summary: {description}")
 
 
 class ReadmeCommandTests(unittest.TestCase):

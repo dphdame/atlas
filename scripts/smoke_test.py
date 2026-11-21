@@ -44,8 +44,10 @@ Stage 4 (unit tests, AppTest and a real headless browser):
      notice and engine-matching KPI cards on boot, a transcript upload whose KPI
      cards and domain table update to the engine's counts, and downloaded
      .xlsx / manifest files that carry audit stamps and pass
-     verify_workbook_integrity. The server is then stopped with a signal and
-     must shut down by itself.
+     verify_workbook_integrity, and a custom codebook whose domain names are
+     Markdown (image, link, math, color directive) shown verbatim in both
+     chart captions. The server is then stopped with a signal and must shut
+     down by itself.
   Skipping the browser check needs an explicit --skip-playwright.
 
 Stage 5 (anti-shortcut gate and codebook audit):
@@ -907,6 +909,15 @@ BROWSER_UPLOAD_LINES = [
     "Respondent C: My manager was fine with the schedule.",
 ]
 UPLOAD_OPTION = re.compile(r"^Upload Custom Files")
+CODEBOOK_UPLOAD_OPTION = "Upload Custom Codebook (.yaml)"
+# Domain names a custom codebook can carry. Chart captions render Markdown, so each must
+# display verbatim: no image fetch, no link, no math, no color directive, no emphasis.
+MARKDOWN_DOMAINS = {
+    "portal": "Transit ![marker](https://example.invalid/pixel.png)",
+    "schedule": ("Benefit [link](https://example.invalid/a) www.example.invalid someone@example.invalid "
+                 "$x+y$ :red[alert] :smile: *emph* <b>bold</b>"),
+}
+MARKDOWN_CODEBOOK_NAME = "software_test_markdown_domains.yaml"
 KPI_LABELS = ("Analytical Units (N)", "Participant Turns", "Active Domains", "Matched Turn Mentions")
 AUDIT_STAMP = "ATLAS VERIFICATION AUDIT STAMP"
 UI_WAIT_SECONDS = 90
@@ -1005,11 +1016,13 @@ def engine_domain_counts(results: dict) -> dict:
 def browser_check(url: str, scratch: Path) -> list[str]:
     """
     Drive the live app at url in headless Chromium: boot render, a transcript
-    upload that recomputes the KPIs and domain table, and the .xlsx / manifest
-    downloads. Every expected number comes from AtlasEngine run here on the same
+    upload that recomputes the KPIs and domain table, the .xlsx / manifest
+    downloads, and Markdown domain names that both chart captions must show
+    verbatim. Every expected number comes from AtlasEngine run here on the same
     SOFTWARE_TEST inputs.
     """
     sys.path.insert(0, str(REPO))
+    import yaml
     from atlas_engine import AtlasEngine
     from universal_transcript_parser import SOFTWARE_TEST_BANNER
 
@@ -1032,6 +1045,14 @@ def browser_check(url: str, scratch: Path) -> list[str]:
     upload_text = SOFTWARE_TEST_BANNER + "\n" + "".join(line + "\n" for line in BROWSER_UPLOAD_LINES)
     with open(upload, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(upload_text)
+    markdown_codebook = scratch / MARKDOWN_CODEBOOK_NAME
+    with open(markdown_codebook, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(yaml.safe_dump({
+            "program_name": "SOFTWARE_TEST Markdown Domains",
+            "version": "1.0",
+            "topics": {f"markdown_{i}": {"label": name, "keywords": [keyword]}
+                       for i, (keyword, name) in enumerate(MARKDOWN_DOMAINS.items())},
+        }, allow_unicode=True, sort_keys=False))
 
     requested: list[str] = []
     page_errors: list[str] = []
@@ -1049,6 +1070,16 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             found = re.search(r"Codebook: (\S+\.ya?ml)", caption)
             if found:
                 return found.group(1)
+        return ""
+
+    def summary_caption(page) -> str:
+        """Visible text of the 'Chart summary:' caption in the open tab. The caption puts an
+        invisible U+2060 WORD JOINER inside https://, www. and @ to stop autolinking."""
+        for caption in page.locator('[data-testid="stCaptionContainer"]').all():
+            if caption.is_visible():
+                text = caption.inner_text().replace("\u2060", "").strip()
+                if text.startswith("Chart summary:"):
+                    return text
         return ""
 
     def domain_table(page) -> dict:
@@ -1145,6 +1176,26 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             page.get_by_role("tab", name=re.compile(r"Tab 2")).click()
             xlsx = download(page, re.compile(r"actuarial_parameter_matrix\.xlsx"), scratch / "downloaded.xlsx")
             manifest_path = download(page, re.compile(r"provenance_manifest\.json"), scratch / "downloaded.json")
+
+            # 4. A custom codebook whose domain names are Markdown: both chart captions show them verbatim.
+            page.get_by_role("combobox", name="Active YAML Codebook").click()
+            page.get_by_role("option", name=CODEBOOK_UPLOAD_OPTION).click()
+            page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION).locator(
+                "input[type='file']").set_input_files(str(markdown_codebook))
+            for tab in ("Tab 1", "Tab 2"):
+                page.get_by_role("tab", name=re.compile(tab)).click()
+                wait_for(page, f"markdown domains: {tab} chart caption shows both names verbatim",
+                         lambda p: all(name in summary_caption(p) for name in MARKDOWN_DOMAINS.values()), True)
+                caption = summary_caption(page)
+                check(f"markdown domains: {tab} caption has no escape backslashes", "\\" not in caption, caption)
+                markup = page.evaluate(
+                    "() => [...document.querySelectorAll('[data-testid=\"stCaptionContainer\"]')]"
+                    ".filter(c => c.innerText.startsWith('Chart summary:') && c.offsetParent !== null)"
+                    ".map(c => c.querySelectorAll('img, a, b, em, strong, code, .katex, [style*=\"color\"]').length)")
+                check(f"markdown domains: {tab} caption renders no image, link, math, color or emphasis",
+                      markup == [0], repr(markup))
+            leaked = page.locator("img[src*='example.invalid'], a[href*='example.invalid']").count()
+            check("markdown domains: no example.invalid image or link anywhere in the page", leaked == 0, str(leaked))
         finally:
             browser.close()
 

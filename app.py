@@ -231,18 +231,31 @@ def describe_prevalence_chart(
     if total_units <= 0:
         return f"Horizontal bar chart with 0 analytical units, so no prevalence is defined for the {k} coded {domains}."
     units = "unit" if total_units == 1 else "units"
-    rows = df.assign(_name=df["domain_name"].astype(str)).sort_values(
-        ["prevalence_pct", "_name"], ascending=[False, True], kind="mergesort")
-    matched = rows[rows["documents_reporting"].astype(int) > 0]
+
+    def pct(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return "n/a"
+        return f"{value:.1f}%" if math.isfinite(value) else "n/a"
+
+    # A missing count is no reporting unit; a missing percentage reads "n/a", never "nan%".
+    rows = df.assign(
+        _name=df["domain_name"].astype(str),
+        _prevalence=pd.to_numeric(df["prevalence_pct"], errors="coerce"),
+        _reporting=pd.to_numeric(df["documents_reporting"], errors="coerce").map(
+            lambda v: int(v) if math.isfinite(v) else 0),
+    ).sort_values(["_prevalence", "_name"], ascending=[False, True], kind="mergesort", na_position="last")
+    matched = rows[rows["_reporting"] > 0]
     if matched.empty:
         return (f"Horizontal bar chart across {total_units} analytical {units} showing 0% prevalence "
                 f"across all {k} coded {domains}.")
     listed = []
     for _, r in matched.head(3).iterrows():
-        detail = f"{int(r['documents_reporting'])} of {total_units} {units}"
+        detail = f"{int(r['_reporting'])} of {total_units} {units}"
         if include_ci:
-            detail += f", 95% CI {float(r['ci95_low_pct']):.1f}%–{float(r['ci95_high_pct']):.1f}%"
-        listed.append(f"{r['_name']} {float(r['prevalence_pct']):.1f}% ({detail})")
+            detail += f", 95% CI {pct(r['ci95_low_pct'])}–{pct(r['ci95_high_pct'])}"
+        listed.append(f"{r['_name']} {pct(r['_prevalence'])} ({detail})")
     text = (f"Horizontal bar chart across {total_units} analytical {units}. "
             f"Highest prevalence: {'; '.join(listed)}.")
     if len(matched) > 3:
@@ -250,6 +263,22 @@ def describe_prevalence_chart(
     if len(matched) < k:
         text += f" Domains with 0% prevalence: {k - len(matched)} of {k}."
     return text
+
+
+def escape_markdown_text(text: str) -> str:
+    """
+    Text that Streamlit's Markdown renderer (st.caption, st.markdown) displays
+    verbatim. Every ASCII punctuation character gets a CommonMark backslash
+    escape (backslash included), so no image, link, autolink, math, color
+    directive, emphasis or HTML can form; line breaks become one space so no
+    block (heading, list, quote) can start. GFM autolink literals (an http or
+    https scheme, www., name@host) are matched after escapes resolve, so an
+    invisible U+2060 WORD JOINER goes inside each. Use it on visible text built from uploaded
+    names; the Vega-Lite description keeps the plain text.
+    """
+    single_line = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", str(text))
+    unlinked = re.sub(r"(?i)https?:(?=//)|www(?=\.)|@", lambda m: m.group(0) + "\u2060", single_line)
+    return re.sub(r"([!-/:-@\[-`{-~])", r"\\\1", unlinked)
 
 
 @st.cache_data(show_spinner=False)
@@ -621,7 +650,7 @@ with tab_thematic:
                 (chart + labels).properties(height=max(160, 42 * len(freq)), description=freq_summary),
                 **stretch_kwargs(st.altair_chart),
             )
-            st.caption(f"Chart summary: {freq_summary}")
+            st.caption(f"Chart summary: {escape_markdown_text(freq_summary)}")
             st.caption("Bar labels show matching participant turns per domain.")
             st.markdown("##### Domain frequency table")
             st.dataframe(
@@ -789,7 +818,7 @@ with tab_econometric:
             (bars + whiskers).properties(height=max(160, 42 * len(matrix)), description=ci_summary),
             **stretch_kwargs(st.altair_chart),
         )
-        st.caption(f"Chart summary: {ci_summary}")
+        st.caption(f"Chart summary: {escape_markdown_text(ci_summary)}")
         st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
         st.dataframe(
             matrix, **stretch_kwargs(st.dataframe), hide_index=True,
