@@ -87,14 +87,23 @@ _NOTES_THEMES = re.compile(r"^\s*themes\b(?:\s*/\s*topics\b)?(?:\s*/\s*patterns\
 _NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
 # Structural rows embedded in a notes table: a "Question N:" heading (separator or
 # nothing after the number, so "Question 2 was confusing" stays evidence), a
-# follow-up / probe prompt, and a consent statement ("Consent:", or "Consent
-# statement / form / script" with or without a colon; "Consent forms were
-# confusing" and "Consent was unclear" stay evidence).
+# follow-up / probe prompt, and a consent header/statement ("Consent:", "Consent
+# statement/script ...", or "Consent form:" / "Consent form reviewed/signed/...";
+# ordinary prose like "Consent form paperwork was confusing" stays evidence).
 _NOTES_EMBEDDED_QUESTION = re.compile(r"^question\s*\d+\s*(?:[:.)\-]|$)", re.IGNORECASE)
 _NOTES_PROMPT = re.compile(r"^(?:follow[\s-]*ups?|probes?)\s*:", re.IGNORECASE)
-_NOTES_CONSENT = re.compile(r"^consent(?:\s+(?:statement|form|script)\b|\s*(?:\([^)]*\))?\s*:)", re.IGNORECASE)
+_NOTES_CONSENT = re.compile(
+    r"^consent(?:\s+(?:statement|script)\b|"
+    r"\s+forms?\s*(?::|(?:was\s+|were\s+)?(?:reviewed|read|signed|received|collected|obtained|completed|confirmed)\b)|"
+    r"\s*(?:\([^)]*\))?\s*:)",
+    re.IGNORECASE,
+)
 # Metadata keys that collapse every label variant ("Main Observations (4-5) Ideas:").
 _NOTES_CANONICAL_KEYS = ("summary_of_session", "main_observations")
+_NOTES_SUMMARY_HEADER = re.compile(
+    r"^(?:summary\s+of\s+session|main\s+observations(?:\s*\([^)]*\))?(?:\s+ideas)?)\s*:?$",
+    re.IGNORECASE,
+)
 
 # Word-table header cells that name the speaker / dialogue / timestamp columns.
 _TABLE_HEADER_ROLES = {
@@ -967,23 +976,47 @@ class UniversalTranscriptParser:
                 if text and emit:
                     entries.append((row_block, pid or row_pid, text, evidence_type, question_id))
 
-        def structural_row(text: str, question_id: str) -> Optional[str]:
+        def structural_row(cells: List[str], cont: Set[int], cols: Dict[str, List[int]],
+                           question_id: str) -> Optional[str]:
             """
-            The question_id after an embedded structural row, or None when text is
-            evidence. A "Question N:" heading starts question N, a follow-up / probe
-            extends the current question's prompt, and summary boxes become metadata.
+            The question_id after an embedded structural row, or None when the row is
+            evidence. Never reclassifies a row whose vertically merged continuation
+            cells carry a participant label. Handles both merged single-cell rows and
+            split label|value rows (e.g. "Summary of Session: | text").
             """
-            lines = _box_lines(text)
-            if _NOTES_EMBEDDED_QUESTION.match(lines[0]):
-                match = _NOTES_QUESTION.match(text)
+            if any(pid for col in cont if col < len(cells) for pid, _ in _participant_segments(cells[col])):
+                return None
+            if any(pid for col in cols["key_points"] if col < len(cells) for pid, _ in _participant_segments(cells[col])):
+                return None
+            new_cells = [(col, c) for col, c in enumerate(cells) if c and col not in cont]
+            if not new_cells:
+                return None
+            first_col, first_text = new_cells[0]
+            if first_col != 0 and first_col not in cols["key_points"]:
+                return None
+            first_lines = _box_lines(first_text)
+            if not first_lines:
+                return None
+            extra_lines = [ln for _, c in new_cells[1:] for ln in _box_lines(c)]
+            if _NOTES_EMBEDDED_QUESTION.match(first_lines[0]):
+                match = _NOTES_QUESTION.match(first_text)
                 question_id = f"Question {int(match.group(1))}"
-                questions[question_id] = "\n".join(_box_lines(match.group(2)))
+                questions[question_id] = "\n".join(_box_lines(match.group(2)) + extra_lines)
                 return question_id
-            if _NOTES_PROMPT.match(lines[0]):
+            if _NOTES_PROMPT.match(first_lines[0]):
+                if len(first_lines) == 1 and first_lines[0].endswith(":") and extra_lines:
+                    prompt_lines = [f"{first_lines[0]} {extra_lines[0]}"] + extra_lines[1:]
+                else:
+                    prompt_lines = first_lines + extra_lines
                 if question_id in questions:
-                    questions[question_id] = "\n".join(_box_lines(questions[question_id]) + lines)
+                    questions[question_id] = "\n".join(_box_lines(questions[question_id]) + prompt_lines)
                 return question_id
-            if _NOTES_CONSENT.match(lines[0]) or read_box(lines, _NOTES_CANONICAL_KEYS):
+            if _NOTES_CONSENT.match(first_lines[0]):
+                return question_id
+            if read_box(first_lines + extra_lines, _NOTES_CANONICAL_KEYS):
+                return question_id
+            if _NOTES_SUMMARY_HEADER.match(first_lines[0]):
+                set_metadata(first_lines[0], "\n".join(first_lines[1:] + extra_lines))
                 return question_id
             return None
 
@@ -1011,7 +1044,7 @@ class UniversalTranscriptParser:
             header_idx, cols = found
             notes_tables += 1
             for cells in rows[:header_idx]:
-                note_question(next((c for c in cells if c), ""))
+                note_question(" ".join(c for c in cells if c))
             question_id = pending["question_id"] or f"Question {notes_tables}"
             if pending["question_id"]:
                 questions[question_id] = "\n".join(pending["prompt"])
@@ -1020,12 +1053,10 @@ class UniversalTranscriptParser:
                 cells, cont = rows[r_idx], continued[r_idx]
                 if _notes_columns([cells]):
                     continue  # header repeated on a new page
-                new_cells = [c for col, c in enumerate(cells) if c and col not in cont]
-                if len(new_cells) == 1:
-                    next_question = structural_row(new_cells[0], question_id)
-                    if next_question is not None:
-                        question_id = next_question
-                        continue
+                next_question = structural_row(cells, cont, cols, question_id)
+                if next_question is not None:
+                    question_id = next_question
+                    continue
                 row_entries(first_block + r_idx, cells, cols, question_id, cont)
 
         metadata["questions"] = questions

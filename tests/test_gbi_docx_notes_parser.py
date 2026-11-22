@@ -862,5 +862,92 @@ class EngineCompatibilityTests(unittest.TestCase):
         self.assertNotIn("NoteTaker_Themes", set(results["tagged_turns_df"]["speaker"]))
 
 
+class RepairRound2Tests(unittest.TestCase):
+    """Codex review of 3fff4f9: split-cell structural rows and merged-continuation consent prose."""
+
+    def test_split_cell_structural_rows_are_not_evidence(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did enrollment go?")
+        table = new_notes_table(document, 8)
+        rows = [
+            ["P1: Arrived early for intake.", "", ""],
+            ["Summary of Session:", "Paperwork took weeks.", ""],
+            ["Consent:", "Verbal consent received from all.", ""],
+            ["Question 2:", "How long did the paperwork take?", ""],
+            ["Probe:", "Ask about paperwork delays.", ""],
+            ["Follow-up:", "Any portal issues?", ""],
+            ["P2: Staff answered quickly.", "", ""],
+            ["Main Observations (4-5) Ideas:", "1. Paperwork delays.", "2. Portal timeouts."],
+        ]
+        for r_idx, cells in enumerate(rows, start=1):
+            for col, text in enumerate(cells):
+                table.rows[r_idx].cells[col].text = text
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "split_struct.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Arrived early for intake."),
+            ("Question 2", "P2", KP, "Staff answered quickly."),
+        ])
+        meta = parser.last_document_metadata["split_struct.docx"]
+        self.assertEqual(meta["summary_of_session"], "Paperwork took weeks.")
+        self.assertEqual(meta["main_observations"], "1. Paperwork delays.\n2. Portal timeouts.")
+        self.assertEqual(meta["questions"]["Question 2"],
+                         "How long did the paperwork take?\nProbe: Ask about paperwork delays.\nFollow-up: Any portal issues?")
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"split_struct.docx": sha})
+        self.assertEqual(results["total_documents"], 2, "must not inflate 2 participants to 3 with Unknown")
+        self.assertEqual(set(results["tagged_turns_df"]["speaker"]), {"P1", "P2"})
+        self.assertEqual(int(results["frequencies_df"].set_index("domain_id").loc["paperwork_delays", "documents_reporting"]), 0)
+
+    def test_vertically_merged_continuation_preserves_consent_prose(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: What slowed you down?")
+        table = new_notes_table(document, 4)
+        table.cell(1, 0).merge(table.cell(2, 0)).text = "P1: Enrollment took weeks."
+        table.cell(1, 1).text = "First quote about intake."
+        table.cell(2, 1).text = "Consent form paperwork was confusing."
+        table.cell(3, 0).text = "Consent form paperwork was hard to finish."
+        table.cell(4, 0).text = "P2: Approved smoothly."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "vmerge_consent.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Enrollment took weeks."),
+            ("Question 1", "P1", QUOTE, "First quote about intake."),
+            ("Question 1", "P1", QUOTE, "Consent form paperwork was confusing."),
+            ("Question 1", "Unknown", KP, "Consent form paperwork was hard to finish."),
+            ("Question 1", "P2", KP, "Approved smoothly."),
+        ])
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"vmerge_consent.docx": sha})
+        matched = results["quotes_df"]
+        self.assertIn("Consent form paperwork was confusing.", set(matched["text"]))
+        self.assertIn("Consent form paperwork was hard to finish.", set(matched["text"]))
+
+    def test_prose_opening_with_main_observations_is_not_swallowed(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: Overall impressions?")
+        table = new_notes_table(document, 2)
+        table.cell(1, 0).text = "Main observations about the program were positive."
+        table.cell(1, 1).text = "It helped our family."
+        table.cell(2, 0).text = "Summary of Session"
+        table.cell(2, 1).text = "Paperwork took weeks."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prose_obs.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES)
+            turns = parser.parse_file(str(path), root_dir=tmp)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "Unknown", KP, "Main observations about the program were positive."),
+            ("Question 1", "Unknown", QUOTE, "It helped our family."),
+        ])
+        self.assertEqual(parser.last_document_metadata["prose_obs.docx"]["summary_of_session"], "Paperwork took weeks.")
+
+
 if __name__ == "__main__":
     unittest.main()
