@@ -1,566 +1,881 @@
 """
-From Spoken Words to Countable Data: Meet ATLAS
-A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.
-100% Local Offline Execution • WCAG 2.1 AA Compliant • Cryptographic SHA-256 Provenance
+ATLAS — Automated Text-to-Ledger Actuarial Synthesis
+Local qualitative coding, topic discovery, and auditable frequency tables for transcripts and surveys.
+
+Every number, quote, digest and topic on screen is computed live from the
+selected corpus and codebook by UniversalTranscriptParser, AtlasEngine and
+atlas_discover. Nothing is read from outside this folder; ATLAS code makes no
+network requests and the page loads no remote assets. Streamlit itself serves
+the page over HTTP: the desktop launchers turn off its usage statistics, and
+--server.address=localhost keeps it off other network interfaces.
 """
 
-import os
-import io
-import json
+import contextlib
+import csv
 import hashlib
-import yaml
-import pandas as pd
-import altair as alt
-import streamlit as st
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.comments import Comment
+import html
+import inspect
+import io
+import math
+import os
+import re
+import tempfile
+import unicodedata
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-# ------------------------------------------------------------------------------
-# 1. Page Configuration & Accessible Styling (WCAG 2.1 AA)
-# ------------------------------------------------------------------------------
-st.set_page_config(
-    page_title="From Spoken Words to Countable Data: Meet ATLAS",
-    page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+import altair as alt
+import pandas as pd
+import streamlit as st
+import yaml
+from docx.opc.exceptions import PackageNotFoundError
+from openpyxl.utils.exceptions import InvalidFileException
+
+try:  # python-docx parses document.xml with lxml; a malformed part raises XMLSyntaxError.
+    from lxml.etree import LxmlError
+except ImportError:  # pragma: no cover - lxml ships with python-docx
+    class LxmlError(Exception):
+        pass
+
+from atlas_discover import discover_topics, topics_to_codebook_dict
+from atlas_engine import AtlasEngine
+from universal_transcript_parser import (
+    TABULAR_EXTENSIONS,
+    TRANSCRIPT_EXTENSIONS,
+    UniversalTranscriptParser,
 )
 
-# Custom WCAG 2.1 AA compliant CSS
-st.markdown("""
+APP_DIR = Path(__file__).resolve().parent
+CONFIG_DIR = APP_DIR / "config"
+SAMPLES_DIR = APP_DIR / "data" / "samples"
+DOCS_DIR = APP_DIR / "docs"
+
+NAVY = "#1E3A8A"
+TEAL = "#0F766E"
+
+CORPUS_BILINGUAL = "Sample: Bilingual Interview Transcripts (SOFTWARE_TEST)"
+CORPUS_SURVEY = "Sample: Community Health Survey CSV (SOFTWARE_TEST)"
+CORPUS_DOCX = "Sample: Teams Multiline Transcript DOCX (SOFTWARE_TEST)"
+CORPUS_UPLOAD = "Upload Custom Files (.docx, .vtt, .srt, .txt, .md, .csv, .xlsx)"
+
+SAMPLE_CORPORA = {
+    CORPUS_BILINGUAL: {
+        "files": ["software_test_bilingual_interview.txt", "software_test_zoom_session.vtt"],
+        "tabular_options": None,
+        "codebook": "pfl_case_study_codebook.yaml",
+    },
+    CORPUS_SURVEY: {
+        "files": ["software_test_survey.csv"],
+        "tabular_options": {"text_col": "response", "id_col": "respondent_id", "speaker_col": "role"},
+        "codebook": "pfl_case_study_codebook.yaml",
+    },
+    CORPUS_DOCX: {
+        "files": ["software_test_teams_multiline.docx"],
+        "tabular_options": None,
+        "codebook": "intake_and_enrollment.yaml",
+    },
+}
+CORPUS_OPTIONS = [*SAMPLE_CORPORA, CORPUS_UPLOAD]
+UPLOAD_TYPES = ["docx", "vtt", "srt", "txt", "md", "csv", "xlsx"]
+
+CODEBOOK_UPLOAD = "Upload Custom Codebook (.yaml)"
+NONE_OPTION = "(none)"
+
+SOFTWARE_TEST_BANNER = (
+    "🧪 SOFTWARE_TEST FIXTURE ACTIVE — Built-in sample files demonstrate software "
+    "mechanics only and are not empirical research findings."
+)
+
+REFERENCE_GUIDES = [
+    ("📘 User Guide (Markdown)", "ATLAS_User_Guide.md"),
+    ("📗 Methodology & Reference Manual (Markdown)", "ATLAS_Methodology_and_Reference_Manual.md"),
+    ("📙 Practitioner Field Guide (Markdown)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
+]
+
+# Errors raised by reading a malformed upload: bad CSV structure or quoting (ValueError),
+# invalid UTF-8, or a corrupt .xlsx / .docx package or malformed XML part inside one.
+UPLOAD_READ_ERRORS = (
+    ValueError, KeyError, TypeError, UnicodeDecodeError, csv.Error, OSError,
+    zipfile.BadZipFile, InvalidFileException, PackageNotFoundError, ET.ParseError, LxmlError,
+)
+
+_TEXT_COLUMN_HINTS = (
+    "response", "text", "comment", "answer", "narrative", "transcript",
+    "utterance", "open", "feedback", "verbatim", "statement", "note",
+)
+
+
+# ------------------------------------------------------------------------------
+# 1. Page configuration and accessible styling (WCAG 2.1 AA palette)
+# ------------------------------------------------------------------------------
+st.set_page_config(
+    page_title="ATLAS Workbench",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    f"""
 <style>
-    /* Base typography and high-contrast color palette */
-    :root {
-        --atlas-navy: #1E3A8A;
-        --atlas-teal: #0F766E;
-        --atlas-dark: #0F172A;
-        --atlas-card-bg: #FFFFFF;
-        --atlas-border: #CBD5E1;
-    }
-    
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-        max-width: 1200px;
-    }
-    
-    /* Brand Header Box */
-    .brand-header {
-        background: linear-gradient(135deg, #1E3A8A 0%, #1E40AF 100%);
-        color: #FFFFFF;
-        padding: 1.75rem 2rem;
-        border-radius: 8px;
-        margin-bottom: 1.5rem;
-    }
-    .brand-header h1 {
-        color: #FFFFFF !important;
-        font-size: 1.85rem !important;
-        font-weight: 800 !important;
-        margin: 0 0 0.5rem 0 !important;
-        letter-spacing: -0.02em;
-    }
-    .brand-header p {
-        color: #E2E8F0 !important;
-        font-size: 1.05rem !important;
-        margin: 0 0 1rem 0 !important;
-        line-height: 1.5;
-    }
-    
-    /* Security & Compliance Badges */
-    .badge-container {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-    }
-    .atlas-badge {
-        display: inline-block;
-        font-size: 0.75rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        padding: 0.25rem 0.65rem;
-        border-radius: 4px;
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        background: rgba(255, 255, 255, 0.12);
-        color: #FFFFFF;
-    }
-    .atlas-badge-teal {
-        background-color: #0F766E;
-        color: #FFFFFF;
-        border: none;
-    }
-    
-    /* KPI Metric Cards */
-    .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-top: 4px solid #1E3A8A;
-        border-radius: 6px;
-        padding: 1.25rem 1rem;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .metric-value {
-        font-size: 1.75rem;
-        font-weight: 800;
-        color: #1E3A8A;
-        line-height: 1.2;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #475569;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-top: 0.35rem;
-    }
-    
-    /* Quote Card Styling */
-    .quote-box {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-left: 4px solid #0F766E;
-        padding: 1.25rem 1.5rem;
-        border-radius: 6px;
-        margin-bottom: 1rem;
-    }
-    .quote-meta {
-        font-size: 0.8rem;
-        font-weight: 700;
-        color: #0F766E;
-        margin-bottom: 0.4rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .quote-text {
-        font-size: 0.98rem;
-        color: #0F172A;
-        line-height: 1.6;
-        font-style: italic;
-        margin-bottom: 0.6rem;
-    }
-    .quote-provenance {
-        font-size: 0.75rem;
-        font-family: monospace;
-        color: #64748B;
-        background: #E2E8F0;
-        padding: 0.2rem 0.5rem;
-        border-radius: 3px;
-        display: inline-block;
-    }
+.main .block-container {{ padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }}
+.brand-header {{ background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 6px solid {NAVY};
+  padding: 1.5rem 2rem; border-radius: 8px; margin-bottom: 1.25rem; }}
+.brand-header h1 {{ color: {NAVY} !important; font-size: 1.85rem !important; font-weight: 800 !important;
+  margin: 0 0 0.4rem 0 !important; }}
+.brand-header p {{ color: #1E293B !important; font-size: 1.05rem !important; margin: 0 0 0.9rem 0 !important; }}
+.badge-row {{ display: flex; flex-wrap: wrap; gap: 0.5rem; }}
+.atlas-badge {{ display: inline-block; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.03em;
+  padding: 0.25rem 0.7rem; border-radius: 4px; color: #FFFFFF; background: {NAVY}; }}
+.atlas-badge-teal {{ background: {TEAL}; }}
+.atlas-badge-outline {{ background: #FFFFFF; color: {NAVY}; border: 2px solid {NAVY}; }}
+.quote-box {{ background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4px solid {TEAL};
+  padding: 1rem 1.25rem; border-radius: 6px; margin-bottom: 0.9rem; }}
+.topic-box {{ border-left-color: {NAVY}; }}
+.quote-meta {{ font-size: 0.85rem; font-weight: 700; color: {TEAL}; margin-bottom: 0.35rem; }}
+.topic-box .quote-meta {{ color: {NAVY}; }}
+.quote-text {{ font-size: 1rem; color: #0F172A; line-height: 1.6; margin-bottom: 0.5rem; white-space: pre-wrap; }}
+.quote-text mark {{ background: #FEF08A; color: #0F172A; padding: 0 0.1rem; }}
+.quote-provenance {{ font-size: 0.8rem; font-family: monospace; color: #334155; background: #E2E8F0;
+  padding: 0.2rem 0.5rem; border-radius: 3px; display: inline-block; }}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ------------------------------------------------------------------------------
-# 2. Authentic Project Data Loader (Strict Zero Synthetic Data)
+# 2. Live analysis helpers (all computation goes through the ATLAS modules)
 # ------------------------------------------------------------------------------
-@st.cache_data
-def load_authentic_datasets():
-    """Load authentic project datasets verified on disk."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.abspath(os.path.join(base_dir, ".."))
-    
-    # 1. CalAIM Key Informant Interview Corpus
-    calaim_freq_path = os.path.join(parent_dir, "chw_round2_thematic_frequency_matrix.csv")
-    calaim_quotes_path = os.path.join(parent_dir, "chw_4_tracks_verbatim_quotes.csv")
-    
-    calaim_freq = pd.DataFrame()
-    calaim_quotes = pd.DataFrame()
-    
-    if os.path.exists(calaim_freq_path):
-        calaim_freq = pd.read_csv(calaim_freq_path)
-    if os.path.exists(calaim_quotes_path):
-        calaim_quotes = pd.read_csv(calaim_quotes_path)
-        
-    # 2. Labor Market Benchmark Parameters (n=2,500 authentic postings)
-    labor_market_params = pd.DataFrame([
-        {"theme_id": "causal_identification", "theme_name": "Causal Inference & Identification", "prevalence_pct": 84.2, "n_matches": 2105, "total_n": 2500, "category": "Core Methodology", "se": 0.0073},
-        {"theme_id": "automated_pipelines", "theme_name": "Production Data Pipelines", "prevalence_pct": 76.5, "n_matches": 1912, "total_n": 2500, "category": "Engineering Rigor", "se": 0.0085},
-        {"theme_id": "platform_experiments", "theme_name": "A/B Testing & Platform Experiments", "prevalence_pct": 62.8, "n_matches": 1570, "total_n": 2500, "category": "Applied Economics", "se": 0.0097},
-        {"theme_id": "hedonic_wages", "theme_name": "Hedonic Wage & Structural Models", "prevalence_pct": 51.4, "n_matches": 1285, "total_n": 2500, "category": "Labor Economics", "se": 0.0100},
-        {"theme_id": "double_ml", "theme_name": "Double Machine Learning / Causal Forests", "prevalence_pct": 43.1, "n_matches": 1078, "total_n": 2500, "category": "Modern Econometrics", "se": 0.0099},
-    ])
-    
-    # 3. Available Codebooks
-    config_dir = os.path.join(base_dir, "config")
-    codebooks = {}
-    if os.path.exists(config_dir):
-        for f in os.listdir(config_dir):
-            if f.endswith(".yaml"):
-                codebooks[f] = os.path.join(config_dir, f)
-                
-    return calaim_freq, calaim_quotes, labor_market_params, codebooks
+def list_config_codebooks():
+    if not CONFIG_DIR.is_dir():
+        return []
+    return sorted(p.name for p in CONFIG_DIR.glob("*.yaml") if p.is_file())
 
 
-calaim_freq_df, calaim_quotes_df, labor_market_df, available_codebooks = load_authentic_datasets()
+def is_id_column(name):
+    lowered = str(name).strip().lower()
+    return lowered == "id" or lowered.endswith(("_id", " id", "-id", ".id"))
+
+
+def detect_text_column(frame):
+    """Pick the free-text column of a table, never an id / *_id column; None if there is none."""
+    columns = [str(c) for c in frame.columns]
+    candidates = [c for c in columns if not is_id_column(c)]
+    if not candidates:
+        return None
+    hinted = [c for c in candidates if any(h in c.lower() for h in _TEXT_COLUMN_HINTS)]
+    pool = hinted or candidates
+
+    def text_volume(col):
+        # Total characters over all rows, so a mostly-blank column cannot win on one long cell.
+        return sum(len(str(v).strip()) for v in frame[col].tolist())
+
+    return max(pool, key=lambda c: (text_volume(c), -columns.index(c)))
+
+
+def upload_path_key(name):
+    """
+    Collision key for a file name. APFS and NTFS ignore case, and APFS also
+    ignores Unicode normalization, so 'A.txt' / 'a.txt' and NFC / NFD 'café.txt'
+    each name one physical file there.
+    """
+    return unicodedata.normalize("NFC", str(name)).casefold()
+
+
+def safe_upload_name(name, taken):
+    """Basename of an upload, suffixed _2, _3, ... until no name in taken (a set of
+    upload_path_key values) maps to the same physical file; the key is added to taken."""
+    base = os.path.basename(str(name).replace("\\", "/")) or "upload"
+    candidate, counter = base, 2
+    while upload_path_key(candidate) in taken:
+        stem, ext = os.path.splitext(base)
+        candidate = f"{stem}_{counter}{ext}"
+        counter += 1
+    taken.add(upload_path_key(candidate))
+    return candidate
+
+
+def stretch_kwargs(widget_fn, streamlit_version: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Full-width sizing keyword for widget_fn. width="stretch" exists from
+    Streamlit 1.50; requirements.txt allows 1.40, where these widgets only take
+    use_container_width (st.dataframe's width there is an int).
+    """
+    parts = re.findall(r"\d+", streamlit_version or st.__version__)[:2]
+    version = tuple(int(p) for p in parts) + (0,) * (2 - len(parts))
+    if version >= (1, 50) and "width" in inspect.signature(widget_fn).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
+def describe_prevalence_chart(
+    df: pd.DataFrame,
+    total_units: int,
+    *,
+    include_ci: bool = False,
+) -> str:
+    """
+    Plain-text summary of a domain-prevalence bar chart for screen readers (the Vega-Lite
+    description) and the visible chart summary. Deterministic: built only from df, which needs
+    domain_name, documents_reporting and prevalence_pct (plus ci95_low_pct and
+    ci95_high_pct when include_ci). Lists the three highest-prevalence matched domains,
+    ordered by prevalence descending, then domain name.
+    """
+    if df is None or len(df) == 0:
+        return "No domains defined in the active codebook."
+    k = len(df)
+    domains = "domain" if k == 1 else "domains"
+    if total_units <= 0:
+        return f"Horizontal bar chart with 0 analytical units, so no prevalence is defined for the {k} coded {domains}."
+    units = "unit" if total_units == 1 else "units"
+
+    def pct(value):
+        try:
+            value = float(value) if pd.notna(value) else math.nan
+        except (TypeError, ValueError):
+            return "n/a"
+        return f"{value:.1f}%" if math.isfinite(value) else "n/a"
+
+    # A missing count (NaN or nullable pd.NA) is no reporting unit; a missing percentage
+    # reads "n/a", never "nan%".
+    rows = df.assign(
+        _name=df["domain_name"].astype(str),
+        _prevalence=pd.to_numeric(df["prevalence_pct"], errors="coerce"),
+        _reporting=pd.to_numeric(df["documents_reporting"], errors="coerce").map(
+            lambda v: int(v) if pd.notna(v) and math.isfinite(float(v)) else 0),
+    ).sort_values(["_prevalence", "_name"], ascending=[False, True], kind="mergesort", na_position="last")
+    matched = rows[rows["_reporting"] > 0]
+    if matched.empty:
+        return (f"Horizontal bar chart across {total_units} analytical {units} showing 0% prevalence "
+                f"across all {k} coded {domains}.")
+    listed = []
+    for _, r in matched.head(3).iterrows():
+        detail = f"{int(r['_reporting'])} of {total_units} {units}"
+        if include_ci:
+            detail += f", 95% CI {pct(r['ci95_low_pct'])}–{pct(r['ci95_high_pct'])}"
+        listed.append(f"{r['_name']} {pct(r['_prevalence'])} ({detail})")
+    text = (f"Horizontal bar chart across {total_units} analytical {units}. "
+            f"Highest prevalence: {'; '.join(listed)}.")
+    if len(matched) > 3:
+        text += f" Other matched domains not listed: {len(matched) - 3}."
+    if len(matched) < k:
+        text += f" Domains with 0% prevalence: {k - len(matched)} of {k}."
+    return text
+
+
+def chart_summary_html(summary: str) -> str:
+    """
+    Literal HTML paragraph for a chart summary rendered via st.html(). Every
+    HTML metacharacter (& < > " ') is escaped and line breaks collapse to one space, so text
+    built from uploaded names never reaches Streamlit's Markdown, GFM autolink
+    or shortcode plugins and displays verbatim. The Vega-Lite description keeps
+    the plain text. Pairs #475569 text with an explicit #FFFFFF background
+    (7.58:1, WCAG AA >= 4.5:1) and #64748B border (4.76:1 on white, >= 3:1 on
+    dark themes) so contrast holds in both Light and Dark Streamlit themes.
+    """
+    single_line = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", str(summary))
+    return (
+        '<p class="atlas-chart-summary" style="font-size:0.875rem;color:#475569;'
+        'background-color:#FFFFFF;border:1px solid #64748B;border-radius:4px;'
+        'padding:0.4rem 0.65rem;margin:0.25rem 0 0.5rem;line-height:1.45;">'
+        f"Chart summary: {html.escape(single_line, quote=True)}</p>"
+    )
+
+
+@st.cache_data(show_spinner=False)
+def read_table_columns(name, payload):
+    """Columns and rows of an uploaded table exactly as the parser reads them."""
+    ext = os.path.splitext(name)[1].lower()
+    with tempfile.TemporaryDirectory(prefix="atlas_preview_") as tmp:
+        path = Path(tmp) / safe_upload_name(name, set())  # parser errors name the user's file
+        path.write_bytes(payload)
+        if ext == ".csv":
+            frame, _ = UniversalTranscriptParser()._read_csv(str(path))
+        else:
+            frame = pd.read_excel(path, dtype=str, keep_default_na=False, na_filter=False)
+    frame.columns = [str(c) for c in frame.columns]
+    return frame
+
+
+@st.cache_data(show_spinner=False)
+def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns):
+    """
+    Run UniversalTranscriptParser -> AtlasEngine on byte copies of the inputs.
+
+    inputs is a tuple of (relative_path, bytes); the files are written under a
+    fresh temporary root with those relative paths, so each source_id equals the
+    relative path and each source_sha256 is the SHA-256 of the exact bytes.
+    The engine's own export (xlsx with audit-stamp comments, provenance manifest,
+    quotes CSV) is produced in the same temporary root and returned as bytes.
+    Two relative paths that one case- or normalization-insensitive filesystem
+    maps to the same file are refused, so no payload can overwrite another.
+    """
+    keys = [upload_path_key(rel) for rel, _ in inputs]
+    if len(set(keys)) != len(keys):
+        clashing = sorted({rel for rel, _ in inputs if keys.count(upload_path_key(rel)) > 1})
+        raise ValueError(f"Input paths name the same file on case-insensitive filesystems: {clashing}")
+    with tempfile.TemporaryDirectory(prefix="atlas_run_") as tmp:
+        root = Path(tmp) / "corpus"
+        paths = []
+        for rel, payload in inputs:
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            paths.append(str(target))
+        codebook_path = Path(tmp) / "codebook.yaml"
+        codebook_path.write_bytes(codebook_bytes)
+
+        engine = AtlasEngine(str(codebook_path))
+        results = engine.process_corpus(
+            paths,
+            facilitator_names=list(facilitators) or None,
+            interviewer_prompt_patterns=list(prompt_patterns) or None,
+            root_dir=str(root),
+            tabular_options=dict(tabular_items) if tabular_items else None,
+        )
+
+        export_dir = Path(tmp) / "export"
+        with contextlib.redirect_stdout(io.StringIO()):
+            engine.export_results(results, str(export_dir))
+        integrity_ok, integrity_problems = AtlasEngine.verify_workbook_integrity(
+            str(export_dir / "actuarial_parameter_matrix.xlsx"),
+            str(export_dir / "provenance_manifest.json"),
+        )
+        exports = {
+            name: (export_dir / name).read_bytes()
+            for name in ("actuarial_parameter_matrix.xlsx", "provenance_manifest.json",
+                         "verbatim_quotes_inventory.csv")
+        }
+
+    results["exports"] = exports
+    results["integrity_ok"] = bool(integrity_ok)
+    results["integrity_problems"] = list(integrity_problems)
+    return results
+
+
+@st.cache_data(show_spinner=False)
+def run_topic_discovery(turn_records, n_topics):
+    return discover_topics(turn_records, n_topics=n_topics)
+
+
+def dedupe_terms(terms):
+    seen, ordered = set(), []
+    for term in terms or []:
+        key = str(term).strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(str(term).strip())
+    return ordered
+
+
+def esc(value):
+    return html.escape("" if value is None else str(value))
+
+
+def highlighted_quote(text, start, end):
+    text = str(text)
+    try:
+        start, end = int(start), int(end)
+    except (TypeError, ValueError):
+        return esc(text)
+    if not (0 <= start < end <= len(text)):
+        return esc(text)
+    return f"{esc(text[:start])}<mark>{esc(text[start:end])}</mark>{esc(text[end:])}"
+
+
+def apply_discovered_codebook(label, yaml_bytes):
+    st.session_state.discovered_codebooks[label] = yaml_bytes
+    st.session_state.codebook_choice = label
+
+
+if "discovered_codebooks" not in st.session_state:
+    st.session_state.discovered_codebooks = {}
 
 
 # ------------------------------------------------------------------------------
-# 3. Sidebar: Configuration, Mode, and Document Quick Access
+# 3. Sidebar: corpus, codebook and parser controls
 # ------------------------------------------------------------------------------
+config_codebooks = list_config_codebooks()
+
 with st.sidebar:
-    st.image("https://img.shields.io/badge/ATLAS-Workbench-1E3A8A?style=for-the-badge", width=180)
-    st.markdown("### Operational Controls")
-    
-    corpus_choice = st.selectbox(
-        "Corpus Dataset",
-        [
-            "CalAIM Key Informant Interviews (n=23 transcripts, 3,892 turns)",
-            "Labor Market Skills Benchmark (n=2,500 job specifications)",
-            "Upload Custom Corpus (.csv / .txt)"
-        ],
-        index=0
-    )
-    
-    codebook_choice = st.selectbox(
-        "Active YAML Codebook",
-        list(available_codebooks.keys()) if available_codebooks else ["Default Rule Set"],
-        index=0
-    )
-    
+    st.markdown("### Inputs & Codebook")
+
+    corpus_choice = st.selectbox("Corpus Dataset", CORPUS_OPTIONS, index=0)
+
+    uploaded_files = []
+    tabular_options = None
+    tabular_error = None
+    facilitator_names = []
+    prompt_patterns = []
+    if corpus_choice == CORPUS_UPLOAD:
+        uploaded_files = st.file_uploader(
+            "Upload Transcript or Tabular Files",
+            type=UPLOAD_TYPES,
+            accept_multiple_files=True,
+        ) or []
+        tabular_uploads = [f for f in uploaded_files if os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS]
+        # Uploads that share a filename are labelled by position so each keeps its own entry.
+        name_counts = {}
+        for f in tabular_uploads:
+            name_counts[f.name] = name_counts.get(f.name, 0) + 1
+        upload_labels = [f"{f.name} (#{idx + 1})" if name_counts[f.name] > 1 else f.name
+                         for idx, f in enumerate(tabular_uploads)]
+        frames = []
+        for f, label in zip(tabular_uploads, upload_labels):
+            try:
+                frames.append(read_table_columns(f.name, f.getvalue()))
+            except UPLOAD_READ_ERRORS as exc:
+                tabular_error = f"Could not read '{label}': {exc}"
+                break
+        if tabular_uploads and not tabular_error:
+            shared = [c for c in frames[0].columns if all(c in fr.columns for fr in frames[1:])]
+            text_choices = [c for c in shared if not is_id_column(c)]
+            if not shared:
+                tabular_error = (
+                    "The uploaded tables share no column names, so one text column cannot be applied to all "
+                    "of them. Upload tables with the same header, or analyse them one at a time."
+                )
+            elif not text_choices:
+                tabular_error = (
+                    "No free-text column found: every shared column is an id column "
+                    f"({', '.join(shared)}). Add a response column, or rename it so it is not called 'id' "
+                    "or '*_id'."
+                )
+            else:
+                # One text column is applied to every table, so each table must agree on it.
+                detected_entries = [
+                    (label, detect_text_column(fr[text_choices])) for label, fr in zip(upload_labels, frames)
+                ]
+                if len({col for _, col in detected_entries}) > 1:
+                    tabular_error = (
+                        "The uploaded tables keep their free text in different columns ("
+                        + "; ".join(f"{label}: {col}" for label, col in detected_entries)
+                        + "). ATLAS applies one text column to every table, so upload these tables one at a time."
+                    )
+                else:
+                    st.markdown("**Table columns** (.csv / .xlsx)")
+                    detected = detected_entries[0][1]
+                    text_col = st.selectbox(
+                        "Text column (free-text responses)", text_choices, index=text_choices.index(detected),
+                        help="Auto-detected; id and *_id columns are never offered as the text column.",
+                    )
+                    id_col = st.selectbox("Respondent ID column (optional)", [NONE_OPTION, *shared], index=0)
+                    speaker_col = st.selectbox("Speaker / role column (optional)", [NONE_OPTION, *shared], index=0)
+                    empty_in = [label for label, fr in zip(upload_labels, frames)
+                                if not any(str(v).strip() for v in fr[text_col].tolist())]
+                    if empty_in:
+                        tabular_error = (
+                            f"The text column '{text_col}' is empty in {', '.join(empty_in)}. Choose the column "
+                            "that holds the responses in every table, or upload the tables one at a time."
+                        )
+                    else:
+                        tabular_options = {"text_col": text_col}
+                        if id_col != NONE_OPTION:
+                            tabular_options["id_col"] = id_col
+                        if speaker_col != NONE_OPTION:
+                            tabular_options["speaker_col"] = speaker_col
+        names_raw = st.text_input(
+            "Facilitator names (optional, comma-separated)", "",
+            help="Turns by these speakers are treated as facilitator prompts and excluded from coding.",
+        )
+        facilitator_names = [n.strip() for n in names_raw.split(",") if n.strip()]
+        patterns_raw = st.text_area(
+            "Interviewer prompt patterns (optional, one regular expression per line)", "",
+            help="Speakerless turns matching a pattern are excluded as interviewer prompts.",
+        )
+        prompt_patterns = [p.strip() for p in patterns_raw.splitlines() if p.strip()]
+
+    # Default the codebook to the one suited to the selected sample whenever the corpus changes.
+    if st.session_state.get("last_corpus_choice") != corpus_choice:
+        st.session_state.last_corpus_choice = corpus_choice
+        suggested = SAMPLE_CORPORA.get(corpus_choice, {}).get("codebook")
+        if suggested in config_codebooks:
+            st.session_state.codebook_choice = suggested
+    codebook_options = [*config_codebooks, *st.session_state.discovered_codebooks, CODEBOOK_UPLOAD]
+    if st.session_state.get("codebook_choice") not in codebook_options:
+        st.session_state.codebook_choice = codebook_options[0]
+    codebook_choice = st.selectbox("Active YAML Codebook", codebook_options, key="codebook_choice")
+
+    uploaded_codebook = None
+    if codebook_choice == CODEBOOK_UPLOAD:
+        uploaded_codebook = st.file_uploader("Upload Custom Codebook (.yaml)", type=["yaml", "yml"])
+
     st.markdown("---")
-    st.markdown("### Operational Guarantees")
-    st.markdown("🔒 **100% Local & Offline**\nNo transcripts or participant identifiers leave your workstation.")
-    st.markdown("⚖️ **Cryptographic Provenance**\nEvery coded quote is mapped to raw source line numbers and SHA-256 digests.")
-    st.markdown("⚡ **Zero Stochastic Drift**\nDeterministic regex state machines produce identical bit-for-bit results on every re-run.")
-    
-    st.markdown("---")
-    st.markdown("### Reference Manuals")
-    doc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
-    pdf_field_guide = os.path.join(doc_dir, "ATLAS_Practitioner_Field_Guide_Program_Evaluation.pdf")
-    pdf_methodology = os.path.join(doc_dir, "ATLAS_Methodology_and_Reference_Manual.pdf")
-    
-    if os.path.exists(pdf_field_guide):
-        with open(pdf_field_guide, "rb") as f:
+    st.markdown("### Reference Guides")
+    for label, filename in REFERENCE_GUIDES:
+        guide = DOCS_DIR / filename
+        if guide.is_file():
             st.download_button(
-                label="📄 Practitioner Field Guide (PDF)",
-                data=f.read(),
-                file_name="ATLAS_Practitioner_Field_Guide.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-            
-    if os.path.exists(pdf_methodology):
-        with open(pdf_methodology, "rb") as f:
-            st.download_button(
-                label="📘 Methodology Manual (PDF)",
-                data=f.read(),
-                file_name="ATLAS_Methodology_Manual.pdf",
-                mime="application/pdf",
-                use_container_width=True
+                label=label, data=guide.read_bytes(), file_name=filename,
+                mime="text/markdown", **stretch_kwargs(st.download_button), key=f"guide_{filename}",
             )
 
 
 # ------------------------------------------------------------------------------
-# 4. Main Application Header
+# 4. Header and fixture notice
 # ------------------------------------------------------------------------------
-st.markdown("""
+st.markdown(
+    """
 <div class="brand-header">
-    <h1>From Spoken Words to Countable Data: Meet ATLAS</h1>
-    <p>A fast, private way to organize transcripts, count patterns, and trace every quote right on your laptop.</p>
-    <div class="badge-container">
-        <span class="atlas-badge">100% Local Offline</span>
-        <span class="atlas-badge">Zero Outbound Sockets</span>
-        <span class="atlas-badge">SHA-256 Digest Anchors</span>
-        <span class="atlas-badge atlas-badge-teal">WCAG 2.1 AA Compliant</span>
-    </div>
+<h1>ATLAS</h1>
+<p>Local qualitative coding, topic discovery, and auditable frequency tables for transcripts and surveys.</p>
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
+sample = SAMPLE_CORPORA.get(corpus_choice)
+uploaded_fixture = any("software_test" in f.name.lower() for f in uploaded_files)
+if sample is not None or uploaded_fixture:
+    st.info(SOFTWARE_TEST_BANNER)
 
 
 # ------------------------------------------------------------------------------
-# 5. Dual-Track Interface Tabs
+# 5. Resolve inputs and run the live engine
+# ------------------------------------------------------------------------------
+if sample is not None:
+    inputs = tuple(
+        ((SAMPLES_DIR / name).relative_to(APP_DIR).as_posix(), (SAMPLES_DIR / name).read_bytes())
+        for name in sample["files"]
+    )
+    tabular_options = sample["tabular_options"]
+    corpus_label = corpus_choice
+else:
+    if not uploaded_files:
+        st.info("Upload one or more transcript or tabular files in the sidebar to start the analysis.")
+        st.stop()
+    if tabular_error:
+        st.error(tabular_error)
+        st.stop()
+    if any(os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS for f in uploaded_files) and not tabular_options:
+        st.error("Choose a text column for the uploaded tables before analysis.")
+        st.stop()
+    taken = set()
+    inputs = tuple((f"uploads/{safe_upload_name(f.name, taken)}", f.getvalue()) for f in uploaded_files)
+    unsupported = [rel for rel, _ in inputs
+                   if os.path.splitext(rel)[1].lower() not in TRANSCRIPT_EXTENSIONS | TABULAR_EXTENSIONS]
+    if unsupported:
+        st.error(f"Unsupported file type: {', '.join(unsupported)}")
+        st.stop()
+    corpus_label = ", ".join(os.path.basename(rel) for rel, _ in inputs)
+
+if codebook_choice == CODEBOOK_UPLOAD:
+    if uploaded_codebook is None:
+        st.info("Upload a YAML codebook in the sidebar, or choose one from the list.")
+        st.stop()
+    codebook_bytes = uploaded_codebook.getvalue()
+elif codebook_choice in st.session_state.discovered_codebooks:
+    codebook_bytes = st.session_state.discovered_codebooks[codebook_choice]
+else:
+    codebook_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
+
+bad_patterns = []
+for pattern in prompt_patterns:
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        bad_patterns.append(f"{pattern!r} ({exc})")
+if bad_patterns:
+    st.error("Invalid interviewer prompt pattern: " + "; ".join(bad_patterns))
+    st.stop()
+
+try:
+    with st.spinner("Parsing and coding the corpus..."):
+        results = analyze_corpus(
+            codebook_bytes,
+            inputs,
+            tuple(sorted(tabular_options.items())) if tabular_options else None,
+            tuple(facilitator_names),
+            tuple(prompt_patterns),
+        )
+except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
+    st.error(f"ATLAS could not analyse this corpus with this codebook: {exc}")
+    st.stop()
+
+freq = results["frequencies_df"]
+quotes = results["quotes_df"]
+total_documents = int(results["total_documents"])
+participant_turns = int(results["participant_turns_analyzed"])
+matched_mentions = int(freq["matching_turns"].sum()) if len(freq) else 0
+
+
+# ------------------------------------------------------------------------------
+# 6. Dual-track interface
 # ------------------------------------------------------------------------------
 tab_thematic, tab_econometric = st.tabs([
     "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
-    "📊 Tab 2: Econometric & Actuarial Ledger Export"
+    "📊 Tab 2: Econometric & Actuarial Ledger Export",
 ])
-
 
 # ==============================================================================
 # TAB 1: STANDALONE THEMATIC DISCOVERY & QUALITATIVE CODING
 # ==============================================================================
 with tab_thematic:
     st.markdown("### Qualitative Thematic Workbench")
-    st.markdown(
-        "Use ATLAS on its own as a reproducible, zero-cost qualitative coding lab. "
-        "Review emergent topics, browse context-fenced operational themes, and inspect verbatim quotes "
-        "with authentic speaker attribution—all executed locally on your workstation."
-    )
-    
-    # 4 KPI Summary Cards
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">3,892</div>
-            <div class="metric-label">Analyzed Utterances</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">7</div>
-            <div class="metric-label">Active Thematic Domains</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">259</div>
-            <div class="metric-label">Coded Mentions</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col4:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">100%</div>
-            <div class="metric-label">Cryptographic Provenance</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Sub-tabs within Qualitative Workbench
-    qtab_freq, qtab_quotes, qtab_medoids = st.tabs([
-        "📈 Thematic Prevalence & Sector Distribution",
+    st.caption(f"Corpus: {corpus_label} · Codebook: {codebook_choice} · Project: {results['project_name']}")
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Analytical Units (N)", total_documents,
+              help="Distinct analytical units: one per transcript, one per tabular respondent row.")
+    k2.metric("Participant Turns", participant_turns, help="Turns coded after facilitator turns are removed.")
+    k3.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
+    k4.metric("Matched Turn Mentions", matched_mentions, help="Participant turns matched to a domain, summed over domains.")
+
+    qtab_freq, qtab_quotes, qtab_topics = st.tabs([
+        "📈 Thematic Prevalence & Distribution",
         "💬 Verbatim Quote & Provenance Browser",
-        "💡 Unsupervised Topic Discovery (Medoids)"
+        "💡 Unsupervised Topic Discovery (Medoids)",
     ])
-    
-    # Sub-tab 1: Frequency & Sector Distribution
+
     with qtab_freq:
-        st.markdown("#### Thematic Mentions Across Stakeholder Sectors")
-        st.caption("Frequencies reflect operational conversational focus and administrative anxiety across stakeholder interviews.")
-        
-        if not calaim_freq_df.empty:
-            # Prepare plotting dataframe
-            plot_df = calaim_freq_df.copy()
-            
-            # Interactive Altair Bar Chart
-            chart = alt.Chart(plot_df).mark_bar().encode(
-                x=alt.X('total_mentions:Q', title='Total Utterance Mentions'),
-                y=alt.Y('metric_or_subdomain:N', sort='-x', title=None, axis=alt.Axis(labelLimit=300)),
-                color=alt.Color('domain_name:N', legend=alt.Legend(title="Analytical Track"), scale=alt.Scale(scheme='category10')),
-                tooltip=['metric_or_subdomain:N', 'cbo_mentions:Q', 'clinic_mentions:Q', 'payer_mentions:Q', 'total_mentions:Q']
-            ).properties(height=350)
-            
-            st.altair_chart(chart, use_container_width=True)
-            
-            # Accessible Table Fallback (WCAG 2.1 AA)
-            st.markdown("##### Detailed Frequency Ledger")
-            display_cols = ["metric_or_subdomain", "cbo_mentions", "clinic_mentions", "payer_mentions", "total_mentions"]
-            clean_table = plot_df[display_cols].rename(columns={
-                "metric_or_subdomain": "Operational Theme / Contracting Track",
-                "cbo_mentions": "CBO Mentions",
-                "clinic_mentions": "Clinic Mentions",
-                "payer_mentions": "Payer Mentions",
-                "total_mentions": "Total"
-            })
-            st.dataframe(clean_table, use_container_width=True, hide_index=True)
+        st.markdown("#### Domain prevalence across analytical units")
+        st.caption("Prevalence = units with at least one matching participant turn ÷ all analytical units.")
+        if len(freq):
+            chart = alt.Chart(freq).mark_bar(color=NAVY).encode(
+                x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
+                y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+                tooltip=[
+                    alt.Tooltip("domain_name:N", title="Domain"),
+                    alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
+                    alt.Tooltip("documents_reporting:Q", title="Units reporting"),
+                    alt.Tooltip("matching_turns:Q", title="Matching turns"),
+                ],
+            )
+            labels = alt.Chart(freq).mark_text(align="left", dx=4, color="#0F172A").encode(
+                x="prevalence_pct:Q",
+                y=alt.Y("domain_name:N", sort="-x"),
+                text=alt.Text("matching_turns:Q", format="d"),
+            )
+            freq_summary = describe_prevalence_chart(freq, total_documents, include_ci=False)
+            st.altair_chart(
+                (chart + labels).properties(height=max(160, 42 * len(freq)), description=freq_summary),
+                **stretch_kwargs(st.altair_chart),
+            )
+            st.html(chart_summary_html(freq_summary))
+            st.caption("Bar labels show matching participant turns per domain.")
+            st.markdown("##### Domain frequency table")
+            st.dataframe(
+                freq[["domain_id", "domain_name", "documents_reporting", "total_documents",
+                      "prevalence_pct", "matching_turns", "total_mentions"]],
+                **stretch_kwargs(st.dataframe), hide_index=True,
+                column_config={
+                    "domain_id": "Domain ID", "domain_name": "Domain",
+                    "documents_reporting": "Units reporting", "total_documents": "Analytical units (N)",
+                    "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
+                    "matching_turns": "Matching turns", "total_mentions": "Mentions",
+                },
+            )
         else:
-            st.warning("No frequency data found.")
+            st.info("The active codebook defines no domains.")
 
-    # Sub-tab 2: Verbatim Quote & Provenance Browser
     with qtab_quotes:
-        st.markdown("#### Verbatim Evidence Browser with Line-Level Audit Coordinates")
-        st.caption("Inspect exact participant dialogue turns tagged by the compiled regular expression rules.")
-        
-        if not calaim_quotes_df.empty:
-            # Filters
-            f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
-            with f_col1:
-                search_query = st.text_input("🔍 Search verbatim text or strategic takeaway", "")
-            with f_col2:
-                selected_org = st.selectbox("Filter by Sector", ["All Sectors"] + sorted(calaim_quotes_df["org_type"].dropna().unique().tolist()))
-            with f_col3:
-                selected_track = st.selectbox("Filter by Track", ["All Tracks"] + sorted(calaim_quotes_df["subdomain_or_track"].dropna().unique().tolist()))
-                
-            filtered_quotes = calaim_quotes_df.copy()
-            if selected_org != "All Sectors":
-                filtered_quotes = filtered_quotes[filtered_quotes["org_type"] == selected_org]
-            if selected_track != "All Tracks":
-                filtered_quotes = filtered_quotes[filtered_quotes["subdomain_or_track"] == selected_track]
-            if search_query.strip():
-                q_lower = search_query.lower()
-                filtered_quotes = filtered_quotes[
-                    filtered_quotes["verbatim_quote"].str.lower().str.contains(q_lower, na=False) |
-                    filtered_quotes["strategic_takeaway"].str.lower().str.contains(q_lower, na=False)
-                ]
-                
-            st.markdown(f"**Showing {len(filtered_quotes)} grounded evidence quotes:**")
-            
-            # Display Quote Cards
-            for _, row in filtered_quotes.head(15).iterrows():
-                quote_sha = hashlib.sha256(str(row.get('verbatim_quote', '')).encode('utf-8')).hexdigest()[:12]
-                st.markdown(f"""
-                <div class="quote-box">
-                    <div class="quote-meta">
-                        {row.get('participant', 'Informant')} • {row.get('agency', 'Agency')} ({row.get('org_type', 'Sector')}) — {row.get('subdomain_or_track', 'Track')}
-                    </div>
-                    <div class="quote-text">"{row.get('verbatim_quote', '')}"</div>
-                    <div style="font-size: 0.85rem; color: #334155; margin-bottom: 0.5rem;">
-                        <strong>Evaluator Takeaway:</strong> {row.get('strategic_takeaway', '')}
-                    </div>
-                    <div class="quote-provenance">
-                        FILE: {row.get('source_file', 'source')} | LINE: {row.get('source_line', 'N/A')} | SHA-256: {quote_sha}...
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+        st.markdown("#### Verbatim evidence with line-level provenance")
+        if quotes.empty:
+            st.info("No participant turn matched a domain of the active codebook in this corpus.")
         else:
-            st.warning("No quote inventory found.")
+            f1, f2, f3 = st.columns([2, 1, 1])
+            search = f1.text_input("Search verbatim text", "")
+            domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(quotes["domain_name"].astype(str).unique())])
+            speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(quotes["speaker"].astype(str).unique())])
+            shown = quotes
+            if domain_filter != "All domains":
+                shown = shown[shown["domain_name"].astype(str) == domain_filter]
+            if speaker_filter != "All speakers":
+                shown = shown[shown["speaker"].astype(str) == speaker_filter]
+            if search.strip():
+                shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
+            st.markdown(f"**{len(shown)} of {len(quotes)} matched quotes shown**")
+            if shown.empty:
+                st.info("No quote matches these filters.")
+            else:
+                st.dataframe(
+                    shown[["domain_name", "speaker", "source_id", "unit_id", "line_number",
+                           "match_char_start", "match_char_end", "match_text", "text", "source_sha256"]],
+                    **stretch_kwargs(st.dataframe), hide_index=True,
+                    column_config={
+                        "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
+                        "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
+                        "match_char_end": "Match end", "match_text": "Matched span",
+                        "text": "Verbatim turn", "source_sha256": "Source SHA-256",
+                    },
+                )
+                for _, q in shown.head(25).iterrows():
+                    st.markdown(
+                        f'<div class="quote-box">'
+                        f'<div class="quote-meta">{esc(q["domain_name"])} · {esc(q["speaker"])}</div>'
+                        f'<div class="quote-text">{highlighted_quote(q["text"], q["match_char_start"], q["match_char_end"])}</div>'
+                        f'<div class="quote-provenance">SOURCE {esc(q["source_id"])} · LINE {esc(q["line_number"])} · '
+                        f'CHARS {esc(q["match_char_start"])}–{esc(q["match_char_end"])} · '
+                        f'SHA-256 {esc(q["source_sha256"])}</div>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
-    # Sub-tab 3: Inductive Discovery & Medoids
-    with qtab_medoids:
-        st.markdown("#### Unsupervised Topic Discovery & Medoid Utterances")
-        st.caption("Surfaces natural conversational vocabulary and centroid medoids to prevent confirmation bias.")
-        
-        medoid_data = [
-            {
-                "topic": "Topic 1: Grassroots Living Wage & Retention",
-                "keywords": "living wage, $28-$35, retention, burnout, turnover, frontline, inflation",
-                "centroid": "If we don't pay promotores at least $28 to $32 an hour, they get trained and then leave for county clinic jobs. Turnover kills community trust.",
-                "speaker": "CBO Executive Director (KII-08)"
-            },
-            {
-                "topic": "Topic 2: Intermediary Hub Subcontracting",
-                "keywords": "hub, intermediary, fiscal sponsor, billing overhead, EDI 837P, clearinghouse",
-                "centroid": "The hub manages the claims submission and electronic clearinghouse so our community health workers can focus on home visits rather than denial codes.",
-                "speaker": "Health Plan Director (KII-01)"
-            },
-            {
-                "topic": "Topic 3: Documentation & EHR Bottlenecks",
-                "keywords": "EHR, electronic medical record, double entry, epic, documentation burden",
-                "centroid": "Our frontline navigators spend four hours seeing clients and four hours doing duplicate data entry between our internal database and the clinic EHR.",
-                "speaker": "Community Clinic Manager (KII-03)"
-            }
-        ]
-        
-        for m in medoid_data:
-            st.markdown(f"""
-            <div class="quote-box" style="border-left-color: #1E3A8A;">
-                <div class="quote-meta" style="color: #1E3A8A;">{m['topic']}</div>
-                <div style="font-size: 0.85rem; margin-bottom: 0.4rem;"><strong>Key Stems:</strong> <code>{m['keywords']}</code></div>
-                <div class="quote-text">"{m['centroid']}"</div>
-                <div class="quote-provenance">REPRESENTATIVE CENTROID • {m['speaker']}</div>
-            </div>
-            """, unsafe_allow_html=True)
+    with qtab_topics:
+        st.markdown("#### Unsupervised topic discovery (LDA topics, TF-IDF cosine medoids)")
+        st.caption("Each medoid is the real participant turn closest to its topic's TF-IDF centroid.")
+        n_topics = st.slider("Number of topics (k)", min_value=1, max_value=10, value=3)
+        turn_records = results["tagged_turns_df"].to_dict("records")
+        discovery = run_topic_discovery(turn_records, n_topics)
+        topics = discovery["topics"]
+        if not topics:
+            st.info("No participant turn has enough content words for topic discovery.")
+        else:
+            st.caption(f"{discovery['n_analyzed']} participant turns analysed; k clamped to {len(topics)}.")
+            for topic in topics:
+                terms = ", ".join(dedupe_terms(topic["top_terms"]))
+                medoid = topic["medoid_text"]
+                st.markdown(
+                    f'<div class="quote-box topic-box">'
+                    f'<div class="quote-meta">Topic {esc(topic["topic_id"])}: {esc(topic["label"])} · '
+                    f'{esc(topic["turn_count"])} turns ({esc(topic["share_pct"])}%)</div>'
+                    f'<div style="font-size:0.9rem;margin-bottom:0.4rem;"><strong>Top terms:</strong> {esc(terms)}</div>'
+                    f'<div class="quote-text">{esc(medoid) if medoid else "No medoid turn assigned."}</div>'
+                    f'<div class="quote-provenance">MEDOID UNIT {esc(topic["medoid_unit_id"])} · '
+                    f'SPEAKER {esc(topic["medoid_speaker"])}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "topic_id": t["topic_id"],
+                        "top_terms": ", ".join(dedupe_terms(t["top_terms"])),
+                        "turn_count": t["turn_count"],
+                        "share_pct": t["share_pct"],
+                        "medoid_unit_id": t["medoid_unit_id"],
+                        "medoid_text": t["medoid_text"],
+                    }
+                    for t in topics
+                ]),
+                **stretch_kwargs(st.dataframe), hide_index=True,
+                column_config={
+                    "topic_id": "Topic", "top_terms": "Top terms", "turn_count": "Turns",
+                    "share_pct": st.column_config.NumberColumn("Share (%)", format="%.1f"),
+                    "medoid_unit_id": "Medoid unit", "medoid_text": "Medoid turn (verbatim)",
+                },
+            )
+            corpus_digest = hashlib.sha256(b"".join(p for _, p in inputs)).hexdigest()[:8]
+            discovered_label = f"Discovered: {len(topics)} topics · corpus {corpus_digest} (session)"
+            codebook_yaml = yaml.safe_dump(
+                topics_to_codebook_dict(discovery, project_name=f"Discovered Codebook ({corpus_label})"),
+                allow_unicode=True, sort_keys=False,
+            ).encode("utf-8")
+            d1, d2 = st.columns(2)
+            d1.download_button(
+                "📥 Download Discovered Codebook (.yaml)", data=codebook_yaml,
+                file_name="atlas_discovered_codebook.yaml", mime="application/x-yaml",
+                **stretch_kwargs(st.download_button),
+            )
+            d2.button(
+                "⚡ Apply Discovered Codebook to Engine", on_click=apply_discovered_codebook,
+                args=(discovered_label, codebook_yaml), **stretch_kwargs(st.button),
+                help="Adds this draft to the codebook list and re-codes the corpus with it.",
+            )
 
 
 # ==============================================================================
 # TAB 2: ECONOMETRIC & ACTUARIAL LEDGER EXPORT
 # ==============================================================================
 with tab_econometric:
-    st.markdown("### Econometric Parameterization & Actuarial Ledger")
-    st.markdown(
-        "Transform qualitative evidence directly into numerical distributions, living-wage floors, "
-        "and sensitivity bounds for applied microeconomic and actuarial models."
+    st.markdown("### Econometric parameter matrix")
+    st.caption(
+        f"N = {total_documents} analytical units (documents / respondent rows). "
+        "p = units reporting ÷ N; binomial standard error SE = √(p(1 − p) / N), on the proportion scale."
     )
-    
-    # Benchmark Data View
-    st.markdown("#### Labor Market Benchmark Distributions (n=2,500 Authentic Job Specifications)")
-    
-    # Altair Horizontal Bar Chart for Econometric Distribution
-    econ_chart = alt.Chart(labor_market_df).mark_bar(color="#1E3A8A").encode(
-        x=alt.X('prevalence_pct:Q', title='Empirical Prevalence Rate (%)', scale=alt.Scale(domain=[0, 100])),
-        y=alt.Y('theme_name:N', sort='-x', title=None),
-        tooltip=['theme_name:N', 'prevalence_pct:Q', 'n_matches:Q', 'total_n:Q', 'se:Q']
-    ).properties(height=260)
-    
-    st.altair_chart(econ_chart, use_container_width=True)
-    
-    # Accessible Parameters Table
-    st.markdown("##### Empirical Parameter Matrix for Hedonic Wage Models")
-    econ_display = labor_market_df.rename(columns={
-        "theme_name": "Econometric Variable / Task Domain",
-        "prevalence_pct": "Prevalence (%)",
-        "n_matches": "Matched Count",
-        "total_n": "Sample Size (N)",
-        "category": "Model Specification Role",
-        "se": "Std. Error"
+
+    matrix = pd.DataFrame({
+        "domain_id": freq["domain_id"].astype(str) if len(freq) else pd.Series(dtype=str),
+        "domain_name": freq["domain_name"].astype(str) if len(freq) else pd.Series(dtype=str),
     })
-    st.dataframe(econ_display[["Econometric Variable / Task Domain", "Prevalence (%)", "Matched Count", "Sample Size (N)", "Std. Error", "Model Specification Role"]], use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    st.markdown("#### Generate Auditable Excel Decision Workbook (.xlsx)")
-    st.markdown(
-        "Export a production-grade spreadsheet where every summary parameter cell contains an "
-        "embedded cell comment documenting the raw source coordinates and SHA-256 cryptographic digest."
-    )
-    
-    if st.button("📥 Generate & Download Actuarial Parameter Matrix (.xlsx)", type="primary"):
-        # Build OpenPyXL Workbook with Cell Comments
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Actuarial_Parameters"
-        
-        # Styles
-        navy_header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        cell_font = Font(name="Calibri", size=10)
-        
-        headers = ["Domain ID", "Variable Name", "Matched Postings", "Total Sample", "Prevalence (%)", "Std. Error", "Model Role"]
-        ws.append(headers)
-        
-        for col_num in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_num)
-            cell.fill = navy_header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            
-        for idx, row in labor_market_df.iterrows():
-            row_num = idx + 2
-            ws.append([
-                row["theme_id"],
-                row["theme_name"],
-                row["n_matches"],
-                row["total_n"],
-                f"{row['prevalence_pct']:.1f}%",
-                f"{row['se']:.4f}",
-                row["category"]
-            ])
-            
-            # Embed SHA-256 Provenance Comment in the prevalence cell
-            cell = ws.cell(row=row_num, column=5)
-            digest = hashlib.sha256(f"{row['theme_id']}_{row['n_matches']}".encode('utf-8')).hexdigest()
-            comment_text = (
-                f"ATLAS CRYPTOGRAPHIC AUDIT STAMP\n"
-                f"Theme: {row['theme_name']}\n"
-                f"Count: {row['n_matches']} / {row['total_n']}\n"
-                f"SHA-256: {digest}\n"
-                f"Verification: PASS (100% Deterministic)"
-            )
-            cell.comment = Comment(comment_text, "ATLAS Engine")
-            
-        # Adjust Column Widths
-        for col in ws.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
-            col_letter = openpyxl.utils.get_column_letter(col[0].column)
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
-            
-        # Save to buffer
-        excel_buffer = io.BytesIO()
-        wb.save(excel_buffer)
-        excel_buffer.seek(0)
-        
-        st.download_button(
-            label="💾 Click Here to Save Actuarial_Parameter_Matrix.xlsx",
-            data=excel_buffer.getvalue(),
-            file_name="ATLAS_Actuarial_Parameter_Matrix.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+    if len(freq):
+        p = [int(d) / total_documents if total_documents else float("nan") for d in freq["documents_reporting"]]
+        se = [math.sqrt(v * (1 - v) / total_documents) if total_documents else float("nan") for v in p]
+        matrix["documents_reporting"] = freq["documents_reporting"].astype(int)
+        matrix["n_units"] = total_documents
+        matrix["prevalence_pct"] = freq["prevalence_pct"].astype(float)
+        matrix["proportion"] = [round(v, 4) for v in p]
+        matrix["binomial_se"] = [round(v, 4) for v in se]
+        matrix["ci95_low_pct"] = [round(max(0.0, (v - 1.96 * s) * 100), 1) for v, s in zip(p, se)]
+        matrix["ci95_high_pct"] = [round(min(1.0, v + 1.96 * s) * 100, 1) for v, s in zip(p, se)]
+        matrix["matching_turns"] = freq["matching_turns"].astype(int)
+
+        bars = alt.Chart(matrix).mark_bar(color=TEAL).encode(
+            x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
+            y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+            tooltip=[
+                alt.Tooltip("domain_name:N", title="Domain"),
+                alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
+                alt.Tooltip("documents_reporting:Q", title="Units reporting"),
+                alt.Tooltip("n_units:Q", title="N"),
+                alt.Tooltip("binomial_se:Q", title="SE"),
+            ],
         )
-        st.success("✅ Actuarial Parameter Matrix generated with embedded cryptographic comment audit trails.")
+        whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
+            x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
+        )
+        ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=True)
+        st.altair_chart(
+            (bars + whiskers).properties(height=max(160, 42 * len(matrix)), description=ci_summary),
+            **stretch_kwargs(st.altair_chart),
+        )
+        st.html(chart_summary_html(ci_summary))
+        st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
+        st.dataframe(
+            matrix, **stretch_kwargs(st.dataframe), hide_index=True,
+            column_config={
+                "domain_id": "Domain ID", "domain_name": "Domain",
+                "documents_reporting": "Units reporting", "n_units": "N (analytical units)",
+                "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
+                "proportion": "p", "binomial_se": "Binomial SE",
+                "ci95_low_pct": "95% CI low (%)", "ci95_high_pct": "95% CI high (%)",
+                "matching_turns": "Matching turns",
+            },
+        )
+    else:
+        st.info("The active codebook defines no domains.")
+
+    st.markdown("---")
+    st.markdown("#### Auditable exports (generated by AtlasEngine.export_results)")
+    if results["integrity_ok"]:
+        st.success("Workbook integrity check passed: every prevalence cell and audit stamp matches the manifest.")
+    else:
+        st.error("Workbook integrity check failed: " + "; ".join(results["integrity_problems"]))
+    e1, e2, e3 = st.columns(3)
+    e1.download_button(
+        "📥 actuarial_parameter_matrix.xlsx", data=results["exports"]["actuarial_parameter_matrix.xlsx"],
+        file_name="actuarial_parameter_matrix.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", **stretch_kwargs(st.download_button),
+        help="Each prevalence cell carries an ATLAS VERIFICATION AUDIT STAMP comment.",
+    )
+    e2.download_button(
+        "📥 provenance_manifest.json", data=results["exports"]["provenance_manifest.json"],
+        file_name="provenance_manifest.json", mime="application/json", **stretch_kwargs(st.download_button),
+    )
+    e3.download_button(
+        "📥 verbatim_quotes_inventory.csv", data=results["exports"]["verbatim_quotes_inventory.csv"],
+        file_name="verbatim_quotes_inventory.csv", mime="text/csv", **stretch_kwargs(st.download_button),
+    )
+    with st.expander("Source files and SHA-256 digests"):
+        st.dataframe(
+            pd.DataFrame(
+                [{"source_id": k, "sha256": v} for k, v in results["file_hashes"].items()],
+                columns=["source_id", "sha256"],
+            ),
+            **stretch_kwargs(st.dataframe), hide_index=True,
+        )
 
 
 # ------------------------------------------------------------------------------
-# 6. Global Footer
+# 7. Footer
 # ------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #64748B; font-size: 0.85rem; padding: 1rem 0;'>"
-    "From Spoken Words to Countable Data: Meet ATLAS • Open Applied Microeconomics Initiative • MIT License • 2026"
+    "<div style='text-align:center;color:#475569;font-size:0.85rem;padding:1rem 0;'>"
+    "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License"
     "</div>",
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )

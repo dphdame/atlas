@@ -1,4 +1,7 @@
+.venv/
 venv/
+.codex/
+thoughts/
 __pycache__/
 *.pyc
 *.pyo

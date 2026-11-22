@@ -1,0 +1,8 @@
+respondent_id,role,response,software_test_label
+R001,participant,"Cuando se agotó el beneficio, busqué otro trabajo.","[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R002,participant,The clinic hours did not match my shift.,"[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R003,staff,We added evening appointments last spring.,"[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R004,participant,"   ","[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R005,participant,"I asked about protección laboral, but nobody knew the answer.","[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R006,staff,Transportation vouchers ran out in the middle of the month.,"[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+R007,participant,"Childcare made it hard to attend, honestly.","[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"

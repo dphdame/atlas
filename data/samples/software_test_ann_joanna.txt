@@ -1,0 +1,5 @@
+[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]
+Ann [00:00:05]: Welcome. How did you hear about the program?
+Joanna [00:00:20]: A neighbor told me about it.
+Ann [00:00:40]: What was the first step?
+Joanna [00:01:00]: I filled out a form at the clinic.
