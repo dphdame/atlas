@@ -879,7 +879,9 @@ class ADAAccessibilityTests(unittest.TestCase):
         to_html = self.summary_html()
         self.assertEqual(to_html("Plain words 50 units"), (
             '<p class="atlas-chart-summary" style="font-size:0.875rem;color:#475569;'
-            'margin:0.25rem 0 0.5rem;line-height:1.45;">Chart summary: Plain words 50 units</p>'))
+            'background-color:#FFFFFF;border:1px solid #64748B;border-radius:4px;'
+            'padding:0.4rem 0.65rem;margin:0.25rem 0 0.5rem;line-height:1.45;">'
+            'Chart summary: Plain words 50 units</p>'))
         out = to_html("a & b < c > d \" e ' f")
         self.assertIn("Chart summary: a &amp; b &lt; c &gt; d &quot; e &#x27; f</p>", out)
         payloads = [
@@ -915,9 +917,39 @@ class ADAAccessibilityTests(unittest.TestCase):
             linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
             return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
-        color = re.search(r"color:(#[0-9A-Fa-f]{6})", self.summary_html()("x")).group(1)
-        ratio = (luminance("#FFFFFF") + 0.05) / (luminance(color) + 0.05)
-        self.assertGreaterEqual(ratio, 4.5, f"{color} on white is {ratio:.2f}:1")
+        def contrast(a, b):
+            high, low = sorted((luminance(a), luminance(b)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+
+        tags, attrs, _ = self.parse_paragraph(self.summary_html()("x"))
+        self.assertEqual(tags, ["p"])
+        self.assertEqual(attrs.get("class"), "atlas-chart-summary")
+        style = {}
+        for declaration in attrs.get("style", "").split(";"):
+            name, sep, value = declaration.partition(":")
+            if sep:
+                style[name.strip().lower()] = value.strip()
+        hex_color = re.compile(r"#[0-9A-Fa-f]{6}")
+        self.assertRegex(style.get("color", ""), r"^#[0-9A-Fa-f]{6}$")
+        color = style["color"]
+        # Streamlit Light (#FFFFFF) and Dark (#171614 in 1.67, #0E1117 earlier) page backgrounds.
+        pages = ("#FFFFFF", "#171614", "#0E1117")
+        background = style.get("background-color")
+        if background is None:
+            for page in pages:
+                with self.subTest(text=color, page=page):
+                    ratio = contrast(color, page)
+                    self.assertGreaterEqual(ratio, 4.5, f"{color} text on {page} page is {ratio:.2f}:1")
+            return
+        self.assertRegex(background, r"^#[0-9A-Fa-f]{6}$", "the summary background must be an opaque hex colour")
+        ratio = contrast(color, background)
+        self.assertGreaterEqual(ratio, 4.5, f"{color} text on {background} is {ratio:.2f}:1")
+        border = hex_color.search(style.get("border", ""))
+        self.assertIsNotNone(border, "an explicit background needs a visible border colour")
+        for page in pages:
+            with self.subTest(border=border.group(0), page=page):
+                ratio = contrast(border.group(0), page)
+                self.assertGreaterEqual(ratio, 3.0, f"{border.group(0)} border on {page} page is {ratio:.2f}:1")
 
     def test_summaries_use_single_positional_st_html_and_no_markdown_caption(self):
         source = (REPO / "app.py").read_text(encoding="utf-8")

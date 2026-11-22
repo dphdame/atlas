@@ -272,12 +272,15 @@ def chart_summary_html(summary: str) -> str:
     HTML metacharacter (& < > " ') is escaped and line breaks collapse to one space, so text
     built from uploaded names never reaches Streamlit's Markdown, GFM autolink
     or shortcode plugins and displays verbatim. The Vega-Lite description keeps
-    the plain text. #475569 on white is 7.58:1 (WCAG AA needs 4.5:1).
+    the plain text. Pairs #475569 text with an explicit #FFFFFF background
+    (7.58:1, WCAG AA >= 4.5:1) and #64748B border (4.76:1 on white, >= 3:1 on
+    dark themes) so contrast holds in both Light and Dark Streamlit themes.
     """
     single_line = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", str(summary))
     return (
         '<p class="atlas-chart-summary" style="font-size:0.875rem;color:#475569;'
-        'margin:0.25rem 0 0.5rem;line-height:1.45;">'
+        'background-color:#FFFFFF;border:1px solid #64748B;border-radius:4px;'
+        'padding:0.4rem 0.65rem;margin:0.25rem 0 0.5rem;line-height:1.45;">'
         f"Chart summary: {html.escape(single_line, quote=True)}</p>"
     )
 
