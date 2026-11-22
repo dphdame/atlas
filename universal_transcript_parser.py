@@ -34,7 +34,7 @@ import os
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import docx
 import pandas as pd
@@ -85,6 +85,14 @@ _NOTES_HEADER_SCAN_ROWS = 3
 _NOTES_PARTICIPANT = re.compile(r"^(P\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 _NOTES_THEMES = re.compile(r"^\s*themes\b(?:\s*/\s*topics\b)?(?:\s*/\s*patterns\b)?\s*:?\s*", re.IGNORECASE)
 _NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+# Structural rows embedded in a notes table: a "Question N:" heading (separator or
+# nothing after the number, so "Question 2 was confusing" stays evidence), a
+# follow-up / probe prompt, and a consent statement ("Consent:", or "Consent
+# statement / form / script" with or without a colon; "Consent forms were
+# confusing" and "Consent was unclear" stay evidence).
+_NOTES_EMBEDDED_QUESTION = re.compile(r"^question\s*\d+\s*(?:[:.)\-]|$)", re.IGNORECASE)
+_NOTES_PROMPT = re.compile(r"^(?:follow[\s-]*ups?|probes?)\s*:", re.IGNORECASE)
+_NOTES_CONSENT = re.compile(r"^consent(?:\s+(?:statement|form|script)\b|\s*(?:\([^)]*\))?\s*:)", re.IGNORECASE)
 # Metadata keys that collapse every label variant ("Main Observations (4-5) Ideas:").
 _NOTES_CANONICAL_KEYS = ("summary_of_session", "main_observations")
 
@@ -284,41 +292,78 @@ def _dedupe_columns(header: List[str]) -> List[str]:
     return columns
 
 
-def _docx_row_texts(row) -> List[str]:
-    """Stripped cell texts of a Word table row; a merged cell repeats as "" after its first column."""
-    texts: List[str] = []
-    previous = None
-    for cell in row.cells:
-        texts.append("" if cell._tc is previous else cell.text.strip())
-        previous = cell._tc
-    return texts
+def _docx_table_rows(table: Table) -> Tuple[List[List[str]], List[Set[int]]]:
+    """
+    Stripped cell texts of each Word table row (a horizontally merged cell repeats as ""
+    after its first column) and, for each row, the columns holding a vertically merged
+    continuation: a physical cell (<w:tc>) that already appeared in an earlier row.
+    """
+    rows: List[List[str]] = []
+    continued: List[Set[int]] = []
+    seen: set = set()  # holding the elements keeps their lxml identity stable
+    for row in table.rows:
+        texts: List[str] = []
+        cont: Set[int] = set()
+        previous = None
+        for col, cell in enumerate(row.cells):
+            tc = cell._tc
+            texts.append("" if tc is previous else cell.text.strip())
+            if tc in seen:
+                cont.add(col)
+            previous = tc
+        seen.update(cell._tc for cell in row.cells)
+        rows.append(texts)
+        continued.append(cont)
+    return rows, continued
 
 
-def _docx_blocks(file_path: str) -> List[Tuple[Optional[str], Optional[List[List[str]]]]]:
-    """(paragraph text, None) or (None, table row texts) for each body block, in document order."""
+def _docx_blocks(file_path: str) -> List[Tuple[Optional[str], Optional[List[List[str]]], Optional[List[Set[int]]]]]:
+    """
+    (paragraph text, None, None) or (None, table row texts, vertically merged
+    continuation columns per row) for each body block, in document order.
+    """
     return [
-        (item.text, None) if not isinstance(item, Table) else (None, [_docx_row_texts(r) for r in item.rows])
+        (item.text, None, None) if not isinstance(item, Table) else (None, *_docx_table_rows(item))
         for item in docx.Document(file_path).iter_inner_content()
     ]
 
 
-def _notes_columns(rows: List[List[str]]) -> Optional[Tuple[int, Dict[str, int]]]:
+def _notes_columns(rows: List[List[str]]) -> Optional[Tuple[int, Dict[str, List[int]]]]:
     """
-    (header row index, column roles) when one of the first rows of a 3+-column table
-    names both "Key Points" and "Notable Quotes" (case-, whitespace- and trailing
-    colon-insensitive; "Observations" optional).
+    (header row index, columns of each role, left to right) when one of the first rows
+    of a 3+-column table names both "Key Points" and "Notable Quotes" (case-,
+    whitespace- and trailing colon-insensitive; "Observations" optional). A repeated
+    header ("Notable Quotes | Notable Quotes") keeps every column.
     """
     for r_idx, cells in enumerate(rows[:_NOTES_HEADER_SCAN_ROWS]):
         if len(cells) < 3:
             continue
-        cols: Dict[str, int] = {}
+        cols: Dict[str, List[int]] = {}
         for col, cell in enumerate(cells):
             role = _NOTES_COLUMN_ROLES.get(" ".join(cell.lower().split()).rstrip(":").strip())
             if role:
-                cols.setdefault(role, col)
+                cols.setdefault(role, []).append(col)
         if "key_points" in cols and "notable_quotes" in cols:
             return r_idx, cols
     return None
+
+
+def _participant_segments(text: str) -> List[Tuple[Optional[str], str]]:
+    """
+    (upper-case "P#" label or None, joined text) for each contribution in a notes cell.
+    Every line opening with a "P#:" label starts a new contribution, so
+    "P1: a\\nP2: b" is two; lines before the first label form one unlabelled contribution.
+    """
+    segments: List[Tuple[Optional[str], List[str]]] = []
+    for line in text.split("\n"):
+        label = _NOTES_PARTICIPANT.match(line.strip())
+        if label:
+            segments.append((label.group(1).upper(), [label.group(2)]))
+        elif segments:
+            segments[-1][1].append(line)
+        else:
+            segments.append((None, [line]))
+    return [(pid, _join_lines("\n".join(lines))) for pid, lines in segments]
 
 
 def _metadata_key(label: str) -> str:
@@ -494,7 +539,7 @@ class UniversalTranscriptParser:
         self.last_document_metadata.pop(source_id, None)
         if ext == ".docx":
             blocks = _docx_blocks(file_path)
-            if any(rows is not None and _notes_columns(rows) for _, rows in blocks):
+            if any(rows is not None and _notes_columns(rows) for _, rows, _ in blocks):
                 return self._parse_focus_group_notes(blocks, file_path, source_id)
             raw_entries = self._parse_docx(file_path)
         elif ext in (".vtt", ".srt"):
@@ -789,7 +834,7 @@ class UniversalTranscriptParser:
     # ------------------------------------------------------------------
     def _parse_focus_group_notes(
         self,
-        blocks: List[Tuple[Optional[str], Optional[List[List[str]]]]],
+        blocks: List[Tuple[Optional[str], Optional[List[List[str]]], Optional[List[Set[int]]]]],
         file_path: str,
         source_id: str,
     ) -> List[Dict[str, Any]]:
@@ -806,12 +851,26 @@ class UniversalTranscriptParser:
         k-th notes table when that heading is missing. Within it, every row after the
         header yields, in order, a key_point_paraphrase (the Key Points cell after its
         "P#:" label), a notable_quote_verbatim and an observation for that participant
-        when the cell is non-empty; a row whose Key Points cell (or first cell) starts
+        when the cell is non-empty; a role with several columns yields one turn per
+        column, left to right. A row whose Key Points cell (or first cell) starts
         "Themes / Topics / Patterns:" yields one themes_summary turn by
-        NOTES_THEMES_SPEAKER, marked is_facilitator. A cell with its own "P#:" label is
-        attributed to that participant; an unlabelled cell goes to the row's label when
-        the row names exactly one participant and to "Unknown" otherwise. Rows whose
-        cells name different participants are listed in metadata["mixed_label_rows"].
+        NOTES_THEMES_SPEAKER, marked is_facilitator.
+
+        Attribution: every line opening "P#:" starts a contribution of that participant,
+        so one cell can hold several. An unlabelled contribution goes to the row's label
+        when the row names exactly one participant and to "Unknown" otherwise. Rows
+        naming different participants are listed in metadata["mixed_label_rows"]; those
+        where one cell names several participants and an unlabelled contribution became
+        "Unknown" are also listed in metadata["ambiguous_multilabel_rows"].
+
+        A row whose only new non-empty cell (merged across the row or typed in one
+        column) is a "Question N:" heading starts that question for the following rows;
+        a "Follow-up:" / "Probe:" prompt extends the current question's prompt; a
+        "Consent:" statement is dropped; and a "Summary of Session" / "Main
+        Observations" box is stored in the metadata. None of them is evidence.
+
+        A vertically merged cell is emitted once, on its first row; on later rows it
+        only supplies participant labels.
         Only include_evidence_types are kept, and turn_ids and character offsets are
         assigned after that filter.
         """
@@ -820,6 +879,7 @@ class UniversalTranscriptParser:
         # (block location, speaker, text, evidence_type, question_id)
         entries: List[Tuple[int, str, str, str, str]] = []
         mixed_label_rows: List[int] = []  # rows whose cells name different participants
+        ambiguous_multilabel_rows: List[int] = []  # one cell names several; unlabelled text is "Unknown"
         pending: Dict[str, Any] = {"question_id": None, "prompt": []}
         notes_tables = 0
         location = 0
@@ -837,14 +897,20 @@ class UniversalTranscriptParser:
             if key and not metadata.get(key):
                 metadata[key] = value.strip()
 
+        def read_box(lines: List[str], keys: Optional[Sequence[str]] = None) -> bool:
+            """Store a "Label: value" box (only a label in keys, when given); whether it was stored."""
+            label, colon, rest = lines[0].partition(":")
+            key = _metadata_key(label) if colon else ""
+            if not key or (keys is not None and key not in keys):
+                return False
+            set_metadata(label, "\n".join(([rest.strip()] if rest.strip() else []) + lines[1:]))
+            return True
+
         def read_metadata_table(rows: List[List[str]]) -> None:
             if max((len(cells) for cells in rows), default=0) == 1:
                 lines = [ln for cells in rows if cells for ln in _box_lines(cells[0])]
-                if not lines or note_question(lines[0]):
-                    return
-                label, colon, rest = lines[0].partition(":")
-                if colon and _metadata_key(label):
-                    set_metadata(label, "\n".join(([rest.strip()] if rest.strip() else []) + lines[1:]))
+                if lines and not note_question(lines[0]):
+                    read_box(lines)
                 return
             for cells in rows:
                 col = 0
@@ -860,42 +926,68 @@ class UniversalTranscriptParser:
                         set_metadata(label, rest)
                     col += 1
 
-        def row_entries(row_block: int, cells: List[str], cols: Dict[str, int], question_id: str) -> None:
-            def cell(role: str) -> str:
-                col = cols.get(role)
-                return cells[col] if col is not None and col < len(cells) else ""
+        def row_entries(row_block: int, cells: List[str], cols: Dict[str, List[int]], question_id: str,
+                        continued: Set[int]) -> None:
+            def text_at(col: int) -> str:
+                return cells[col] if col < len(cells) else ""
 
             # The themes label sits in the Key Points column (or column 0); its text and
-            # every other cell in row order form one themes turn.
-            for col in dict.fromkeys((cols["key_points"], 0)):
-                themes = _NOTES_THEMES.match(cells[col]) if col < len(cells) else None
+            # every other new cell in row order form one themes turn. A vertically merged
+            # themes cell was emitted on its first row, so a continuation row is read as
+            # participant evidence.
+            for col in dict.fromkeys(cols["key_points"] + [0]):
+                themes = None if col in continued else _NOTES_THEMES.match(text_at(col))
                 if themes:
-                    parts = [cells[col][themes.end():]] + [c for i, c in enumerate(cells) if i != col]
+                    parts = [cells[col][themes.end():]] + [
+                        c for i, c in enumerate(cells) if i != col and i not in continued]
                     text = " ".join(p for p in (_join_lines(part) for part in parts) if p)
                     if text:
                         entries.append((row_block, NOTES_THEMES_SPEAKER, text, "themes_summary", question_id))
                     return
 
-            # Each cell keeps its own "P#:" label. An unlabelled cell takes the row's
-            # label when the row names one participant, and is "Unknown" when the row
-            # names several (no reliable owner).
-            labelled: List[Tuple[str, Optional[str], str]] = []
+            # Each contribution keeps its own "P#:" label. An unlabelled one takes the
+            # row's label when the row names one participant, and is "Unknown" when the
+            # row names several (no reliable owner). A continuation only supplies labels.
+            contributions: List[Tuple[str, Optional[str], str, bool]] = []
+            multilabel_cell = False
             for role, evidence_type in (("key_points", "key_point_paraphrase"),
                                         ("notable_quotes", "notable_quote_verbatim"),
                                         ("observations", "observation")):
-                raw = cell(role)
-                label = _NOTES_PARTICIPANT.match(raw)
-                labelled.append((evidence_type, label.group(1).upper() if label else None,
-                                 _join_lines(label.group(2) if label else raw)))
-            labels = set(pid for _, pid, _ in labelled if pid)
+                for col in cols.get(role, []):
+                    segments = _participant_segments(text_at(col))
+                    multilabel_cell |= len({pid for pid, _ in segments if pid}) > 1
+                    contributions.extend((evidence_type, pid, text, col not in continued) for pid, text in segments)
+            labels = set(pid for _, pid, _, _ in contributions if pid)
             row_pid = next(iter(labels)) if len(labels) == 1 else "Unknown"
             if len(labels) > 1:
                 mixed_label_rows.append(row_block)
-            for evidence_type, pid, text in labelled:
-                if text:
+            if multilabel_cell and any(not pid and text and emit for _, pid, text, emit in contributions):
+                ambiguous_multilabel_rows.append(row_block)
+            for evidence_type, pid, text, emit in contributions:
+                if text and emit:
                     entries.append((row_block, pid or row_pid, text, evidence_type, question_id))
 
-        for para, rows in blocks:
+        def structural_row(text: str, question_id: str) -> Optional[str]:
+            """
+            The question_id after an embedded structural row, or None when text is
+            evidence. A "Question N:" heading starts question N, a follow-up / probe
+            extends the current question's prompt, and summary boxes become metadata.
+            """
+            lines = _box_lines(text)
+            if _NOTES_EMBEDDED_QUESTION.match(lines[0]):
+                match = _NOTES_QUESTION.match(text)
+                question_id = f"Question {int(match.group(1))}"
+                questions[question_id] = "\n".join(_box_lines(match.group(2)))
+                return question_id
+            if _NOTES_PROMPT.match(lines[0]):
+                if question_id in questions:
+                    questions[question_id] = "\n".join(_box_lines(questions[question_id]) + lines)
+                return question_id
+            if _NOTES_CONSENT.match(lines[0]) or read_box(lines, _NOTES_CANONICAL_KEYS):
+                return question_id
+            return None
+
+        for para, rows, continued in blocks:
             if rows is None:
                 location += 1
                 text = para.strip()
@@ -925,12 +1017,20 @@ class UniversalTranscriptParser:
                 questions[question_id] = "\n".join(pending["prompt"])
             pending.update(question_id=None, prompt=[])
             for r_idx in range(header_idx + 1, len(rows)):
-                if _notes_columns([rows[r_idx]]):
+                cells, cont = rows[r_idx], continued[r_idx]
+                if _notes_columns([cells]):
                     continue  # header repeated on a new page
-                row_entries(first_block + r_idx, rows[r_idx], cols, question_id)
+                new_cells = [c for col, c in enumerate(cells) if c and col not in cont]
+                if len(new_cells) == 1:
+                    next_question = structural_row(new_cells[0], question_id)
+                    if next_question is not None:
+                        question_id = next_question
+                        continue
+                row_entries(first_block + r_idx, cells, cols, question_id, cont)
 
         metadata["questions"] = questions
         metadata["mixed_label_rows"] = mixed_label_rows
+        metadata["ambiguous_multilabel_rows"] = ambiguous_multilabel_rows
         self.last_document_metadata[source_id] = metadata
 
         kept = [e for e in entries if e[3] in self.include_evidence_types]

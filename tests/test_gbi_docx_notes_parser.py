@@ -520,6 +520,202 @@ class ExtractionTests(unittest.TestCase):
             self.assertEqual(turns[0]["participant_id"], "unlabelled.docx::Unknown")
 
 
+def new_notes_table(document, n_rows, header=("Key Points", "Notable Quotes", "Observations")):
+    """A notes table with its header row and n_rows empty body rows (cells set by the caller)."""
+    table = document.add_table(rows=1 + n_rows, cols=len(header))
+    for col, label in enumerate(header):
+        table.rows[0].cells[col].text = label
+    return table
+
+
+class RepairRound1Tests(unittest.TestCase):
+    """Codex review of d67458c: two P1 and two P2 defects (synthetic SOFTWARE_TEST layouts)."""
+
+    def test_multiple_participants_in_one_key_points_cell(self):
+        rows = [
+            ["P1: Forms took a week.\nP2: Forms took a month.", "\"The paperwork never ended.\"", "Sighed."],
+            ["P3: Forms took a day.\np4: Forms were lost.", "P4: \"Nobody called.\"", ""],
+            ["P5: Short wait.", "\"Same day.\"", ""],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "multi.docx"
+            write_notes_doc(path, [("p", "Question 1: How was it?"), ("t", rows)])
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Forms took a week."),
+            ("Question 1", "P2", KP, "Forms took a month."),
+            # Several participants in the row and no label in the cell: no reliable owner.
+            ("Question 1", "Unknown", QUOTE, "\"The paperwork never ended.\""),
+            ("Question 1", "Unknown", OBS, "Sighed."),
+            ("Question 1", "P3", KP, "Forms took a day."),
+            ("Question 1", "P4", KP, "Forms were lost."),
+            ("Question 1", "P4", QUOTE, "\"Nobody called.\""),
+            ("Question 1", "P5", KP, "Short wait."),
+            ("Question 1", "P5", QUOTE, "\"Same day.\""),
+        ])
+        self.assertEqual([t["participant_id"] for t in turns][:3],
+                         ["multi.docx::P1", "multi.docx::P2", "multi.docx::Unknown"])
+        for prev, cur in zip(turns, turns[1:]):
+            self.assertEqual(cur["char_start"], prev["char_end"] + 1)
+        for t in turns:
+            self.assertEqual(t["char_end"] - t["char_start"], len(t["text"]))
+        meta = parser.last_document_metadata["multi.docx"]
+        self.assertEqual(meta["mixed_label_rows"], [3, 4])
+        self.assertEqual(meta["ambiguous_multilabel_rows"], [3], "row 4 has no unlabelled cell")
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"multi.docx": sha})
+        self.assertIn("multi.docx::P2", set(results["tagged_turns_df"]["unit_id"]))
+        self.assertNotIn(("P1", "Forms took a week. P2: Forms took a month."),
+                         set(zip(results["tagged_turns_df"]["speaker"], results["tagged_turns_df"]["text"])))
+
+    def test_embedded_structural_rows_are_not_evidence(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did the enrollment go?")
+        table = new_notes_table(document, 8)
+        body = [
+            ["P1: Gathered the paperwork early.", "", ""],
+            "Summary of Session: The paperwork took weeks for most.",
+            "Consent: Verbal consent was read again after the paperwork break.",
+            "Question 2: How long did the paperwork take to process?",
+            "Probe: Did the paperwork come back?",
+            ["P2: The paperwork took a month.", "", ""],
+            "Main Observations (4-5) Ideas:\n1. Paperwork delays.\n2. Lost forms.",
+            SOFTWARE_TEST_BANNER,
+        ]
+        for r_idx, value in enumerate(body, start=1):
+            row = table.rows[r_idx]
+            if isinstance(value, list):
+                for col, text in enumerate(value):
+                    row.cells[col].text = text
+            else:
+                row.cells[0].merge(row.cells[2]).text = value  # full-width merged row
+        # A structural row typed in column 0 only (not merged) is still structure.
+        table.add_row().cells[0].text = "Follow-up: Anything else about the paperwork?"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "embedded.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES)
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Gathered the paperwork early."),
+            ("Question 2", "P2", KP, "The paperwork took a month."),
+        ])
+        meta = parser.last_document_metadata["embedded.docx"]
+        self.assertEqual(meta["summary_of_session"], "The paperwork took weeks for most.")
+        self.assertEqual(meta["main_observations"], "1. Paperwork delays.\n2. Lost forms.")
+        self.assertEqual(meta["questions"]["Question 2"],
+                         "How long did the paperwork take to process?\nProbe: Did the paperwork come back?\n"
+                         "Follow-up: Anything else about the paperwork?")
+        self.assertEqual(parser.last_fixture_banner_lines, [10])
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"embedded.docx": sha})
+        self.assertEqual(set(results["tagged_turns_df"]["speaker"]), {"P1", "P2"})
+
+    def test_embedded_consent_statement_without_colon_is_not_evidence(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did the enrollment go?")
+        table = new_notes_table(document, 5)
+        table.cell(1, 0).text = "P1: Gathered the paperwork early."
+        table.cell(2, 0).merge(table.cell(2, 2)).text = "Consent statement was read again after the paperwork break."
+        table.cell(3, 0).text = "Consent form signed by all before the paperwork questions."
+        # Participant notes that merely start with the word "consent" stay evidence.
+        table.cell(4, 0).text = "Consent forms were confusing paperwork."
+        table.cell(5, 0).text = "Consent was unclear on the paperwork."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "consent.docx"
+            document.save(str(path))
+            turns = UniversalTranscriptParser(include_evidence_types=ALL_TYPES).parse_file(str(path), root_dir=tmp)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Gathered the paperwork early."),
+            ("Question 1", "Unknown", KP, "Consent forms were confusing paperwork."),
+            ("Question 1", "Unknown", KP, "Consent was unclear on the paperwork."),
+        ])
+        self.assertEqual([t["line_number"] for t in turns], [3, 6, 7])
+
+    def test_vertically_merged_key_point_emitted_once(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did the paperwork go?")
+        table = new_notes_table(document, 3)
+        table.cell(1, 0).merge(table.cell(2, 0)).text = "P1: The paperwork took weeks."
+        table.cell(1, 1).text = "Notable Quote A about the paperwork."
+        table.cell(2, 1).text = "Notable Quote B about the paperwork."
+        table.cell(2, 2).text = "Frowned."
+        table.cell(3, 0).text = "P2: Approved the same day."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "vmerge.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES)
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "The paperwork took weeks."),
+            ("Question 1", "P1", QUOTE, "Notable Quote A about the paperwork."),
+            ("Question 1", "P1", QUOTE, "Notable Quote B about the paperwork."),
+            ("Question 1", "P1", OBS, "Frowned."),
+            ("Question 1", "P2", KP, "Approved the same day."),
+        ])
+        self.assertEqual([t["line_number"] for t in turns], [3, 3, 4, 4, 5])
+        self.assertEqual(parser.last_document_metadata["vmerge.docx"]["mixed_label_rows"], [])
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"vmerge.docx": sha})
+        quotes = results["quotes_df"]
+        matched = quotes[quotes["domain_id"] == "paperwork_delays"]
+        self.assertEqual(sorted(matched["text"]), [
+            "Notable Quote A about the paperwork.", "Notable Quote B about the paperwork.",
+            "The paperwork took weeks.",
+        ])
+        freq = results["frequencies_df"].set_index("domain_id")
+        self.assertEqual(int(freq.loc["paperwork_delays", "matching_turns"]), 3)
+
+    def test_vertically_merged_themes_cell_keeps_new_quote_below(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did the paperwork go?")
+        table = new_notes_table(document, 3)
+        table.cell(1, 0).text = "P1: The paperwork took weeks."
+        table.cell(2, 0).merge(table.cell(3, 0)).text = "Themes / Topics / Patterns: Paperwork delays."
+        table.cell(2, 1).text = "Delays were common."
+        table.cell(3, 1).text = "\"The paperwork came back twice.\""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "vmerge_themes.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES)
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            default_turns = UniversalTranscriptParser().parse_file(str(path), root_dir=tmp)
+        # The themes turn is emitted once on its first row; the new quote on the
+        # continuation row is participant evidence with no label, so "Unknown".
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "The paperwork took weeks."),
+            ("Question 1", "NoteTaker_Themes", THEMES, "Paperwork delays. Delays were common."),
+            ("Question 1", "Unknown", QUOTE, "\"The paperwork came back twice.\""),
+        ])
+        self.assertEqual([t["line_number"] for t in turns], [3, 4, 5])
+        self.assertIn(("Question 1", "Unknown", QUOTE, "\"The paperwork came back twice.\""),
+                      summary(default_turns))
+
+    def test_duplicate_semantic_columns_keep_all_text(self):
+        header = ["Key Points", "Notable Quotes", "Notable Quotes", "Observations"]
+        document = docx.Document()
+        document.add_paragraph("Question 1: How was it?")
+        table = new_notes_table(document, 2, header)
+        for col, text in enumerate(["P1: Forms were long.", "quote A", "quote B", "Calm."]):
+            table.cell(1, col).text = text
+        # A quote cell merged across both quote columns is one quote, emitted once.
+        table.cell(2, 0).text = "P2: Forms were short."
+        table.cell(2, 1).merge(table.cell(2, 2)).text = "quote C"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dupcols.docx"
+            document.save(str(path))
+            turns = UniversalTranscriptParser(include_evidence_types=ALL_TYPES).parse_file(str(path), root_dir=tmp)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Forms were long."),
+            ("Question 1", "P1", QUOTE, "quote A"),
+            ("Question 1", "P1", QUOTE, "quote B"),
+            ("Question 1", "P1", OBS, "Calm."),
+            ("Question 1", "P2", KP, "Forms were short."),
+            ("Question 1", "P2", QUOTE, "quote C"),
+        ])
+
+
 class MultiGroupTests(unittest.TestCase):
     def test_groups_and_participants_never_collide(self):
         parser = UniversalTranscriptParser(root_dir=str(REPO_ROOT))
