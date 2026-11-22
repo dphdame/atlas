@@ -16,6 +16,17 @@ Every turn carries two identities:
 Every line_number is 1-based: the physical line for text, subtitle and CSV
 files, the sheet row for XLSX, and the block position (paragraph or table row,
 in document order) for Word files.
+
+A Word file holding a 3+-column "Key Points | Notable Quotes | Observations"
+table is parsed as structured focus-group notes (one file per group); every other
+file keeps its transcript or tabular parse. Every turn also carries:
+  * document_structure - "focus_group_notes", "transcript" or "tabular".
+  * evidence_type      - for notes: "key_point_paraphrase", "notable_quote_verbatim",
+    "observation" or "themes_summary"; "verbatim_turn" otherwise.
+  * question_id        - "Question N" for notes; "" otherwise.
+  * group_id           - source_id.
+  * participant_id     - "<source_id>::<P#>" for notes, so P1 in two groups never
+    collide; unit_id otherwise.
 """
 
 import csv
@@ -23,7 +34,7 @@ import os
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import docx
 import pandas as pd
@@ -58,6 +69,24 @@ _TEAMS_HEADER = re.compile(r"^(?:.*-)?Meeting Recording$")
 
 # Fixture label carried by every SOFTWARE_TEST sample; it is metadata, never dialogue.
 SOFTWARE_TEST_BANNER = "[SOFTWARE_TEST FIXTURE — DEMONSTRATES SOFTWARE MECHANICS ONLY, NOT EMPIRICAL FINDINGS]"
+
+# Structured focus-group notes (.docx): the evidence a notes-table row can yield.
+NOTES_EVIDENCE_TYPES = ("key_point_paraphrase", "notable_quote_verbatim", "observation", "themes_summary")
+DEFAULT_NOTES_EVIDENCE_TYPES = ("key_point_paraphrase", "notable_quote_verbatim")
+NOTES_UNIT_LEVELS = ("group", "participant")
+NOTES_THEMES_SPEAKER = "NoteTaker_Themes"
+_NOTES_COLUMN_ROLES = {
+    "key point": "key_points", "key points": "key_points",
+    "notable quote": "notable_quotes", "notable quotes": "notable_quotes",
+    "observation": "observations", "observations": "observations",
+}
+# Rows checked for the notes header (a title or "Question N" row may sit above it).
+_NOTES_HEADER_SCAN_ROWS = 3
+_NOTES_PARTICIPANT = re.compile(r"^(P\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_NOTES_THEMES = re.compile(r"^\s*themes\b(?:\s*/\s*topics\b)?(?:\s*/\s*patterns\b)?\s*:?\s*", re.IGNORECASE)
+_NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+# Metadata keys that collapse every label variant ("Main Observations (4-5) Ideas:").
+_NOTES_CANONICAL_KEYS = ("summary_of_session", "main_observations")
 
 # Word-table header cells that name the speaker / dialogue / timestamp columns.
 _TABLE_HEADER_ROLES = {
@@ -255,6 +284,57 @@ def _dedupe_columns(header: List[str]) -> List[str]:
     return columns
 
 
+def _docx_row_texts(row) -> List[str]:
+    """Stripped cell texts of a Word table row; a merged cell repeats as "" after its first column."""
+    texts: List[str] = []
+    previous = None
+    for cell in row.cells:
+        texts.append("" if cell._tc is previous else cell.text.strip())
+        previous = cell._tc
+    return texts
+
+
+def _docx_blocks(file_path: str) -> List[Tuple[Optional[str], Optional[List[List[str]]]]]:
+    """(paragraph text, None) or (None, table row texts) for each body block, in document order."""
+    return [
+        (item.text, None) if not isinstance(item, Table) else (None, [_docx_row_texts(r) for r in item.rows])
+        for item in docx.Document(file_path).iter_inner_content()
+    ]
+
+
+def _notes_columns(rows: List[List[str]]) -> Optional[Tuple[int, Dict[str, int]]]:
+    """
+    (header row index, column roles) when one of the first rows of a 3+-column table
+    names both "Key Points" and "Notable Quotes" (case-, whitespace- and trailing
+    colon-insensitive; "Observations" optional).
+    """
+    for r_idx, cells in enumerate(rows[:_NOTES_HEADER_SCAN_ROWS]):
+        if len(cells) < 3:
+            continue
+        cols: Dict[str, int] = {}
+        for col, cell in enumerate(cells):
+            role = _NOTES_COLUMN_ROLES.get(" ".join(cell.lower().split()).rstrip(":").strip())
+            if role:
+                cols.setdefault(role, col)
+        if "key_points" in cols and "notable_quotes" in cols:
+            return r_idx, cols
+    return None
+
+
+def _metadata_key(label: str) -> str:
+    """ "Project Name (s):" -> "project_name"; summary-box labels map to their canonical key."""
+    base = re.sub(r"\([^)]*\)", " ", label).strip().rstrip(":")
+    key = re.sub(r"[\W_]+", "_", unicodedata.normalize("NFC", base).lower()).strip("_")
+    for canonical in _NOTES_CANONICAL_KEYS:
+        if key.startswith(canonical):
+            return canonical
+    return key
+
+
+def _box_lines(text: str) -> List[str]:
+    return [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+
 def _validate_csv_quoting(text: str, name: str, start_line: int = 1) -> None:
     """
     RFC 4180 quote balance for a CSV body whose first character is on physical
@@ -312,6 +392,8 @@ class UniversalTranscriptParser:
         facilitator_names: Optional[List[str]] = None,
         interviewer_prompt_patterns: Optional[List[str]] = None,
         root_dir: Optional[str] = None,
+        include_evidence_types: Optional[Sequence[str]] = None,
+        notes_unit_level: str = "group",
     ):
         """
         Initialize parser.
@@ -326,7 +408,31 @@ class UniversalTranscriptParser:
             is_facilitator=True, tagged with exclusion_reason and logged in
             last_excluded_turns. Speakerless turns are never flagged otherwise.
         :param root_dir: Optional default root used to build relative source_id values.
+        :param include_evidence_types: Evidence types kept from structured focus-group
+            notes, a non-empty sequence drawn from NOTES_EVIDENCE_TYPES (default
+            DEFAULT_NOTES_EVIDENCE_TYPES: key points and notable quotes). Transcript
+            and tabular files are unaffected. Unknown names raise ValueError.
+        :param notes_unit_level: Counting unit for focus-group notes: "group" (default,
+            unit_id = source_id, one unit per focus-group file) or "participant"
+            (unit_id = participant_id). Any other value raises ValueError.
         """
+        if include_evidence_types is None:
+            evidence_types: Tuple[str, ...] = DEFAULT_NOTES_EVIDENCE_TYPES
+        else:
+            if isinstance(include_evidence_types, str):
+                raise ValueError("include_evidence_types must be a sequence of evidence type names, not a string")
+            evidence_types = tuple(include_evidence_types)
+            unknown = [t for t in evidence_types if t not in NOTES_EVIDENCE_TYPES]
+            if not evidence_types or unknown:
+                raise ValueError(
+                    f"include_evidence_types must be a non-empty subset of {NOTES_EVIDENCE_TYPES}; got {evidence_types!r}"
+                )
+        if notes_unit_level not in NOTES_UNIT_LEVELS:
+            raise ValueError(f"notes_unit_level must be one of {NOTES_UNIT_LEVELS}; got {notes_unit_level!r}")
+        self.include_evidence_types = evidence_types
+        self.notes_unit_level = notes_unit_level
+        # Focus-group notes metadata per source_id, kept across calls on one parser.
+        self.last_document_metadata: Dict[str, Dict[str, Any]] = {}
         self.facilitator_names = (
             {_normalize_name(f) for f in facilitator_names if _normalize_name(f)}
             if facilitator_names else set()
@@ -371,6 +477,8 @@ class UniversalTranscriptParser:
         """
         Detect file format and parse into standardized turns.
         Tabular files (.csv/.xlsx) use parse_tabular defaults (text column "response").
+        A .docx with a "Key Points | Notable Quotes" notes table is parsed as
+        structured focus-group notes; any other .docx keeps the transcript parse.
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Transcript file not found: {file_path}")
@@ -382,16 +490,21 @@ class UniversalTranscriptParser:
             raise ValueError(f"Unsupported transcript extension: {ext}")
 
         self._reset_call_state()
+        source_id = self._source_id(file_path, root_dir)
+        self.last_document_metadata.pop(source_id, None)
         if ext == ".docx":
+            blocks = _docx_blocks(file_path)
+            if any(rows is not None and _notes_columns(rows) for _, rows in blocks):
+                return self._parse_focus_group_notes(blocks, file_path, source_id)
             raw_entries = self._parse_docx(file_path)
         elif ext in (".vtt", ".srt"):
             raw_entries = self._parse_vtt(file_path)
         else:
             raw_entries = self._parse_text(file_path)
 
-        source_id = self._source_id(file_path, root_dir)
         unit_ids = [source_id] * len(raw_entries)
-        return self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=True)
+        turns = self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=True)
+        return self._add_structure_keys(turns, "transcript")
 
     # ------------------------------------------------------------------
     # Transcript formats
@@ -672,6 +785,184 @@ class UniversalTranscriptParser:
         return raw_entries
 
     # ------------------------------------------------------------------
+    # Structured focus-group notes
+    # ------------------------------------------------------------------
+    def _parse_focus_group_notes(
+        self,
+        blocks: List[Tuple[Optional[str], Optional[List[List[str]]]]],
+        file_path: str,
+        source_id: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Parse a structured focus-group notes document (one file per group).
+
+        Only notes-table rows become turns. Paragraphs (title, consent, "Question N:"
+        prompts, follow-ups and probes) and every other table (label/value metadata
+        layouts and 1-column "Summary of Session" / "Main Observations" boxes) are
+        recorded in last_document_metadata[source_id] and never emitted.
+
+        Each notes table takes the question_id of the "Question N" paragraph (or
+        pre-header row) since the previous notes table, or "Question <k>" for the
+        k-th notes table when that heading is missing. Within it, every row after the
+        header yields, in order, a key_point_paraphrase (the Key Points cell after its
+        "P#:" label), a notable_quote_verbatim and an observation for that participant
+        when the cell is non-empty; a row whose Key Points cell (or first cell) starts
+        "Themes / Topics / Patterns:" yields one themes_summary turn by
+        NOTES_THEMES_SPEAKER, marked is_facilitator. A cell with its own "P#:" label is
+        attributed to that participant; an unlabelled cell goes to the row's label when
+        the row names exactly one participant and to "Unknown" otherwise. Rows whose
+        cells name different participants are listed in metadata["mixed_label_rows"].
+        Only include_evidence_types are kept, and turn_ids and character offsets are
+        assigned after that filter.
+        """
+        metadata: Dict[str, Any] = {}
+        questions: Dict[str, str] = {}
+        # (block location, speaker, text, evidence_type, question_id)
+        entries: List[Tuple[int, str, str, str, str]] = []
+        mixed_label_rows: List[int] = []  # rows whose cells name different participants
+        pending: Dict[str, Any] = {"question_id": None, "prompt": []}
+        notes_tables = 0
+        location = 0
+
+        def note_question(text: str) -> bool:
+            match = _NOTES_QUESTION.match(text.strip())
+            if not match:
+                return False
+            pending["question_id"] = f"Question {int(match.group(1))}"
+            pending["prompt"] = _box_lines(match.group(2))
+            return True
+
+        def set_metadata(label: str, value: str) -> None:
+            key = _metadata_key(label)
+            if key and not metadata.get(key):
+                metadata[key] = value.strip()
+
+        def read_metadata_table(rows: List[List[str]]) -> None:
+            if max((len(cells) for cells in rows), default=0) == 1:
+                lines = [ln for cells in rows if cells for ln in _box_lines(cells[0])]
+                if not lines or note_question(lines[0]):
+                    return
+                label, colon, rest = lines[0].partition(":")
+                if colon and _metadata_key(label):
+                    set_metadata(label, "\n".join(([rest.strip()] if rest.strip() else []) + lines[1:]))
+                return
+            for cells in rows:
+                col = 0
+                while col < len(cells):
+                    text = cells[col]
+                    if text.endswith(":"):
+                        value = cells[col + 1] if col + 1 < len(cells) and not cells[col + 1].endswith(":") else ""
+                        set_metadata(text, "\n".join(_box_lines(value)))
+                        col += 2 if value else 1
+                        continue
+                    label, colon, rest = text.partition(":")
+                    if colon and rest.strip() and len(label.split()) <= _MAX_SPEAKER_WORDS:
+                        set_metadata(label, rest)
+                    col += 1
+
+        def row_entries(row_block: int, cells: List[str], cols: Dict[str, int], question_id: str) -> None:
+            def cell(role: str) -> str:
+                col = cols.get(role)
+                return cells[col] if col is not None and col < len(cells) else ""
+
+            # The themes label sits in the Key Points column (or column 0); its text and
+            # every other cell in row order form one themes turn.
+            for col in dict.fromkeys((cols["key_points"], 0)):
+                themes = _NOTES_THEMES.match(cells[col]) if col < len(cells) else None
+                if themes:
+                    parts = [cells[col][themes.end():]] + [c for i, c in enumerate(cells) if i != col]
+                    text = " ".join(p for p in (_join_lines(part) for part in parts) if p)
+                    if text:
+                        entries.append((row_block, NOTES_THEMES_SPEAKER, text, "themes_summary", question_id))
+                    return
+
+            # Each cell keeps its own "P#:" label. An unlabelled cell takes the row's
+            # label when the row names one participant, and is "Unknown" when the row
+            # names several (no reliable owner).
+            labelled: List[Tuple[str, Optional[str], str]] = []
+            for role, evidence_type in (("key_points", "key_point_paraphrase"),
+                                        ("notable_quotes", "notable_quote_verbatim"),
+                                        ("observations", "observation")):
+                raw = cell(role)
+                label = _NOTES_PARTICIPANT.match(raw)
+                labelled.append((evidence_type, label.group(1).upper() if label else None,
+                                 _join_lines(label.group(2) if label else raw)))
+            labels = set(pid for _, pid, _ in labelled if pid)
+            row_pid = next(iter(labels)) if len(labels) == 1 else "Unknown"
+            if len(labels) > 1:
+                mixed_label_rows.append(row_block)
+            for evidence_type, pid, text in labelled:
+                if text:
+                    entries.append((row_block, pid or row_pid, text, evidence_type, question_id))
+
+        for para, rows in blocks:
+            if rows is None:
+                location += 1
+                text = para.strip()
+                if _is_banner(text):
+                    self.last_fixture_banner_lines.append(location)
+                elif text and not note_question(text) and pending["question_id"]:
+                    pending["prompt"].extend(_box_lines(text))
+                continue
+
+            first_block = location + 1
+            location += len(rows)
+            banner_rows = [r_idx for r_idx, cells in enumerate(rows) if any(_is_banner(c) for c in cells)]
+            self.last_fixture_banner_lines.extend(first_block + r_idx for r_idx in banner_rows)
+            rows = [["" if _is_banner(c) else c for c in cells] for cells in rows]
+
+            found = _notes_columns(rows)
+            if found is None:
+                read_metadata_table(rows)
+                continue
+
+            header_idx, cols = found
+            notes_tables += 1
+            for cells in rows[:header_idx]:
+                note_question(next((c for c in cells if c), ""))
+            question_id = pending["question_id"] or f"Question {notes_tables}"
+            if pending["question_id"]:
+                questions[question_id] = "\n".join(pending["prompt"])
+            pending.update(question_id=None, prompt=[])
+            for r_idx in range(header_idx + 1, len(rows)):
+                if _notes_columns([rows[r_idx]]):
+                    continue  # header repeated on a new page
+                row_entries(first_block + r_idx, rows[r_idx], cols, question_id)
+
+        metadata["questions"] = questions
+        metadata["mixed_label_rows"] = mixed_label_rows
+        self.last_document_metadata[source_id] = metadata
+
+        kept = [e for e in entries if e[3] in self.include_evidence_types]
+        raw_entries = [(block, speaker, "", text) for block, speaker, text, _, _ in kept]
+        participant_ids = [f"{source_id}::{speaker}" for _, speaker, _, _, _ in kept]
+        unit_ids = participant_ids if self.notes_unit_level == "participant" else [source_id] * len(kept)
+        turns = self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=False)
+        for turn, (_, _, _, evidence_type, question_id), participant_id in zip(turns, kept, participant_ids):
+            if evidence_type == "themes_summary":
+                turn["is_facilitator"] = True
+            turn.update(
+                document_structure="focus_group_notes",
+                evidence_type=evidence_type,
+                question_id=question_id,
+                group_id=source_id,
+                participant_id=participant_id,
+            )
+        return turns
+
+    def _add_structure_keys(self, turns: List[Dict[str, Any]], structure: str) -> List[Dict[str, Any]]:
+        """Additive keys for a transcript or tabular parse (also on last_excluded_turns)."""
+        for record in turns + self.last_excluded_turns:
+            record.update(
+                document_structure=structure,
+                evidence_type="verbatim_turn",
+                question_id="",
+                group_id=record["source_id"],
+                participant_id=record["unit_id"],
+            )
+        return turns
+
+    # ------------------------------------------------------------------
     # Tabular formats
     # ------------------------------------------------------------------
     def parse_tabular(
@@ -751,7 +1042,9 @@ class UniversalTranscriptParser:
             raw_entries.append((line_number, speaker, "", str(text_value)))
             unit_ids.append(unit_id)
 
-        return self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=False)
+        self.last_document_metadata.pop(source_id, None)
+        turns = self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=False)
+        return self._add_structure_keys(turns, "tabular")
 
     def _read_csv(self, file_path: str) -> Tuple[pd.DataFrame, List[int]]:
         """

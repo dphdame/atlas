@@ -3,10 +3,17 @@
 Rebuilds the binary SOFTWARE_TEST fixtures byte-for-byte:
   data/samples/software_test_teams_multiline.docx  (python-docx)
   data/samples/software_test_survey.xlsx           (hand-written SpreadsheetML)
+  data/samples/software_test_gbi_group_treatment.docx  (python-docx)
+  data/samples/software_test_gbi_group_control.docx    (python-docx)
 
-The Word file mimics a speakerless Microsoft Teams export: every paragraph is a
-timestamp followed by line breaks and the spoken text. Its banner sits in the
+The Teams Word file mimics a speakerless Microsoft Teams export: every paragraph
+is a timestamp followed by line breaks and the spoken text. Its banner sits in the
 page header and core properties so it does not become a dialogue turn.
+
+The two gbi_group files are synthetic structured focus-group notes (metadata
+table, consent line, "Question N:" prompts each followed by a 3-column
+"Key Points | Notable Quotes | Observations" table, and closing summary boxes).
+Their banner is the first body paragraph; the parser records it and never emits it.
 
 Both builds run entirely in memory and never touch a temporary directory, so
 the byte-for-byte rebuild check also works on a read-only filesystem. (openpyxl
@@ -84,6 +91,145 @@ def build_docx_bytes() -> bytes:
     props.modified = FIXED_DATETIME
     for text in DOCX_PARAGRAPHS:
         document.add_paragraph(text)
+    buf = io.BytesIO()
+    document.save(buf)
+    return normalize_ooxml(buf.getvalue())
+
+
+# Synthetic structured focus-group notes (one file per group). Each question table
+# is "Key Points | Notable Quotes | Observations" with one row per participant and a
+# closing "Themes / Topics / Patterns:" row. The treatment file merges its themes row
+# across all three columns; the control file keeps three separate cells.
+GBI_NOTES_HEADER = ["Key Points", "Notable Quotes", "Observations"]
+GBI_GROUPS = {
+    "treatment": {
+        "path": SAMPLES / "software_test_gbi_group_treatment.docx",
+        "metadata": [
+            ["Project Name (s):", "SOFTWARE_TEST Enrollment Pilot", "", "Date:", "2026-01-15"],
+            ["Note Taker (s):", "Note Taker A", "", "Location:", "Community Room B"],
+            ["Focus Group Type:", "Treatment", "", "Number of Participants:", "4"],
+            ["Facilitator:", "Facilitator A", "", "", ""],
+        ],
+        "merge_themes": True,
+        "questions": [
+            (
+                ["Question 1: How did the enrollment process go for you?",
+                 "Follow-up: What made it easier or harder?"],
+                [
+                    ["P1: Gathered forms in one afternoon.", "\"The paperwork was simple once I had help.\"", ""],
+                    ["P2:Needed two trips to the office.\nBrought the wrong form the first time.",
+                     "I had to come back the next week.", "Laughed while describing the second trip."],
+                    ["P3:", "", ""],
+                    ["P4:", "", "Nodded along; did not speak to this item."],
+                ],
+                "Help from staff shortened the paperwork step.",
+            ),
+            (
+                ["Question 2: How long did you wait for an answer?", "Probe: Did anyone call you back?"],
+                [
+                    ["P1: About three weeks waiting.", "", ""],
+                    ["p2: No callback until the second month.",
+                     "“I kept checking the mailbox every day.”", ""],
+                    ["P3: Approved in the first week.", "", "Spoke quietly."],
+                    ["P4: Still waiting on a pending approval.", "Nobody told me what was missing.", ""],
+                ],
+                "Wait times varied from one week to two months.",
+            ),
+            (
+                ["Question 3: What would you change about the process?"],
+                [
+                    ["P1: A checklist before the first visit.", "", ""],
+                    ["P2: Evening office hours.", "", ""],
+                    ["P3: Text message reminders.", "\"A reminder would have saved me a trip.\"", ""],
+                    ["P4:", "", ""],
+                ],
+                "Participants asked for clearer advance instructions.",
+            ),
+        ],
+        "summary": ["Participants described staff help with forms as useful and wait times as uneven."],
+        "main_observations": ["1. Staff help mattered.\n2. Wait times varied.\n3. Reminders were requested.\n"
+                              "4. Evening hours were requested."],
+    },
+    "control": {
+        "path": SAMPLES / "software_test_gbi_group_control.docx",
+        "metadata": [
+            ["Project Name (s):", "SOFTWARE_TEST Enrollment Pilot", "", "Date:", "2026-01-22"],
+            ["Note Taker (s):", "Note Taker B", "", "Location:", "Community Room B"],
+            ["Focus Group Type:", "Control", "", "Number of Participants:", "3"],
+            ["Facilitator:", "Facilitator A", "", "", ""],
+        ],
+        "merge_themes": False,
+        "questions": [
+            (
+                ["Question 1: How did the enrollment process go for you?",
+                 "Follow-up: What made it easier or harder?"],
+                [
+                    ["P1: Filled out the forms alone at home.", "It took me most of a weekend.", ""],
+                    ["P2:Did not know which proof of income to bring.", "", "Looked frustrated."],
+                    ["P3:", "", ""],
+                ],
+                ["Themes / Topics / Patterns: Uncertainty about required documents.", "", ""],
+            ),
+            (
+                ["Question 2: How long did you wait for an answer?"],
+                [
+                    ["P1: Two weeks waiting.", "", ""],
+                    ["P2: Called three times before hearing back.", "\"Every call was a different person.\"", ""],
+                    ["P3: Has not heard back yet.", "I stopped calling after a month.", "Shrugged."],
+                ],
+                ["Themes / Topics / Patterns:", "Repeat calls were common.", ""],
+            ),
+        ],
+        "summary": ["Participants completed forms alone and waited two weeks or longer."],
+        "main_observations": ["1. Forms were completed alone.", "2. Required documents were unclear.",
+                              "3. Repeat calls were common."],
+    },
+}
+
+
+def _fill_table(table, rows) -> None:
+    for r_idx, row in enumerate(rows):
+        for c_idx, value in enumerate(row):
+            table.rows[r_idx].cells[c_idx].text = value
+
+
+def build_gbi_docx_bytes(group: str) -> bytes:
+    """Synthetic structured focus-group notes for group "treatment" or "control"."""
+    if group not in GBI_GROUPS:
+        raise ValueError(f"Unknown SOFTWARE_TEST focus group {group!r}; expected one of {sorted(GBI_GROUPS)}")
+    spec = GBI_GROUPS[group]
+    document = docx.Document()
+    props = document.core_properties
+    props.title = BANNER
+    props.comments = BANNER
+    props.author = "ATLAS SOFTWARE_TEST"
+    props.last_modified_by = "ATLAS SOFTWARE_TEST"
+    props.created = FIXED_DATETIME
+    props.modified = FIXED_DATETIME
+
+    document.add_paragraph(BANNER)
+    document.add_heading("SOFTWARE_TEST Focus Group Notes", level=1)
+    metadata = spec["metadata"]
+    _fill_table(document.add_table(rows=len(metadata), cols=len(metadata[0])), metadata)
+    document.add_paragraph("Consent: Verbal consent was read aloud and all participants agreed to note taking.")
+
+    for prompts, rows, themes in spec["questions"]:
+        for prompt in prompts:
+            document.add_paragraph(prompt)
+        table = document.add_table(rows=len(rows) + 2, cols=3)
+        _fill_table(table, [GBI_NOTES_HEADER] + rows)
+        last = table.rows[len(rows) + 1]
+        if spec["merge_themes"]:
+            last.cells[0].merge(last.cells[2]).text = f"Themes / Topics / Patterns: {themes}"
+        else:
+            for c_idx, value in enumerate(themes):
+                last.cells[c_idx].text = value
+
+    for label, key in (("Summary of Session (1-2 Sentences):", "summary"),
+                       ("Main Observations (4-5) Ideas:", "main_observations")):
+        lines = [label] + spec[key]
+        _fill_table(document.add_table(rows=len(lines), cols=1), [[line] for line in lines])
+
     buf = io.BytesIO()
     document.save(buf)
     return normalize_ooxml(buf.getvalue())
@@ -184,7 +330,11 @@ def build_xlsx_bytes() -> bytes:
 def build() -> list:
     DOCX_PATH.write_bytes(build_docx_bytes())
     XLSX_PATH.write_bytes(build_xlsx_bytes())
-    return [DOCX_PATH, XLSX_PATH]
+    paths = [DOCX_PATH, XLSX_PATH]
+    for group, spec in GBI_GROUPS.items():
+        spec["path"].write_bytes(build_gbi_docx_bytes(group))
+        paths.append(spec["path"])
+    return paths
 
 
 if __name__ == "__main__":
