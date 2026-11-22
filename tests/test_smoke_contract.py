@@ -441,22 +441,20 @@ class LauncherDamagedInterpreterTests(unittest.TestCase):
 UPLOAD_CODEBOOK = "sdoh_basic_needs.yaml"
 UPLOAD_MATCHING = b"Participant: The bus was late again and I missed work.\n"
 UPLOAD_NON_MATCHING = b"Participant: The weather was pleasant on the walk over.\n"
-MARKDOWN_IMAGE_DOMAIN = "Transit ![marker](https://example.invalid/pixel.png)"
+# Domain names that Streamlit's Markdown and post-parse shortcode plugins would rewrite
+# (image, logo shortcode, material icon, >= ligature, link, autolinks, math, color, HTML).
+MARKDOWN_IMAGE_DOMAIN = "Transit ![marker](https://example.invalid/pixel.png) :streamlit:"
+SHORTCODE_DOMAIN = ("Housing :material_home: Income >= poverty line [link](https://example.invalid/a) "
+                    "www.example.invalid someone@example.invalid $x+y$ :red[alert] :smile: *emph* <b>bold</b>")
 WORD_JOINER = "\u2060"
-# The literal-autolink patterns in Streamlit 1.67's StreamlitMarkdown bundle (JS \w is ASCII).
-GFM_AUTOLINK_LITERALS = (
-    re.compile(r"(https?://|www(?=\.))([-.\w]+)", re.IGNORECASE | re.ASCII),
-    re.compile(r"([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)", re.ASCII),
-)
-MARKDOWN_DOMAIN_CODEBOOK = (
-    'program_name: "SOFTWARE_TEST Markdown Domain"\n'
-    'version: "1.0"\n'
-    "topics:\n"
-    "  transit_markdown:\n"
-    '    label: "Transit ![marker](https://example.invalid/pixel.png)"\n'
-    "    keywords:\n"
-    '      - "bus"\n'
-).encode("utf-8")
+MARKDOWN_DOMAIN_CODEBOOK = yaml.safe_dump({
+    "program_name": "SOFTWARE_TEST Markdown Domain",
+    "version": "1.0",
+    "topics": {
+        "transit_markdown": {"label": MARKDOWN_IMAGE_DOMAIN, "keywords": ["bus"]},
+        "housing_shortcode": {"label": SHORTCODE_DOMAIN, "keywords": ["work"]},
+    },
+}, allow_unicode=True, sort_keys=False).encode("utf-8")
 
 
 class UploadNameCollisionTests(unittest.TestCase):
@@ -807,7 +805,7 @@ class ADAAccessibilityTests(unittest.TestCase):
             self.assertNotIn(banned, source)
         self.assertIsNone(re.search(r"\bst\.", source), "the helper must not call Streamlit")
 
-    # ---- Both live charts carry the summary as Vega-Lite description and caption ----
+    # ---- Both live charts carry the summary as Vega-Lite description and st.html ----
     def test_live_charts_carry_matching_summaries(self):
         import json
 
@@ -821,6 +819,7 @@ class ADAAccessibilityTests(unittest.TestCase):
         self.assertEqual(len(charts), 2)
         descriptions = [json.loads(c.proto.spec).get("description", "") for c in charts]
         captions = [c.value for c in at.caption]
+        html_bodies = [h.value for h in at.html]
         frames = [df.value for df in at.dataframe]
         freq = next(f for f in frames if {"domain_name", "prevalence_pct", "documents_reporting"} <= set(f.columns)
                     and "ci95_low_pct" not in f.columns)
@@ -831,66 +830,113 @@ class ADAAccessibilityTests(unittest.TestCase):
         self.assertIn(f"(1 of {n_units} units)", descriptions[0])
         self.assertNotIn("95% CI", descriptions[0])
         self.assertIn("95% CI", descriptions[1])
-        escape = self.escape()
+        to_html = self.summary_html()
         for text in descriptions:
             self.assertTrue(text.startswith(f"Horizontal bar chart across {n_units} analytical units"), text)
-            self.assertIn(f"Chart summary: {escape(text)}", captions)
+            self.assertIn(to_html(text), html_bodies)
+        self.assertFalse([c for c in captions if c.startswith("Chart summary:")],
+                         "chart summaries render through st.html, never a Markdown caption")
 
-    # ---- Visible captions are Markdown; uploaded domain names must stay literal -----
+    # ---- Visible summaries are literal HTML; uploaded domain names stay verbatim ----
     @staticmethod
-    def escape():
-        return load_app_helpers("escape_markdown_text")["escape_markdown_text"]
+    def summary_html():
+        return load_app_helpers("chart_summary_html")["chart_summary_html"]
 
     @staticmethod
-    def unescape(text):
-        """What the renderer passes on as text after resolving CommonMark backslash escapes."""
-        return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)
+    def parse_paragraph(markup):
+        """(tag names, attributes of the first tag, text) as an HTML parser reads markup."""
+        from html.parser import HTMLParser
 
-    def displayed(self, text):
-        """Visible glyphs: the resolved text without U+2060 WORD JOINER, which renders as nothing."""
-        return self.unescape(text).replace(WORD_JOINER, "")
+        class Reader(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.tags, self.attrs, self.text = [], [], []
 
-    def assert_inert(self, escaped):
-        """Every Markdown/Streamlit metacharacter in escaped is backslash-escaped."""
-        bare = re.sub(r"\\.", "", escaped)
-        self.assertIsNone(re.search(r"[\\\[\]()!*_`$~<>#|:+\-{}&@.]", bare), f"unescaped markup in {escaped!r}")
-        self.assertNotIn("\n", escaped)
-        self.assertNotIn("\r", escaped)
-        # Streamlit's GFM autolink literals run on text after escapes resolve (StreamlitMarkdown bundle).
-        for pattern in GFM_AUTOLINK_LITERALS:
-            self.assertIsNone(pattern.search(self.unescape(escaped)), f"autolink forms in {escaped!r}")
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+                self.attrs.append(dict(attrs))
 
-    def test_escape_markdown_text_neutralizes_inline_markup(self):
-        escape = self.escape()
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+
+            def handle_data(self, data):
+                self.text.append(data)
+
+        reader = Reader()
+        reader.feed(markup)
+        reader.close()
+        return reader.tags, (reader.attrs[0] if reader.attrs else {}), "".join(reader.text)
+
+    def assert_literal_paragraph(self, markup, summary):
+        tags, attrs, text = self.parse_paragraph(markup)
+        self.assertEqual(tags, ["p"], f"exactly one <p> and no child elements in {markup!r}")
+        self.assertEqual(attrs.get("class"), "atlas-chart-summary")
+        self.assertEqual(text, f"Chart summary: {summary}")
+        self.assertNotIn(WORD_JOINER, markup)
+        self.assertTrue(markup.endswith("</p>"))
+
+    def test_chart_summary_html_is_one_escaped_paragraph(self):
+        to_html = self.summary_html()
+        self.assertEqual(to_html("Plain words 50 units"), (
+            '<p class="atlas-chart-summary" style="font-size:0.875rem;color:#475569;'
+            'margin:0.25rem 0 0.5rem;line-height:1.45;">Chart summary: Plain words 50 units</p>'))
+        out = to_html("a & b < c > d \" e ' f")
+        self.assertIn("Chart summary: a &amp; b &lt; c &gt; d &quot; e &#x27; f</p>", out)
         payloads = [
-            MARKDOWN_IMAGE_DOMAIN,
-            "[link](https://example.invalid)",
-            "bare https://example.invalid/x and www.example.invalid and someone@example.invalid",
-            "$x+y$", ":red[alert]", ":material/home: and :smile:", "<img src=x>", "*emph* _u_ ~~s~~ `code`",
-            "a | b # c {d} e+f g-h", "C:\\path\\to [x]", "&amp; &#58;",
+            MARKDOWN_IMAGE_DOMAIN, SHORTCODE_DOMAIN,
+            "[link](https://example.invalid)", "bare https://example.invalid/x and someone@example.invalid",
+            ":streamlit: :material_home: :material/home: >= <= -> <-", "<img src=x onerror=alert(1)>",
+            "<script>alert(1)</script>", "&amp; &#58; &lt;b&gt;", "C:\\path\\to [x] | # {d} e+f",
         ]
         for payload in payloads:
             with self.subTest(payload=payload):
-                out = escape(payload)
-                self.assert_inert(out)
-                self.assertEqual(self.displayed(out), payload, "escaping must not change the displayed text")
-        self.assertTrue(escape(MARKDOWN_IMAGE_DOMAIN).startswith("Transit \\!\\[marker\\]\\("))
-        self.assertTrue(escape("[link](https://example.invalid)").startswith("\\[link\\]\\(https\\:"))
-        self.assertEqual(escape("HTTPS://x www.y a@b.c"),
-                         f"HTTPS\\:{WORD_JOINER}\\/\\/x www{WORD_JOINER}\\.y a\\@{WORD_JOINER}b\\.c")
-        self.assertEqual(escape("$x+y$"), "\\$x\\+y\\$")
-        self.assertEqual(escape(":red[alert]"), "\\:red\\[alert\\]")
-        self.assertEqual(escape("<img src=x>"), "\\<img src\\=x\\>")
-        self.assertEqual(escape("C:\\d"), "C\\:\\\\d", "the backslash itself is escaped first")
-        self.assertEqual(escape("Plain words 50 units"), "Plain words 50 units")
-        self.assertEqual(escape(""), "")
+                markup = to_html(payload)
+                self.assert_literal_paragraph(markup, payload)
+                inner = markup[markup.index(">") + 1:-len("</p>")]
+                self.assertIsNone(re.search(r"[<>\"']", inner), f"unescaped HTML metacharacter in {inner!r}")
+                self.assertEqual(html.unescape(inner), f"Chart summary: {payload}")
+        for literal in (":streamlit:", ":material_home:", "&gt;=", "![marker](https://example.invalid/pixel.png)",
+                        "&lt;b&gt;bold&lt;/b&gt;", "$x+y$", ":red[alert]"):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, to_html(MARKDOWN_IMAGE_DOMAIN + " " + SHORTCODE_DOMAIN))
+        self.assertNotIn("\\", to_html(SHORTCODE_DOMAIN), "no Markdown backslash escapes")
 
-    def test_escape_markdown_text_collapses_line_breaks(self):
-        escape = self.escape()
-        out = escape("Transit\n# Heading\r\n- item\r> quote\n\n1. step")
-        self.assert_inert(out)
-        self.assertEqual(self.displayed(out), "Transit # Heading - item > quote 1. step")
-        self.assertEqual(escape("a\u2028b\u2029c\x0bd\x0ce\x85f"), "a b c d e f")
+    def test_chart_summary_html_collapses_line_breaks(self):
+        to_html = self.summary_html()
+        markup = to_html("Transit\n# Heading\r\n- item\r> quote\n\n1. step")
+        self.assert_literal_paragraph(markup, "Transit # Heading - item > quote 1. step")
+        self.assert_literal_paragraph(to_html("a\u2028b\u2029c\x0bd\x0ce\x85f"), "a b c d e f")
+        self.assertNotIn("\n", markup)
+        self.assertNotIn("\r", markup)
+
+    def test_chart_summary_text_contrast_meets_wcag_aa(self):
+        def luminance(hex_color):
+            channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+        color = re.search(r"color:(#[0-9A-Fa-f]{6})", self.summary_html()("x")).group(1)
+        ratio = (luminance("#FFFFFF") + 0.05) / (luminance(color) + 0.05)
+        self.assertGreaterEqual(ratio, 4.5, f"{color} on white is {ratio:.2f}:1")
+
+    def test_summaries_use_single_positional_st_html_and_no_markdown_caption(self):
+        source = (REPO / "app.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        self.assertNotIn("escape_markdown_text", source)
+        html_calls = sorted((n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "st.html"),
+                            key=lambda n: n.lineno)
+        self.assertEqual(len(html_calls), 2, "Tab 1 and Tab 2 each render one chart summary")
+        for call, arg in zip(html_calls, ("freq_summary", "ci_summary")):
+            with self.subTest(line=call.lineno):
+                # Streamlit 1.40's st.html(body) has no width=; pass the body positionally only.
+                self.assertEqual(call.keywords, [])
+                self.assertEqual([ast.unparse(a) for a in call.args], [f"chart_summary_html({arg})"])
+        for call in ast.walk(tree):
+            if isinstance(call, ast.Call) and ast.unparse(call.func) in ("st.caption", "st.markdown", "st.write"):
+                self.assertNotIn("Chart summary", ast.unparse(call), f"app.py:{call.lineno}")
+        first = next(iter(inspect.signature(st.html).parameters.values()))
+        self.assertEqual(first.name, "body")
+        self.assertIn(first.kind, (first.POSITIONAL_ONLY, first.POSITIONAL_OR_KEYWORD))
 
     def test_describe_tolerates_missing_numbers(self):
         import pandas as pd
@@ -907,7 +953,26 @@ class ADAAccessibilityTests(unittest.TestCase):
         self.assertIn("Domains with 0% prevalence: 1 of 3.", text, "a missing count is not a reporting unit")
         self.assertTrue(pd.isna(df.loc[0, "prevalence_pct"]), "the helper must not modify its input")
 
-    def test_markdown_domain_name_is_literal_in_both_captions(self):
+    def test_describe_tolerates_nullable_pd_na(self):
+        import pandas as pd
+
+        df = self.frame([("A", "SOFTWARE_TEST Alpha", 2, pd.NA, pd.NA, 50.0),
+                         ("B", "SOFTWARE_TEST Beta", pd.NA, 10.0, 0.0, 30.0),
+                         ("C", "SOFTWARE_TEST Gamma", 1, 10.0, pd.NA, 40.0)], ci=True)
+        df["documents_reporting"] = df["documents_reporting"].astype("Int64")
+        for col in ("prevalence_pct", "ci95_low_pct", "ci95_high_pct"):
+            df[col] = df[col].astype("Float64")
+        before = df.copy()
+        text = self.describe(df, 10, include_ci=True)
+        self.assertNotIn("nan", text.lower())
+        self.assertNotIn("<na>", text.lower())
+        self.assertIn("SOFTWARE_TEST Gamma 10.0% (1 of 10 units, 95% CI n/a–40.0%)", text)
+        self.assertIn("SOFTWARE_TEST Alpha n/a (2 of 10 units, 95% CI n/a–50.0%)", text)
+        self.assertIn("Domains with 0% prevalence: 1 of 3.", text, "pd.NA count is not a reporting unit")
+        self.assertTrue(df.equals(before), "the helper must not modify its input")
+        self.assertNotIn("95% CI", self.describe(df, 10))
+
+    def test_markdown_domain_names_are_literal_in_both_summaries(self):
         import json
 
         at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
@@ -927,18 +992,21 @@ class ADAAccessibilityTests(unittest.TestCase):
 
         descriptions = [json.loads(c.proto.spec).get("description", "") for c in at.get("vega_lite_chart")]
         self.assertEqual(len(descriptions), 2)
-        summaries = [c.value for c in at.caption if c.value.startswith("Chart summary: ")]
-        self.assertEqual(len(summaries), 2, "Tab 1 and Tab 2 each carry one chart-summary caption")
-        for description, caption in zip(descriptions, summaries):
-            with self.subTest(caption=caption):
-                # Vega-Lite description: plain text, the domain name verbatim.
-                self.assertIn(f"{MARKDOWN_IMAGE_DOMAIN} 100.0% (1 of 1 unit", description)
-                # Visible caption: the same text, escaped so Markdown displays it literally.
-                self.assertNotIn("![marker](", caption)
-                self.assertNotIn("](https://", caption)
-                self.assertEqual(caption, f"Chart summary: {self.escape()(description)}")
-                self.assert_inert(caption[len("Chart summary: "):])
-                self.assertEqual(self.displayed(caption), f"Chart summary: {description}")
+        self.assertFalse([c.value for c in at.caption if c.value.startswith("Chart summary:")],
+                         "no chart summary passes through a Markdown caption")
+        summaries = [h.value for h in at.html if "atlas-chart-summary" in h.value]
+        self.assertEqual(len(summaries), 2, "Tab 1 and Tab 2 each carry one st.html chart summary")
+        to_html = self.summary_html()
+        for description, markup in zip(descriptions, summaries):
+            with self.subTest(markup=markup):
+                # Vega-Lite description: plain text, both domain names verbatim.
+                for name in (MARKDOWN_IMAGE_DOMAIN, SHORTCODE_DOMAIN):
+                    self.assertIn(f"{name} 100.0% (1 of 1 unit", description)
+                self.assertNotIn("&lt;", description)
+                self.assertNotIn("\\", description)
+                # Visible summary: the same text as one literal, HTML-escaped paragraph.
+                self.assertEqual(markup, to_html(description))
+                self.assert_literal_paragraph(markup, description)
 
 
 class ReadmeCommandTests(unittest.TestCase):

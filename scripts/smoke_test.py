@@ -910,13 +910,16 @@ BROWSER_UPLOAD_LINES = [
 ]
 UPLOAD_OPTION = re.compile(r"^Upload Custom Files")
 CODEBOOK_UPLOAD_OPTION = "Upload Custom Codebook (.yaml)"
-# Domain names a custom codebook can carry. Chart captions render Markdown, so each must
-# display verbatim: no image fetch, no link, no math, no color directive, no emphasis.
+# Domain names a custom codebook can carry. Streamlit's Markdown and shortcode plugins would
+# turn them into an image, logo, icon, link, math, color or emphasis; the st.html chart
+# summaries must display each one verbatim.
 MARKDOWN_DOMAINS = {
-    "portal": "Transit ![marker](https://example.invalid/pixel.png)",
-    "schedule": ("Benefit [link](https://example.invalid/a) www.example.invalid someone@example.invalid "
-                 "$x+y$ :red[alert] :smile: *emph* <b>bold</b>"),
+    "portal": "Transit ![marker](https://example.invalid/pixel.png) :streamlit:",
+    "schedule": ("Housing :material_home: Income >= poverty line [link](https://example.invalid/a) "
+                 "www.example.invalid someone@example.invalid $x+y$ :red[alert] :smile: *emph* <b>bold</b>"),
 }
+SUMMARY_SELECTOR = '[data-testid="stHtml"] p.atlas-chart-summary'
+SUMMARY_MARKUP = 'img, [role="img"], a, b, em, strong, code, .katex, [style*="color"], script'
 MARKDOWN_CODEBOOK_NAME = "software_test_markdown_domains.yaml"
 KPI_LABELS = ("Analytical Units (N)", "Participant Turns", "Active Domains", "Matched Turn Mentions")
 AUDIT_STAMP = "ATLAS VERIFICATION AUDIT STAMP"
@@ -1017,8 +1020,8 @@ def browser_check(url: str, scratch: Path) -> list[str]:
     """
     Drive the live app at url in headless Chromium: boot render, a transcript
     upload that recomputes the KPIs and domain table, the .xlsx / manifest
-    downloads, and Markdown domain names that both chart captions must show
-    verbatim. Every expected number comes from AtlasEngine run here on the same
+    downloads, and Markdown/shortcode domain names that both st.html chart
+    summaries must show verbatim. Every expected number comes from AtlasEngine run here on the same
     SOFTWARE_TEST inputs.
     """
     sys.path.insert(0, str(REPO))
@@ -1073,11 +1076,10 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         return ""
 
     def summary_caption(page) -> str:
-        """Visible text of the 'Chart summary:' caption in the open tab. The caption puts an
-        invisible U+2060 WORD JOINER inside https://, www. and @ to stop autolinking."""
-        for caption in page.locator('[data-testid="stCaptionContainer"]').all():
-            if caption.is_visible():
-                text = caption.inner_text().replace("\u2060", "").strip()
+        """Visible text of the st.html chart-summary paragraph in the open tab, unmodified."""
+        for summary in page.locator(SUMMARY_SELECTOR).all():
+            if summary.is_visible():
+                text = summary.inner_text().strip()
                 if text.startswith("Chart summary:"):
                     return text
         return ""
@@ -1177,22 +1179,24 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             xlsx = download(page, re.compile(r"actuarial_parameter_matrix\.xlsx"), scratch / "downloaded.xlsx")
             manifest_path = download(page, re.compile(r"provenance_manifest\.json"), scratch / "downloaded.json")
 
-            # 4. A custom codebook whose domain names are Markdown: both chart captions show them verbatim.
+            # 4. A custom codebook whose domain names are Markdown and Streamlit shortcodes: both
+            #    st.html chart summaries show them verbatim.
             page.get_by_role("combobox", name="Active YAML Codebook").click()
             page.get_by_role("option", name=CODEBOOK_UPLOAD_OPTION).click()
             page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION).locator(
                 "input[type='file']").set_input_files(str(markdown_codebook))
             for tab in ("Tab 1", "Tab 2"):
                 page.get_by_role("tab", name=re.compile(tab)).click()
-                wait_for(page, f"markdown domains: {tab} chart caption shows both names verbatim",
+                wait_for(page, f"markdown domains: {tab} chart summary shows both names verbatim",
                          lambda p: all(name in summary_caption(p) for name in MARKDOWN_DOMAINS.values()), True)
                 caption = summary_caption(page)
-                check(f"markdown domains: {tab} caption has no escape backslashes", "\\" not in caption, caption)
+                check(f"markdown domains: {tab} summary has no escape backslashes", "\\" not in caption, caption)
+                check(f"markdown domains: {tab} summary has no invisible U+2060", "⁠" not in caption, caption)
                 markup = page.evaluate(
-                    "() => [...document.querySelectorAll('[data-testid=\"stCaptionContainer\"]')]"
+                    "([sel, bad]) => [...document.querySelectorAll(sel)]"
                     ".filter(c => c.innerText.startsWith('Chart summary:') && c.offsetParent !== null)"
-                    ".map(c => c.querySelectorAll('img, a, b, em, strong, code, .katex, [style*=\"color\"]').length)")
-                check(f"markdown domains: {tab} caption renders no image, link, math, color or emphasis",
+                    ".map(c => c.querySelectorAll(bad).length)", [SUMMARY_SELECTOR, SUMMARY_MARKUP])
+                check(f"markdown domains: {tab} summary renders no image, icon, link, math, color, emphasis or script",
                       markup == [0], repr(markup))
             leaked = page.locator("img[src*='example.invalid'], a[href*='example.invalid']").count()
             check("markdown domains: no example.invalid image or link anywhere in the page", leaked == 0, str(leaked))

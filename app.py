@@ -219,7 +219,7 @@ def describe_prevalence_chart(
 ) -> str:
     """
     Plain-text summary of a domain-prevalence bar chart for screen readers (the Vega-Lite
-    description) and the visible caption. Deterministic: built only from df, which needs
+    description) and the visible chart summary. Deterministic: built only from df, which needs
     domain_name, documents_reporting and prevalence_pct (plus ci95_low_pct and
     ci95_high_pct when include_ci). Lists the three highest-prevalence matched domains,
     ordered by prevalence descending, then domain name.
@@ -234,17 +234,18 @@ def describe_prevalence_chart(
 
     def pct(value):
         try:
-            value = float(value)
+            value = float(value) if pd.notna(value) else math.nan
         except (TypeError, ValueError):
             return "n/a"
         return f"{value:.1f}%" if math.isfinite(value) else "n/a"
 
-    # A missing count is no reporting unit; a missing percentage reads "n/a", never "nan%".
+    # A missing count (NaN or nullable pd.NA) is no reporting unit; a missing percentage
+    # reads "n/a", never "nan%".
     rows = df.assign(
         _name=df["domain_name"].astype(str),
         _prevalence=pd.to_numeric(df["prevalence_pct"], errors="coerce"),
         _reporting=pd.to_numeric(df["documents_reporting"], errors="coerce").map(
-            lambda v: int(v) if math.isfinite(v) else 0),
+            lambda v: int(v) if pd.notna(v) and math.isfinite(float(v)) else 0),
     ).sort_values(["_prevalence", "_name"], ascending=[False, True], kind="mergesort", na_position="last")
     matched = rows[rows["_reporting"] > 0]
     if matched.empty:
@@ -265,20 +266,20 @@ def describe_prevalence_chart(
     return text
 
 
-def escape_markdown_text(text: str) -> str:
+def chart_summary_html(summary: str) -> str:
     """
-    Text that Streamlit's Markdown renderer (st.caption, st.markdown) displays
-    verbatim. Every ASCII punctuation character gets a CommonMark backslash
-    escape (backslash included), so no image, link, autolink, math, color
-    directive, emphasis or HTML can form; line breaks become one space so no
-    block (heading, list, quote) can start. GFM autolink literals (an http or
-    https scheme, www., name@host) are matched after escapes resolve, so an
-    invisible U+2060 WORD JOINER goes inside each. Use it on visible text built from uploaded
-    names; the Vega-Lite description keeps the plain text.
+    Literal HTML paragraph for a chart summary rendered via st.html(). Every
+    HTML metacharacter (& < > " ') is escaped and line breaks collapse to one space, so text
+    built from uploaded names never reaches Streamlit's Markdown, GFM autolink
+    or shortcode plugins and displays verbatim. The Vega-Lite description keeps
+    the plain text. #475569 on white is 7.58:1 (WCAG AA needs 4.5:1).
     """
-    single_line = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", str(text))
-    unlinked = re.sub(r"(?i)https?:(?=//)|www(?=\.)|@", lambda m: m.group(0) + "\u2060", single_line)
-    return re.sub(r"([!-/:-@\[-`{-~])", r"\\\1", unlinked)
+    single_line = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", str(summary))
+    return (
+        '<p class="atlas-chart-summary" style="font-size:0.875rem;color:#475569;'
+        'margin:0.25rem 0 0.5rem;line-height:1.45;">'
+        f"Chart summary: {html.escape(single_line, quote=True)}</p>"
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -650,7 +651,7 @@ with tab_thematic:
                 (chart + labels).properties(height=max(160, 42 * len(freq)), description=freq_summary),
                 **stretch_kwargs(st.altair_chart),
             )
-            st.caption(f"Chart summary: {escape_markdown_text(freq_summary)}")
+            st.html(chart_summary_html(freq_summary))
             st.caption("Bar labels show matching participant turns per domain.")
             st.markdown("##### Domain frequency table")
             st.dataframe(
@@ -818,7 +819,7 @@ with tab_econometric:
             (bars + whiskers).properties(height=max(160, 42 * len(matrix)), description=ci_summary),
             **stretch_kwargs(st.altair_chart),
         )
-        st.caption(f"Chart summary: {escape_markdown_text(ci_summary)}")
+        st.html(chart_summary_html(ci_summary))
         st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
         st.dataframe(
             matrix, **stretch_kwargs(st.dataframe), hide_index=True,
