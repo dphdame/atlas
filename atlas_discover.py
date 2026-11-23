@@ -14,6 +14,7 @@ rename and fence; they are not findings.
 """
 
 import unicodedata
+import warnings
 from typing import Any, Dict, List, Sequence, Union
 
 import numpy as np
@@ -22,6 +23,7 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 DISCOVERY_METHODS = ("nmf", "lda")
+_DENSE_NMF_CELL_LIMIT = 4_000_000
 
 EN_STOPWORDS = frozenset("""
 a about above after again against all also am an and any are aren as at be because been before being below
@@ -85,6 +87,38 @@ def _tie_key(record: Dict[str, Any]):
     return (1, 0, str(turn_id), record["index"])
 
 
+def _fit_nmf_stable(matrix, k: int, random_state: int):
+    """Fit NMF without sparse Frobenius-norm cancellation warnings.
+
+    In scikit-learn's sparse `_beta_divergence(beta=2)`, `(||X||^2 + ||WH||^2 - 2<X,WH>)/2`
+    can round to `-1e-16` on exact-rank fits and trigger `np.sqrt(res * 2)` RuntimeWarning.
+    Dense inputs compute `squared_norm(X - W @ H) / 2` (strictly non-negative).
+    """
+    use_dense = (matrix.shape[0] * matrix.shape[1]) <= _DENSE_NMF_CELL_LIMIT
+    nmf_input = matrix.toarray() if use_dense else matrix
+    nmf_init = "nndsvda" if k <= min(nmf_input.shape[0], nmf_input.shape[1]) else "random"
+
+    def _run(init_mode: str):
+        model = NMF(n_components=k, init=init_mode, max_iter=400, random_state=random_state)
+        if use_dense:
+            doc_topic = model.fit_transform(nmf_input)
+        else:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"invalid value encountered in sqrt",
+                    category=RuntimeWarning,
+                    module=r"sklearn\.decomposition\._nmf",
+                )
+                doc_topic = model.fit_transform(nmf_input)
+        return doc_topic, model.components_
+
+    doc_topic, components = _run(nmf_init)
+    if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
+        doc_topic, components = _run("random")
+    return doc_topic, components
+
+
 def discover_topics(
     turns: Sequence[Union[Dict[str, Any], str]],
     n_topics: int = 5,
@@ -146,14 +180,7 @@ def discover_topics(
             doc_topic = np.ones((len(docs), 1), dtype=float)
             components = corpus_weights.reshape(1, -1)
         else:
-            nmf_init = "nndsvda" if k <= min(matrix.shape[0], matrix.shape[1]) else "random"
-            model = NMF(n_components=k, init=nmf_init, max_iter=400, random_state=random_state)
-            doc_topic = model.fit_transform(matrix)
-            components = model.components_
-            if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
-                model = NMF(n_components=k, init="random", max_iter=400, random_state=random_state)
-                doc_topic = model.fit_transform(matrix)
-                components = model.components_
+            doc_topic, components = _fit_nmf_stable(matrix, k, random_state)
     else:
         counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
         counts = counter.fit_transform(docs)

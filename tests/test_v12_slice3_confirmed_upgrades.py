@@ -59,16 +59,20 @@ class DiscoveryMethodTests(unittest.TestCase):
 
     def test_rank_deficient_duplicate_turns_produce_finite_nmf_outputs(self):
         import math
+        import warnings
         cases = (
             (["rent landlord", "rent landlord"], 2, 1),
             (["rent", "rent", "rent"], 3, 1),
             (["rent", "Rent.", "RENT!"], 3, 1),
             (["rent", "rent", "bus"], 3, 2),
+            (["rent eviction landlord lease", "bus commute transit fare"] * 3, 2, 2),
         )
         for method in ("nmf", "lda"):
             for texts, k, expected_topics in cases:
                 with self.subTest(method=method, texts=texts, k=k):
-                    res = atlas_discover.discover_topics(texts, n_topics=k, method=method)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("error", RuntimeWarning)
+                        res = atlas_discover.discover_topics(texts, n_topics=k, method=method)
                     self.assertEqual(res["n_analyzed"], len(texts))
                     self.assertEqual(len(res["topics"]), expected_topics)
                     self.assertEqual(sum(t["turn_count"] for t in res["topics"]), len(texts))
