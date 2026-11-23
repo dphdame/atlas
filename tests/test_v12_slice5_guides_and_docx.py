@@ -149,10 +149,33 @@ class GuideDocxConversionTests(unittest.TestCase):
                     )
                 if doc.inline_shapes:
                     from docx.enum.section import WD_ORIENT
+                    from docx.oxml.ns import qn
+
                     self.assertTrue(
                         any(s.orientation == WD_ORIENT.LANDSCAPE for s in doc.sections),
                         f"{filename}: figures must be placed on landscape pages",
                     )
+                    # Every OOXML section must contain real content (no empty portrait pages
+                    # between consecutive figures or trailing blank sections).
+                    sections_content = []
+                    cur = []
+                    for child in doc.element.body:
+                        tag = child.tag.split("}")[-1]
+                        if tag == "sectPr":
+                            sections_content.append(cur)
+                            cur = []
+                            continue
+                        has_drawing = any(e.tag.endswith("}drawing") for e in child.iter())
+                        text = "".join(child.itertext()).strip()
+                        if tag == "tbl" or has_drawing or text:
+                            cur.append((tag, has_drawing, text))
+                        p_pr = child.find(qn("w:pPr"))
+                        if p_pr is not None and p_pr.find(qn("w:sectPr")) is not None:
+                            sections_content.append(cur)
+                            cur = []
+                    self.assertEqual(len(sections_content), len(doc.sections), filename)
+                    for idx, items in enumerate(sections_content):
+                        self.assertTrue(items, f"{filename}: section {idx} is empty (blank page regression)")
                 # Guides with Markdown tables must produce native Word tables.
                 if "| :--- |" in md_text:
                     self.assertGreater(len(doc.tables), 0, f"{filename}: Markdown tables not converted to Word tables")

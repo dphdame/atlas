@@ -991,6 +991,20 @@ def markdown_to_docx_bytes(md_text, base_dir):
     checkbox_pat = re.compile(r"^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$")
     bullet_pat = re.compile(r"^(\s*)[-*]\s+(.*)$")
     num_pat = re.compile(r"^(\s*)(\d+)\.\s+(.*)$")
+    in_landscape = False
+
+    def _ensure_portrait():
+        nonlocal in_landscape
+        if in_landscape:
+            sec_back = document.add_section(WD_SECTION.NEW_PAGE)
+            sec_back.orientation = WD_ORIENT.PORTRAIT
+            sec_back.page_width = Inches(8.5)
+            sec_back.page_height = Inches(11.0)
+            sec_back.top_margin = Inches(0.8)
+            sec_back.bottom_margin = Inches(0.8)
+            sec_back.left_margin = Inches(0.85)
+            sec_back.right_margin = Inches(0.85)
+            in_landscape = False
 
     while i < n:
         raw = lines[i]
@@ -999,6 +1013,81 @@ def markdown_to_docx_bytes(md_text, base_dir):
         if not stripped:
             i += 1
             continue
+
+        # Standalone image embed: place wide figures on a US Letter Landscape page
+        # (10.0" x 6.85" max image box) so 22 CSS-px labels render at >= 11.0 pt on page.
+        # Handled before _ensure_portrait() so consecutive figures never insert an empty portrait page.
+        im = img_pat.match(stripped)
+        if im:
+            alt_text, rel_target = im.group(1).strip(), im.group(2).strip()
+            candidate = (root / rel_target).resolve()
+            if (
+                candidate.is_relative_to(root)
+                and candidate.is_file()
+                and candidate.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ):
+                caption_text = None
+                if i + 1 < n and lines[i + 1].strip().startswith("*") and not lines[i + 1].strip().startswith("**"):
+                    cap_parts = []
+                    j = i + 1
+                    while (
+                        j < n
+                        and lines[j].strip()
+                        and not lines[j].strip().startswith(("#", "|", ">", "```", "!["))
+                    ):
+                        cap_parts.append(lines[j].strip())
+                        j += 1
+                        if cap_parts[-1].endswith("*"):
+                            break
+                    if cap_parts and cap_parts[-1].endswith("*"):
+                        caption_text = " ".join(cap_parts)
+                        i = j - 1
+
+                if document.paragraphs or document.tables:
+                    sec_fig = document.add_section(WD_SECTION.NEW_PAGE)
+                else:
+                    sec_fig = document.sections[0]
+                sec_fig.orientation = WD_ORIENT.LANDSCAPE
+                sec_fig.page_width = Inches(11.0)
+                sec_fig.page_height = Inches(8.5)
+                sec_fig.top_margin = Inches(0.45)
+                sec_fig.bottom_margin = Inches(0.45)
+                sec_fig.left_margin = Inches(0.5)
+                sec_fig.right_margin = Inches(0.5)
+                in_landscape = True
+
+                dims = _png_pixel_size(candidate)
+                if dims and dims[0] > 0 and dims[1] > 0:
+                    disp_w = dims[0] * min(10.0 / dims[0], 6.85 / dims[1])
+                else:
+                    disp_w = 9.5
+
+                p = document.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(4)
+                p.paragraph_format.keep_with_next = True
+                run = p.add_run()
+                run.add_picture(str(candidate), width=Inches(disp_w))
+                _set_picture_alt_text(run, alt_text)
+
+                cap_source = caption_text or alt_text
+                if cap_source:
+                    cap = document.add_paragraph()
+                    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    cap.paragraph_format.space_before = Pt(0)
+                    cap.paragraph_format.space_after = Pt(4)
+                    _add_inline_markdown_runs(
+                        cap,
+                        cap_source,
+                        base_color=slate_rgb,
+                        base_italic=caption_text is None,
+                        font_size=10.0,
+                    )
+            i += 1
+            continue
+
+        _ensure_portrait()
 
         # Fenced code block
         if stripped.startswith("```"):
@@ -1049,87 +1138,6 @@ def markdown_to_docx_bytes(md_text, base_dir):
             size = {1: 18.0, 2: 14.0, 3: 11.5, 4: 10.5}[lvl]
             color = {1: navy_rgb, 2: navy_rgb, 3: teal_rgb, 4: slate_rgb}[lvl]
             _add_inline_markdown_runs(p, hm.group(2).strip(), base_color=color, base_bold=True, font_size=size)
-            i += 1
-            continue
-
-        # Standalone image embed: place wide figures on a US Letter Landscape page
-        # (10.0" x 6.85" max image box) so 22 CSS-px labels render at >= 11.0 pt on page.
-        im = img_pat.match(stripped)
-        if im:
-            alt_text, rel_target = im.group(1).strip(), im.group(2).strip()
-            candidate = (root / rel_target).resolve()
-            if (
-                candidate.is_relative_to(root)
-                and candidate.is_file()
-                and candidate.suffix.lower() in {".png", ".jpg", ".jpeg"}
-            ):
-                caption_text = None
-                if i + 1 < n and lines[i + 1].strip().startswith("*") and not lines[i + 1].strip().startswith("**"):
-                    cap_parts = []
-                    j = i + 1
-                    while (
-                        j < n
-                        and lines[j].strip()
-                        and not lines[j].strip().startswith(("#", "|", ">", "```", "!["))
-                    ):
-                        cap_parts.append(lines[j].strip())
-                        j += 1
-                        if cap_parts[-1].endswith("*"):
-                            break
-                    if cap_parts and cap_parts[-1].endswith("*"):
-                        caption_text = " ".join(cap_parts)
-                        i = j - 1
-
-                if document.paragraphs or document.tables:
-                    sec_fig = document.add_section(WD_SECTION.NEW_PAGE)
-                else:
-                    sec_fig = document.sections[0]
-                sec_fig.orientation = WD_ORIENT.LANDSCAPE
-                sec_fig.page_width = Inches(11.0)
-                sec_fig.page_height = Inches(8.5)
-                sec_fig.top_margin = Inches(0.45)
-                sec_fig.bottom_margin = Inches(0.45)
-                sec_fig.left_margin = Inches(0.5)
-                sec_fig.right_margin = Inches(0.5)
-
-                dims = _png_pixel_size(candidate)
-                if dims and dims[0] > 0 and dims[1] > 0:
-                    disp_w = dims[0] * min(10.0 / dims[0], 6.85 / dims[1])
-                else:
-                    disp_w = 9.5
-
-                p = document.add_paragraph()
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(2)
-                p.paragraph_format.space_after = Pt(4)
-                p.paragraph_format.keep_with_next = True
-                run = p.add_run()
-                run.add_picture(str(candidate), width=Inches(disp_w))
-                _set_picture_alt_text(run, alt_text)
-
-                cap_source = caption_text or alt_text
-                if cap_source:
-                    cap = document.add_paragraph()
-                    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    cap.paragraph_format.space_before = Pt(0)
-                    cap.paragraph_format.space_after = Pt(4)
-                    _add_inline_markdown_runs(
-                        cap,
-                        cap_source,
-                        base_color=slate_rgb,
-                        base_italic=caption_text is None,
-                        font_size=10.0,
-                    )
-
-                if any(ln.strip() for ln in lines[i + 1 :]):
-                    sec_back = document.add_section(WD_SECTION.NEW_PAGE)
-                    sec_back.orientation = WD_ORIENT.PORTRAIT
-                    sec_back.page_width = Inches(8.5)
-                    sec_back.page_height = Inches(11.0)
-                    sec_back.top_margin = Inches(0.8)
-                    sec_back.bottom_margin = Inches(0.8)
-                    sec_back.left_margin = Inches(0.85)
-                    sec_back.right_margin = Inches(0.85)
             i += 1
             continue
 
