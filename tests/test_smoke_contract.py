@@ -235,10 +235,11 @@ class SmokeContractTests(unittest.TestCase):
         else:
             self.assertEqual(argv, ["bash", "run.command", "--check-only"])
 
-    def test_codebook_audit_compiles_all_six(self):
+    def test_codebook_audit_compiles_all_seven(self):
         compiled = self.smoke.codebook_audit(REPO / "config")
         expected = sorted(p.name for p in (REPO / "config").glob("*.yaml"))
-        self.assertEqual(len(expected), 6)
+        self.assertEqual(len(expected), 7)
+        self.assertIn("gbi_focus_group_starter.yaml", expected)
         self.assertEqual(sorted(compiled), expected)
         for name, n_rules in compiled.items():
             self.assertGreater(n_rules, 0, name)

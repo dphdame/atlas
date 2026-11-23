@@ -54,10 +54,12 @@ DOCS_DIR = APP_DIR / "docs"
 
 NAVY = "#1E3A8A"
 TEAL = "#0F766E"
+SLATE = "#334155"
 
 CORPUS_BILINGUAL = "Sample: Bilingual Interview Transcripts (SOFTWARE_TEST)"
 CORPUS_SURVEY = "Sample: Community Health Survey CSV (SOFTWARE_TEST)"
 CORPUS_DOCX = "Sample: Teams Multiline Transcript DOCX (SOFTWARE_TEST)"
+CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes DOCX (SOFTWARE_TEST)"
 CORPUS_UPLOAD = "Upload Custom Files (.docx, .vtt, .srt, .txt, .md, .csv, .xlsx)"
 
 SAMPLE_CORPORA = {
@@ -76,12 +78,48 @@ SAMPLE_CORPORA = {
         "tabular_options": None,
         "codebook": "intake_and_enrollment.yaml",
     },
+    CORPUS_GBI_NOTES: {
+        "files": ["software_test_gbi_group_treatment.docx", "software_test_gbi_group_control.docx"],
+        "tabular_options": None,
+        "codebook": "gbi_focus_group_starter.yaml",
+    },
 }
 CORPUS_OPTIONS = [*SAMPLE_CORPORA, CORPUS_UPLOAD]
 UPLOAD_TYPES = ["docx", "vtt", "srt", "txt", "md", "csv", "xlsx"]
 
 CODEBOOK_UPLOAD = "Upload Custom Codebook (.yaml)"
 NONE_OPTION = "(none)"
+
+# Data Type: Individual keeps the v1.1 per-unit analysis; Group treats each file as one
+# focus group (G = number of files) and hides the binomial interval.
+DATA_TYPE_INDIVIDUAL = "Individual transcripts / survey responses"
+DATA_TYPE_GROUP = "Group / summarized notes"
+DATA_TYPES = [DATA_TYPE_INDIVIDUAL, DATA_TYPE_GROUP]
+NOTES_EVIDENCE_CORE = ("key_point_paraphrase", "notable_quote_verbatim")
+NOTES_EVIDENCE_WITH_OBSERVATIONS = (*NOTES_EVIDENCE_CORE, "observation")
+VERBATIM_EVIDENCE = "notable_quote_verbatim"
+# Speakers that are not a participant voice: unattributed entries and note-taker themes.
+NON_VOICE_SPEAKERS = frozenset({"", "Unknown", "NoteTaker_Themes"})
+GROUP_TABLE_COLUMNS = [
+    "Domain ID", "Domain", "Groups Reporting", "Total Groups (G)", "Group Share (%)",
+    "Distinct Participant Voices", "Verbatim Quotes", "Paraphrased Key Points", "Matching Entries",
+]
+THEMES_EXPANDER_LABEL = "Note-Taker Themes Summary (Reference Only — Not Counted in Prevalence)"
+CODED_EVIDENCE_CSV = "coded_evidence_inventory.csv"
+NOTES_STRUCTURE = "focus_group_notes"
+# (text colour, background colour, label) per evidence type; every pair is >= 4.5:1.
+EVIDENCE_BADGE_STYLES = {
+    "notable_quote_verbatim": ("#FFFFFF", TEAL, "Verbatim Quote"),
+    "key_point_paraphrase": ("#FFFFFF", SLATE, "Paraphrase (Key Point)"),
+    "observation": (NAVY, "#FFFFFF", "Observation"),
+}
+EVIDENCE_BADGE_FALLBACK = ("#FFFFFF", "#475569", "Transcript / Survey")
+# Group x theme tiles: state -> (fill, text colour), each text/fill pair >= 4.5:1.
+GROUP_TILE_COLOURS = {
+    "none": ("#F1F5F9", "#475569"),
+    "unknown_only": ("#CCFBF1", TEAL),
+    "voices": (NAVY, "#FFFFFF"),
+}
 
 SOFTWARE_TEST_BANNER = (
     "🧪 SOFTWARE_TEST FIXTURE ACTIVE — Built-in sample files demonstrate software "
@@ -285,6 +323,199 @@ def chart_summary_html(summary: str) -> str:
     )
 
 
+def count_distinct_voices(turns_df):
+    """Distinct (source_id, speaker) pairs, so P1 in two focus groups counts as two voices."""
+    if turns_df is None or len(turns_df) == 0 or not {"source_id", "speaker"} <= set(turns_df.columns):
+        return 0
+    return len({(str(s), str(p)) for s, p in zip(turns_df["source_id"], turns_df["speaker"])
+                if str(p) not in NON_VOICE_SPEAKERS})
+
+
+def group_labels_for(source_ids):
+    """Display label per focus-group file: its basename, or the full relative path
+    when two files share a basename."""
+    ids = [str(s) for s in source_ids]
+    names = [os.path.basename(s) or s for s in ids]
+    return {sid: (name if names.count(name) == 1 else sid) for sid, name in zip(ids, names)}
+
+
+def build_group_frequency_table(freq, quotes, total_groups):
+    """One row per codebook domain: groups reporting (g of G) and the evidence behind it."""
+    rows = []
+    for _, r in freq.iterrows():
+        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])]
+        evidence = dq["evidence_type"].astype(str) if "evidence_type" in dq.columns else pd.Series(dtype=str)
+        rows.append({
+            "Domain ID": str(r["domain_id"]),
+            "Domain": str(r["domain_name"]),
+            "Groups Reporting": int(r["documents_reporting"]),
+            "Total Groups (G)": int(total_groups),
+            "Group Share (%)": float(r["prevalence_pct"]),
+            "Distinct Participant Voices": count_distinct_voices(dq),
+            "Verbatim Quotes": int((evidence == "notable_quote_verbatim").sum()),
+            "Paraphrased Key Points": int((evidence == "key_point_paraphrase").sum()),
+            "Matching Entries": len(dq),
+        })
+    return pd.DataFrame(rows, columns=GROUP_TABLE_COLUMNS)
+
+
+def build_group_theme_matrix(freq, quotes, file_hashes):
+    """
+    One row per (domain, focus-group file): whether the group reported the domain,
+    its matching entries, its distinct participant voices and the tile label
+    ("<n>v" voices, "✓" matched only by unattributed entries, "—" not reported).
+    """
+    source_ids = sorted(str(s) for s in file_hashes)
+    labels = group_labels_for(source_ids)
+    rows = []
+    for _, r in freq.iterrows():
+        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])]
+        for sid in source_ids:
+            gq = dq[dq["source_id"].astype(str) == sid]
+            n = len(gq)
+            voices = len({str(p) for p in gq["speaker"] if str(p) not in NON_VOICE_SPEAKERS})
+            state = "voices" if voices else ("unknown_only" if n else "none")
+            rows.append({
+                "domain_id": str(r["domain_id"]),
+                "domain_name": str(r["domain_name"]),
+                "source_id": sid,
+                "group_label": labels[sid],
+                "present": n > 0,
+                "matching_entries": n,
+                "distinct_voices": voices,
+                "cell_label": f"{voices}v" if voices else ("✓" if n else "—"),
+                "tile_state": state,
+            })
+    return pd.DataFrame(rows, columns=["domain_id", "domain_name", "source_id", "group_label", "present",
+                                       "matching_entries", "distinct_voices", "cell_label", "tile_state"])
+
+
+def describe_group_prevalence_chart(group_df, total_groups):
+    """
+    Plain-text summary of the Groups Reporting (g of G) bar chart, for the Vega-Lite
+    description and the visible st.html summary. Deterministic: built only from
+    group_df (GROUP_TABLE_COLUMNS); lists the three domains reported by the most
+    groups, ordered by groups reporting descending, then domain name.
+    """
+    if group_df is None or len(group_df) == 0:
+        return "No domains defined in the active codebook."
+    k = len(group_df)
+    domains = "domain" if k == 1 else "domains"
+    total = int(total_groups)
+    if total <= 0:
+        return f"Horizontal bar chart with 0 focus groups, so no group count is defined for the {k} coded {domains}."
+    groups = "focus group" if total == 1 else "focus groups"
+
+    def count(value):
+        number = pd.to_numeric(value, errors="coerce")
+        return int(number) if pd.notna(number) and math.isfinite(float(number)) else 0
+
+    rows = group_df.assign(
+        _name=group_df["Domain"].astype(str),
+        _groups=group_df["Groups Reporting"].map(count),
+        _voices=group_df["Distinct Participant Voices"].map(count),
+    ).sort_values(["_groups", "_name"], ascending=[False, True], kind="mergesort")
+    matched = rows[rows["_groups"] > 0]
+    lead = f"Horizontal bar chart of focus groups reporting each domain, out of {total} {groups}."
+    if matched.empty:
+        return f"{lead} No group reported any of the {k} coded {domains}."
+    listed = []
+    for _, r in matched.head(3).iterrows():
+        voices = "voice" if r["_voices"] == 1 else "voices"
+        listed.append(f"{r['_name']} {r['_groups']} of {total} {groups} ({r['_voices']} distinct participant {voices})")
+    text = f"{lead} Reported by the most groups: {'; '.join(listed)}."
+    if len(matched) > 3:
+        text += f" Other reported domains not listed: {len(matched) - 3}."
+    if len(matched) < k:
+        text += f" Domains reported by no group: {k - len(matched)} of {k}."
+    return text
+
+
+def describe_group_matrix_chart(matrix_df, total_groups):
+    """
+    Plain-text summary of the group x theme tile matrix (Vega-Lite description and
+    st.html summary). Deterministic: built only from matrix_df
+    (build_group_theme_matrix); groups are listed in label order.
+    """
+    if matrix_df is None or len(matrix_df) == 0:
+        return "No domains defined in the active codebook."
+    k = matrix_df["domain_id"].astype(str).nunique()
+    domains = "domain" if k == 1 else "domains"
+    total = int(total_groups)
+    groups = "focus group" if total == 1 else "focus groups"
+    present = matrix_df["present"].astype(bool)
+    per_group = []
+    for label in sorted(matrix_df["group_label"].astype(str).unique()):
+        n = int(present[matrix_df["group_label"].astype(str) == label].sum())
+        per_group.append(f"{label} {n} of {k}")
+    return (f"Tile matrix of {k} coded {domains} by {total} {groups}. "
+            f"{int(present.sum())} of {len(matrix_df)} domain-group tiles have at least one matching entry. "
+            f"Domains reported per group: {'; '.join(per_group)}.")
+
+
+def group_prevalence_chart(group_df, total_groups):
+    """Integer Groups Reporting (g of G) bar chart, labelled g/G."""
+    total = int(total_groups)
+    top = max(total, 1)
+    data = pd.DataFrame({
+        "domain_name": group_df["Domain"].astype(str),
+        "groups_reporting": group_df["Groups Reporting"].astype(int),
+        "distinct_voices": group_df["Distinct Participant Voices"].astype(int),
+        "bar_label": [f"{int(g)}/{total}" for g in group_df["Groups Reporting"]],
+    })
+    x = alt.X("groups_reporting:Q", title=f"Groups Reporting (out of {total} focus groups)",
+              scale=alt.Scale(domain=[0, top]), axis=alt.Axis(values=list(range(0, top + 1)), format="d"))
+    bars = alt.Chart(data).mark_bar(color=NAVY).encode(
+        x=x,
+        y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+        tooltip=[
+            alt.Tooltip("domain_name:N", title="Domain"),
+            alt.Tooltip("groups_reporting:Q", title="Groups reporting", format="d"),
+            alt.Tooltip("distinct_voices:Q", title="Distinct participant voices", format="d"),
+        ],
+    )
+    labels = alt.Chart(data).mark_text(align="left", dx=4, color="#0F172A").encode(
+        x="groups_reporting:Q", y=alt.Y("domain_name:N", sort="-x"), text="bar_label:N",
+    )
+    return bars + labels
+
+
+def group_matrix_chart(matrix_df):
+    """Group x theme tile matrix: fill and text colour encode the tile state."""
+    states = list(GROUP_TILE_COLOURS)
+    base = alt.Chart(matrix_df).encode(
+        x=alt.X("group_label:N", title="Focus group", sort=sorted(matrix_df["group_label"].astype(str).unique()),
+                axis=alt.Axis(labelAngle=0, labelLimit=240, orient="top")),
+        y=alt.Y("domain_name:N", title=None, sort=list(dict.fromkeys(matrix_df["domain_name"].astype(str))),
+                axis=alt.Axis(labelLimit=320)),
+    )
+    tiles = base.mark_rect(stroke="#FFFFFF", strokeWidth=2).encode(
+        color=alt.Color("tile_state:N", legend=None,
+                        scale=alt.Scale(domain=states, range=[GROUP_TILE_COLOURS[s][0] for s in states])),
+        tooltip=[
+            alt.Tooltip("domain_name:N", title="Domain"),
+            alt.Tooltip("group_label:N", title="Focus group"),
+            alt.Tooltip("matching_entries:Q", title="Matching entries", format="d"),
+            alt.Tooltip("distinct_voices:Q", title="Distinct participant voices", format="d"),
+        ],
+    )
+    text = base.mark_text(fontWeight="bold").encode(
+        text="cell_label:N",
+        color=alt.Color("tile_state:N", legend=None,
+                        scale=alt.Scale(domain=states, range=[GROUP_TILE_COLOURS[s][1] for s in states])),
+    )
+    return (tiles + text).resolve_scale(color="independent")
+
+
+def evidence_badge_html(evidence_type):
+    """High-contrast badge naming a quote's evidence type (escaped, never Markdown)."""
+    fg, bg, label = EVIDENCE_BADGE_STYLES.get(str(evidence_type), EVIDENCE_BADGE_FALLBACK)
+    border = fg if bg == "#FFFFFF" else bg
+    return (f'<span class="atlas-evidence-badge" style="display:inline-block;font-size:0.75rem;font-weight:700;'
+            f'padding:0.1rem 0.5rem;border-radius:4px;margin-right:0.4rem;color:{fg};background-color:{bg};'
+            f'border:2px solid {border};">{html.escape(label)}</span>')
+
+
 @st.cache_data(show_spinner=False)
 def read_table_columns(name, payload):
     """Columns and rows of an uploaded table exactly as the parser reads them."""
@@ -301,9 +532,25 @@ def read_table_columns(name, payload):
 
 
 @st.cache_data(show_spinner=False)
-def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns):
+def detect_structured_notes(name, payload):
+    """Whether a .docx payload holds a structured notes table; unreadable files are not notes."""
+    if os.path.splitext(str(name))[1].lower() != ".docx":
+        return False
+    with tempfile.TemporaryDirectory(prefix="atlas_detect_") as tmp:
+        path = Path(tmp) / safe_upload_name(name, set())
+        path.write_bytes(payload)
+        try:
+            return UniversalTranscriptParser.detect_docx_structure(str(path)) == "structured_notes"
+        except UPLOAD_READ_ERRORS:
+            return False
+
+
+@st.cache_data(show_spinner=False)
+def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns, notes_evidence=None):
     """
     Run UniversalTranscriptParser -> AtlasEngine on byte copies of the inputs.
+    notes_evidence (Group mode) is the tuple of notes evidence types to code;
+    None keeps the parser defaults.
 
     inputs is a tuple of (relative_path, bytes); the files are written under a
     fresh temporary root with those relative paths, so each source_id equals the
@@ -335,6 +582,8 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
             interviewer_prompt_patterns=list(prompt_patterns) or None,
             root_dir=str(root),
             tabular_options=dict(tabular_items) if tabular_items else None,
+            include_evidence_types=list(notes_evidence) if notes_evidence else None,
+            notes_unit_level="group",
         )
 
         export_dir = Path(tmp) / "export"
@@ -347,7 +596,8 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
         exports = {
             name: (export_dir / name).read_bytes()
             for name in ("actuarial_parameter_matrix.xlsx", "provenance_manifest.json",
-                         "verbatim_quotes_inventory.csv")
+                         "verbatim_quotes_inventory.csv", CODED_EVIDENCE_CSV)
+            if (export_dir / name).is_file()
         }
 
     results["exports"] = exports
@@ -488,6 +738,38 @@ with st.sidebar:
         )
         prompt_patterns = [p.strip() for p in patterns_raw.splitlines() if p.strip()]
 
+    # Data Type follows the inputs: whenever the selected corpus changes, Group mode is
+    # chosen if any .docx holds a structured notes table. The user may override it.
+    selected_sample = SAMPLE_CORPORA.get(corpus_choice)
+    if selected_sample is not None:
+        detect_items = [(name, (SAMPLES_DIR / name).read_bytes()) for name in selected_sample["files"]]
+    else:
+        detect_items = [(f.name, f.getvalue()) for f in uploaded_files]
+    data_type_fingerprint = (
+        corpus_choice,
+        tuple((name, len(payload), hashlib.sha256(payload).hexdigest()) for name, payload in detect_items),
+    )
+    if st.session_state.get("data_type_fingerprint") != data_type_fingerprint:
+        st.session_state.data_type_fingerprint = data_type_fingerprint
+        st.session_state.data_type = (
+            DATA_TYPE_GROUP if any(detect_structured_notes(name, payload) for name, payload in detect_items)
+            else DATA_TYPE_INDIVIDUAL
+        )
+    data_type = st.radio(
+        "Data Type", DATA_TYPES, key="data_type",
+        help="Group mode treats each file as one focus group (1 file = 1 group). It is chosen automatically "
+             "for structured focus-group notes and can be switched at any time.",
+    )
+    group_mode = data_type == DATA_TYPE_GROUP
+    notes_evidence = None
+    if group_mode:
+        include_observations = st.checkbox(
+            "Include Note-Taker Observations", value=False,
+            help="Also code the Observations column of structured notes (key points and notable quotes are "
+                 "always coded).",
+        )
+        notes_evidence = NOTES_EVIDENCE_WITH_OBSERVATIONS if include_observations else NOTES_EVIDENCE_CORE
+
     # Default the codebook to the one suited to the selected sample whenever the corpus changes.
     if st.session_state.get("last_corpus_choice") != corpus_choice:
         st.session_state.last_corpus_choice = corpus_choice
@@ -590,6 +872,7 @@ try:
             tuple(sorted(tabular_options.items())) if tabular_options else None,
             tuple(facilitator_names),
             tuple(prompt_patterns),
+            notes_evidence,
         )
 except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
     st.error(f"ATLAS could not analyse this corpus with this codebook: {exc}")
@@ -600,6 +883,23 @@ quotes = results["quotes_df"]
 total_documents = int(results["total_documents"])
 participant_turns = int(results["participant_turns_analyzed"])
 matched_mentions = int(freq["matching_turns"].sum()) if len(freq) else 0
+# Structured notes are always counted one unit per focus-group file, so the binomial
+# interval is withheld for them whatever the Data Type, and their coded entries are
+# labelled by evidence type wherever verbatim words could be implied.
+notes_present = NOTES_STRUCTURE in set(results.get("document_structures", {}).values())
+
+if group_mode:
+    group_labels = group_labels_for(results["file_hashes"])
+    group_table = build_group_frequency_table(freq, quotes, total_documents)
+    group_summary = describe_group_prevalence_chart(group_table, total_documents)
+    group_matrix = build_group_theme_matrix(freq, quotes, results["file_hashes"])
+    matrix_summary = describe_group_matrix_chart(group_matrix, total_documents)
+    group_table_config = {
+        "Group Share (%)": st.column_config.NumberColumn("Group Share (%)", format="%.1f"),
+    }
+    themes_df = results.get("note_taker_themes_df")
+    if themes_df is None:
+        themes_df = pd.DataFrame()
 
 
 # ------------------------------------------------------------------------------
@@ -618,11 +918,21 @@ with tab_thematic:
     st.caption(f"Corpus: {corpus_label} · Codebook: {codebook_choice} · Project: {results['project_name']}")
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Analytical Units (N)", total_documents,
-              help="Distinct analytical units: one per transcript, one per tabular respondent row.")
-    k2.metric("Participant Turns", participant_turns, help="Turns coded after facilitator turns are removed.")
-    k3.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
-    k4.metric("Matched Turn Mentions", matched_mentions, help="Participant turns matched to a domain, summed over domains.")
+    if group_mode:
+        k1.metric("Focus Groups (G)", total_documents, help="One focus group per file (1 file = 1 group).")
+        k2.metric("Distinct Participant Voices", count_distinct_voices(results["tagged_turns_df"]),
+                  help="Distinct participant labels per group, so P1 in two groups counts as two voices. "
+                       "Unattributed entries are not counted.")
+        k3.metric("Coded Notes Entries", participant_turns,
+                  help="Key points, notable quotes (and observations, when included) coded against the codebook.")
+        k4.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
+    else:
+        k1.metric("Analytical Units (N)", total_documents,
+                  help="Distinct analytical units: one per transcript, one per tabular respondent row.")
+        k2.metric("Participant Turns", participant_turns, help="Turns coded after facilitator turns are removed.")
+        k3.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
+        k4.metric("Matched Turn Mentions", matched_mentions,
+                  help="Participant turns matched to a domain, summed over domains.")
 
     qtab_freq, qtab_quotes, qtab_topics = st.tabs([
         "📈 Thematic Prevalence & Distribution",
@@ -631,50 +941,149 @@ with tab_thematic:
     ])
 
     with qtab_freq:
-        st.markdown("#### Domain prevalence across analytical units")
-        st.caption("Prevalence = units with at least one matching participant turn ÷ all analytical units.")
+        if group_mode:
+            st.markdown("#### Focus groups reporting each domain")
+            st.caption("Groups reporting (g of G) = focus groups with at least one matching coded entry; "
+                       "G = all focus groups (1 file = 1 group).")
+        else:
+            st.markdown("#### Domain prevalence across analytical units")
+            st.caption("Prevalence = units with at least one matching participant turn ÷ all analytical units.")
         if len(freq):
-            chart = alt.Chart(freq).mark_bar(color=NAVY).encode(
-                x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
-                y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
-                tooltip=[
-                    alt.Tooltip("domain_name:N", title="Domain"),
-                    alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
-                    alt.Tooltip("documents_reporting:Q", title="Units reporting"),
-                    alt.Tooltip("matching_turns:Q", title="Matching turns"),
-                ],
-            )
-            labels = alt.Chart(freq).mark_text(align="left", dx=4, color="#0F172A").encode(
-                x="prevalence_pct:Q",
-                y=alt.Y("domain_name:N", sort="-x"),
-                text=alt.Text("matching_turns:Q", format="d"),
-            )
-            freq_summary = describe_prevalence_chart(freq, total_documents, include_ci=False)
-            st.altair_chart(
-                (chart + labels).properties(height=max(160, 42 * len(freq)), description=freq_summary),
-                **stretch_kwargs(st.altair_chart),
-            )
-            st.html(chart_summary_html(freq_summary))
-            st.caption("Bar labels show matching participant turns per domain.")
-            st.markdown("##### Domain frequency table")
-            st.dataframe(
-                freq[["domain_id", "domain_name", "documents_reporting", "total_documents",
-                      "prevalence_pct", "matching_turns", "total_mentions"]],
-                **stretch_kwargs(st.dataframe), hide_index=True,
-                column_config={
-                    "domain_id": "Domain ID", "domain_name": "Domain",
-                    "documents_reporting": "Units reporting", "total_documents": "Analytical units (N)",
-                    "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
-                    "matching_turns": "Matching turns", "total_mentions": "Mentions",
-                },
-            )
+            if group_mode:
+                panels = [
+                    (group_prevalence_chart(group_table, total_documents), group_summary, max(160, 42 * len(freq)),
+                     "Bar labels show g/G: focus groups reporting the domain out of all focus groups."),
+                    (group_matrix_chart(group_matrix), matrix_summary, max(160, 42 * len(freq)),
+                     "Tiles show distinct participant voices per group (for example 2v); ✓ = matched only by "
+                     "unattributed entries; — = not reported."),
+                ]
+            else:
+                chart = alt.Chart(freq).mark_bar(color=NAVY).encode(
+                    x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
+                    y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+                    tooltip=[
+                        alt.Tooltip("domain_name:N", title="Domain"),
+                        alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
+                        alt.Tooltip("documents_reporting:Q", title="Units reporting"),
+                        alt.Tooltip("matching_turns:Q", title="Matching turns"),
+                    ],
+                )
+                labels = alt.Chart(freq).mark_text(align="left", dx=4, color="#0F172A").encode(
+                    x="prevalence_pct:Q",
+                    y=alt.Y("domain_name:N", sort="-x"),
+                    text=alt.Text("matching_turns:Q", format="d"),
+                )
+                panels = [(chart + labels, describe_prevalence_chart(freq, total_documents, include_ci=False),
+                           max(160, 42 * len(freq)), "Bar labels show matching participant turns per domain.")]
+            for panel_chart, freq_summary, panel_height, panel_note in panels:
+                st.altair_chart(
+                    panel_chart.properties(height=panel_height, description=freq_summary),
+                    **stretch_kwargs(st.altair_chart),
+                )
+                st.html(chart_summary_html(freq_summary))
+                st.caption(panel_note)
+            if group_mode:
+                st.markdown("##### Group frequency table")
+                st.dataframe(group_table, **stretch_kwargs(st.dataframe), hide_index=True,
+                             column_config=group_table_config)
+            else:
+                st.markdown("##### Domain frequency table")
+                st.dataframe(
+                    freq[["domain_id", "domain_name", "documents_reporting", "total_documents",
+                          "prevalence_pct", "matching_turns", "total_mentions"]],
+                    **stretch_kwargs(st.dataframe), hide_index=True,
+                    column_config={
+                        "domain_id": "Domain ID", "domain_name": "Domain",
+                        "documents_reporting": "Units reporting", "total_documents": "Analytical units (N)",
+                        "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
+                        "matching_turns": "Matching turns", "total_mentions": "Mentions",
+                    },
+                )
         else:
             st.info("The active codebook defines no domains.")
+
+        if group_mode and len(themes_df) and {"source_id", "question_id", "text"} <= set(themes_df.columns):
+            with st.expander(THEMES_EXPANDER_LABEL, expanded=False):
+                st.caption("Note-taker theme summaries, shown for reference. They are not coded and are not "
+                           "counted in any prevalence, quote or KPI.")
+                for sid in sorted(themes_df["source_id"].astype(str).unique()):
+                    rows = themes_df[themes_df["source_id"].astype(str) == sid]
+                    items = "".join(
+                        f"<li><strong>{esc(q)}:</strong> {esc(t)}</li>"
+                        for q, t in zip(rows["question_id"], rows["text"])
+                    )
+                    st.markdown(
+                        f'<div class="quote-box topic-box"><div class="quote-meta">'
+                        f'{esc(group_labels.get(sid, os.path.basename(sid)))}</div>'
+                        f'<ul style="margin:0;color:#0F172A;">{items}</ul></div>',
+                        unsafe_allow_html=True,
+                    )
 
     with qtab_quotes:
         st.markdown("#### Verbatim evidence with line-level provenance")
         if quotes.empty:
             st.info("No participant turn matched a domain of the active codebook in this corpus.")
+        elif group_mode:
+            labelled = quotes.assign(group_label=quotes["source_id"].astype(str).map(
+                lambda sid: group_labels.get(sid, os.path.basename(sid))))
+            questions = sorted(q for q in labelled["question_id"].astype(str).unique() if q)
+            f1, f2, f3 = st.columns([2, 1, 1])
+            search = f1.text_input("Search verbatim text", "")
+            domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(labelled["domain_name"].astype(str).unique())])
+            speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(labelled["speaker"].astype(str).unique())])
+            g1, g2, g3 = st.columns([2, 1, 1])
+            verbatim_only = g1.checkbox(
+                "Quotable Verbatim Only", value=False,
+                help="Show only entries from the Notable Quotes column (verbatim participant words).",
+            )
+            group_filter = g2.selectbox("Filter by group", ["All groups", *sorted(labelled["group_label"].unique())])
+            question_filter = "All questions"
+            if questions:
+                question_filter = g3.selectbox("Filter by question", ["All questions", *questions])
+            shown = labelled
+            if verbatim_only:
+                shown = shown[shown["evidence_type"].astype(str) == VERBATIM_EVIDENCE]
+            if domain_filter != "All domains":
+                shown = shown[shown["domain_name"].astype(str) == domain_filter]
+            if speaker_filter != "All speakers":
+                shown = shown[shown["speaker"].astype(str) == speaker_filter]
+            if group_filter != "All groups":
+                shown = shown[shown["group_label"] == group_filter]
+            if question_filter != "All questions":
+                shown = shown[shown["question_id"].astype(str) == question_filter]
+            if search.strip():
+                shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
+            st.markdown(f"**{len(shown)} of {len(quotes)} matched entries shown**")
+            if shown.empty:
+                st.info("No verbatim quote matches the current filters." if verbatim_only
+                        else "No quote matches these filters.")
+            else:
+                st.dataframe(
+                    shown[["evidence_type", "group_label", "question_id", "domain_name", "speaker", "source_id",
+                           "unit_id", "line_number", "match_char_start", "match_char_end", "match_text", "text",
+                           "source_sha256"]],
+                    **stretch_kwargs(st.dataframe), hide_index=True,
+                    column_config={
+                        "evidence_type": "Evidence Type", "group_label": "Group", "question_id": "Question",
+                        "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
+                        "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
+                        "match_char_end": "Match end", "match_text": "Matched span",
+                        "text": "Verbatim entry", "source_sha256": "Source SHA-256",
+                    },
+                )
+                for _, q in shown.head(25).iterrows():
+                    question = f" · {esc(q['question_id'])}" if str(q["question_id"]) else ""
+                    st.markdown(
+                        f'<div class="quote-box">'
+                        f'<div class="quote-meta">{evidence_badge_html(q["evidence_type"])}'
+                        f'{esc(q["domain_name"])} · {esc(q["speaker"])} · {esc(q["group_label"])}{question}</div>'
+                        f'<div class="quote-text">{highlighted_quote(q["text"], q["match_char_start"], q["match_char_end"])}</div>'
+                        f'<div class="quote-provenance">SOURCE {esc(q["source_id"])} · LINE {esc(q["line_number"])} · '
+                        f'CHARS {esc(q["match_char_start"])}–{esc(q["match_char_end"])} · '
+                        f'SHA-256 {esc(q["source_sha256"])}</div>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
         else:
             f1, f2, f3 = st.columns([2, 1, 1])
             search = f1.text_input("Search verbatim text", "")
@@ -692,20 +1101,24 @@ with tab_thematic:
                 st.info("No quote matches these filters.")
             else:
                 st.dataframe(
-                    shown[["domain_name", "speaker", "source_id", "unit_id", "line_number",
-                           "match_char_start", "match_char_end", "match_text", "text", "source_sha256"]],
+                    shown[[*(["evidence_type"] if notes_present else []), "domain_name", "speaker", "source_id",
+                           "unit_id", "line_number", "match_char_start", "match_char_end", "match_text", "text",
+                           "source_sha256"]],
                     **stretch_kwargs(st.dataframe), hide_index=True,
                     column_config={
+                        "evidence_type": "Evidence Type",
                         "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
                         "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
                         "match_char_end": "Match end", "match_text": "Matched span",
-                        "text": "Verbatim turn", "source_sha256": "Source SHA-256",
+                        "text": "Coded entry (see evidence type)" if notes_present else "Verbatim turn",
+                        "source_sha256": "Source SHA-256",
                     },
                 )
                 for _, q in shown.head(25).iterrows():
+                    badge = evidence_badge_html(q["evidence_type"]) if notes_present else ""
                     st.markdown(
                         f'<div class="quote-box">'
-                        f'<div class="quote-meta">{esc(q["domain_name"])} · {esc(q["speaker"])}</div>'
+                        f'<div class="quote-meta">{badge}{esc(q["domain_name"])} · {esc(q["speaker"])}</div>'
                         f'<div class="quote-text">{highlighted_quote(q["text"], q["match_char_start"], q["match_char_end"])}</div>'
                         f'<div class="quote-provenance">SOURCE {esc(q["source_id"])} · LINE {esc(q["line_number"])} · '
                         f'CHARS {esc(q["match_char_start"])}–{esc(q["match_char_end"])} · '
@@ -716,11 +1129,23 @@ with tab_thematic:
 
     with qtab_topics:
         st.markdown("#### Unsupervised topic discovery (LDA topics, TF-IDF cosine medoids)")
-        st.caption("Each medoid is the real participant turn closest to its topic's TF-IDF centroid.")
+        if notes_present:
+            st.caption("Each medoid is the coded notes entry closest to its topic's TF-IDF centroid. A medoid "
+                       "can be a verbatim quote, a paraphrased key point or a note-taker observation; its "
+                       "evidence type is shown on every card and in the table.")
+        else:
+            st.caption("Each medoid is the real participant turn closest to its topic's TF-IDF centroid.")
         n_topics = st.slider("Number of topics (k)", min_value=1, max_value=10, value=3)
         turn_records = results["tagged_turns_df"].to_dict("records")
         discovery = run_topic_discovery(turn_records, n_topics)
         topics = discovery["topics"]
+        medoid_evidence = {
+            (str(r.get("unit_id")), str(r.get("turn_id")), str(r.get("text"))): str(r.get("evidence_type") or "")
+            for r in turn_records
+        }
+        for topic in topics:
+            topic["medoid_evidence_type"] = medoid_evidence.get(
+                (str(topic["medoid_unit_id"]), str(topic["medoid_turn_id"]), str(topic["medoid_text"])), "")
         if not topics:
             st.info("No participant turn has enough content words for topic discovery.")
         else:
@@ -728,9 +1153,10 @@ with tab_thematic:
             for topic in topics:
                 terms = ", ".join(dedupe_terms(topic["top_terms"]))
                 medoid = topic["medoid_text"]
+                badge = evidence_badge_html(topic["medoid_evidence_type"]) if notes_present else ""
                 st.markdown(
                     f'<div class="quote-box topic-box">'
-                    f'<div class="quote-meta">Topic {esc(topic["topic_id"])}: {esc(topic["label"])} · '
+                    f'<div class="quote-meta">{badge}Topic {esc(topic["topic_id"])}: {esc(topic["label"])} · '
                     f'{esc(topic["turn_count"])} turns ({esc(topic["share_pct"])}%)</div>'
                     f'<div style="font-size:0.9rem;margin-bottom:0.4rem;"><strong>Top terms:</strong> {esc(terms)}</div>'
                     f'<div class="quote-text">{esc(medoid) if medoid else "No medoid turn assigned."}</div>'
@@ -748,6 +1174,7 @@ with tab_thematic:
                         "share_pct": t["share_pct"],
                         "medoid_unit_id": t["medoid_unit_id"],
                         "medoid_text": t["medoid_text"],
+                        **({"medoid_evidence_type": t["medoid_evidence_type"]} if notes_present else {}),
                     }
                     for t in topics
                 ]),
@@ -755,7 +1182,9 @@ with tab_thematic:
                 column_config={
                     "topic_id": "Topic", "top_terms": "Top terms", "turn_count": "Turns",
                     "share_pct": st.column_config.NumberColumn("Share (%)", format="%.1f"),
-                    "medoid_unit_id": "Medoid unit", "medoid_text": "Medoid turn (verbatim)",
+                    "medoid_unit_id": "Medoid unit",
+                    "medoid_text": "Medoid entry (see evidence type)" if notes_present else "Medoid turn (verbatim)",
+                    "medoid_evidence_type": "Medoid evidence type",
                 },
             )
             corpus_digest = hashlib.sha256(b"".join(p for _, p in inputs)).hexdigest()[:8]
@@ -781,60 +1210,99 @@ with tab_thematic:
 # TAB 2: ECONOMETRIC & ACTUARIAL LEDGER EXPORT
 # ==============================================================================
 with tab_econometric:
-    st.markdown("### Econometric parameter matrix")
-    st.caption(
-        f"N = {total_documents} analytical units (documents / respondent rows). "
-        "p = units reporting ÷ N; binomial standard error SE = √(p(1 − p) / N), on the proportion scale."
-    )
+    if group_mode:
+        st.markdown("### Group summary matrix")
+        st.caption(
+            f"G = {total_documents} focus groups (1 file = 1 group). "
+            "Groups reporting = focus groups with at least one matching coded entry."
+        )
+        st.info(
+            "Statistical guardrail (Group mode): normal-approximation Binomial standard errors and 95% "
+            "confidence intervals (p ± 1.96·SE) are hidden. With a small number of focus groups "
+            f"(G = {total_documents}) and participants in the same room shaping one another's answers, "
+            "the counts are not independent Binomial samples, so such an interval would overstate precision. "
+            "Report groups reporting (g of G) and distinct participant voices instead."
+        )
+    elif notes_present:
+        st.markdown("### Econometric parameter matrix")
+        st.caption(
+            f"N = {total_documents} analytical units; each structured notes file is one focus group, "
+            "so its unit is the group, not an individual respondent."
+        )
+        st.info(
+            "Statistical guardrail (structured focus-group notes): normal-approximation Binomial standard "
+            "errors and 95% confidence intervals (p ± 1.96·SE) are hidden for this corpus. Structured notes "
+            "are counted one unit per focus-group file, and participants in the same room are not independent, "
+            "so the units are not independent Binomial samples of individuals."
+        )
+    else:
+        st.markdown("### Econometric parameter matrix")
+        st.caption(
+            f"N = {total_documents} analytical units (documents / respondent rows). "
+            "p = units reporting ÷ N; binomial standard error SE = √(p(1 − p) / N), on the proportion scale."
+        )
 
-    matrix = pd.DataFrame({
-        "domain_id": freq["domain_id"].astype(str) if len(freq) else pd.Series(dtype=str),
-        "domain_name": freq["domain_name"].astype(str) if len(freq) else pd.Series(dtype=str),
-    })
     if len(freq):
-        p = [int(d) / total_documents if total_documents else float("nan") for d in freq["documents_reporting"]]
-        se = [math.sqrt(v * (1 - v) / total_documents) if total_documents else float("nan") for v in p]
-        matrix["documents_reporting"] = freq["documents_reporting"].astype(int)
-        matrix["n_units"] = total_documents
-        matrix["prevalence_pct"] = freq["prevalence_pct"].astype(float)
-        matrix["proportion"] = [round(v, 4) for v in p]
-        matrix["binomial_se"] = [round(v, 4) for v in se]
-        matrix["ci95_low_pct"] = [round(max(0.0, (v - 1.96 * s) * 100), 1) for v, s in zip(p, se)]
-        matrix["ci95_high_pct"] = [round(min(1.0, v + 1.96 * s) * 100, 1) for v, s in zip(p, se)]
-        matrix["matching_turns"] = freq["matching_turns"].astype(int)
+        if group_mode:
+            tab2_chart, ci_summary = group_prevalence_chart(group_table, total_documents), group_summary
+            tab2_note = "Bar labels show g/G: focus groups reporting the domain out of all focus groups."
+            tab2_table, tab2_config = group_table, group_table_config
+        else:
+            matrix = pd.DataFrame({
+                "domain_id": freq["domain_id"].astype(str),
+                "domain_name": freq["domain_name"].astype(str),
+            })
+            p = [int(d) / total_documents if total_documents else float("nan") for d in freq["documents_reporting"]]
+            se = [math.sqrt(v * (1 - v) / total_documents) if total_documents else float("nan") for v in p]
+            matrix["documents_reporting"] = freq["documents_reporting"].astype(int)
+            matrix["n_units"] = total_documents
+            matrix["prevalence_pct"] = freq["prevalence_pct"].astype(float)
+            matrix["proportion"] = [round(v, 4) for v in p]
+            matrix["binomial_se"] = [round(v, 4) for v in se]
+            matrix["ci95_low_pct"] = [round(max(0.0, (v - 1.96 * s) * 100), 1) for v, s in zip(p, se)]
+            matrix["ci95_high_pct"] = [round(min(1.0, v + 1.96 * s) * 100, 1) for v, s in zip(p, se)]
+            matrix["matching_turns"] = freq["matching_turns"].astype(int)
+            if notes_present:
+                matrix = matrix.drop(columns=["proportion", "binomial_se", "ci95_low_pct", "ci95_high_pct"])
 
-        bars = alt.Chart(matrix).mark_bar(color=TEAL).encode(
-            x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
-            y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
-            tooltip=[
-                alt.Tooltip("domain_name:N", title="Domain"),
-                alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
-                alt.Tooltip("documents_reporting:Q", title="Units reporting"),
-                alt.Tooltip("n_units:Q", title="N"),
-                alt.Tooltip("binomial_se:Q", title="SE"),
-            ],
-        )
-        whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
-            x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
-        )
-        ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=True)
-        st.altair_chart(
-            (bars + whiskers).properties(height=max(160, 42 * len(matrix)), description=ci_summary),
-            **stretch_kwargs(st.altair_chart),
-        )
-        st.html(chart_summary_html(ci_summary))
-        st.caption("Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%.")
-        st.dataframe(
-            matrix, **stretch_kwargs(st.dataframe), hide_index=True,
-            column_config={
+            bars = alt.Chart(matrix).mark_bar(color=TEAL).encode(
+                x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
+                y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+                tooltip=[
+                    alt.Tooltip("domain_name:N", title="Domain"),
+                    alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
+                    alt.Tooltip("documents_reporting:Q", title="Units reporting"),
+                    alt.Tooltip("n_units:Q", title="N"),
+                    *([] if notes_present else [alt.Tooltip("binomial_se:Q", title="SE")]),
+                ],
+            )
+            if notes_present:
+                tab2_chart = bars
+                ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=False)
+                tab2_note = "Bars show the share of focus-group files with a matching entry; no interval is drawn."
+            else:
+                whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
+                    x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
+                )
+                tab2_chart = bars + whiskers
+                ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=True)
+                tab2_note = "Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%."
+            tab2_table = matrix
+            tab2_config = {
                 "domain_id": "Domain ID", "domain_name": "Domain",
                 "documents_reporting": "Units reporting", "n_units": "N (analytical units)",
                 "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
                 "proportion": "p", "binomial_se": "Binomial SE",
                 "ci95_low_pct": "95% CI low (%)", "ci95_high_pct": "95% CI high (%)",
                 "matching_turns": "Matching turns",
-            },
+            }
+        st.altair_chart(
+            tab2_chart.properties(height=max(160, 42 * len(freq)), description=ci_summary),
+            **stretch_kwargs(st.altair_chart),
         )
+        st.html(chart_summary_html(ci_summary))
+        st.caption(tab2_note)
+        st.dataframe(tab2_table, **stretch_kwargs(st.dataframe), hide_index=True, column_config=tab2_config)
     else:
         st.info("The active codebook defines no domains.")
 
@@ -858,7 +1326,15 @@ with tab_econometric:
     e3.download_button(
         "📥 verbatim_quotes_inventory.csv", data=results["exports"]["verbatim_quotes_inventory.csv"],
         file_name="verbatim_quotes_inventory.csv", mime="text/csv", **stretch_kwargs(st.download_button),
+        help="Verbatim words only: transcript / survey turns and notable quotes from notes.",
     )
+    if CODED_EVIDENCE_CSV in results["exports"]:
+        st.download_button(
+            f"📥 {CODED_EVIDENCE_CSV}", data=results["exports"][CODED_EVIDENCE_CSV],
+            file_name=CODED_EVIDENCE_CSV, mime="text/csv", **stretch_kwargs(st.download_button),
+            help="Every coded entry with its evidence_type: verbatim quotes, paraphrased key points and "
+                 "note-taker observations. Paraphrases and observations are not participant quotations.",
+        )
     with st.expander("Source files and SHA-256 digests"):
         st.dataframe(
             pd.DataFrame(

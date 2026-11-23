@@ -37,7 +37,37 @@ QUOTE_COLUMNS = [
     "domain_id", "domain_name", "document_name", "source_id", "unit_id", "turn_id", "line_number",
     "timestamp", "speaker", "text", "char_start", "char_end", "match_char_start", "match_char_end",
     "match_text", "source_sha256",
+    # v1.2 notes provenance, appended after the v1.1 columns ("" when a turn lacks them).
+    "evidence_type", "question_id", "group_id", "participant_id",
 ]
+NOTES_PROVENANCE_COLUMNS = ("evidence_type", "question_id", "group_id", "participant_id")
+NOTES_THEMES_EVIDENCE_TYPE = "themes_summary"
+# Evidence holding the speaker's own words: notes "Notable Quotes" cells, transcript or
+# survey turns, and legacy turns without an evidence type. Paraphrased key points and
+# note-taker observations are coded evidence but never verbatim quotations.
+VERBATIM_EVIDENCE_TYPES = ("notable_quote_verbatim", "verbatim_turn", "")
+NOTES_EVIDENCE_LABELS = {
+    "notable_quote_verbatim": "Verbatim Quote (notes)",
+    "key_point_paraphrase": "Paraphrase (Key Point, not verbatim)",
+    "observation": "Note-Taker Observation (not verbatim)",
+    "verbatim_turn": "Verbatim Turn (transcript / survey)",
+    "": "Verbatim Turn (transcript / survey)",
+}
+CODED_EVIDENCE_EXPORT = "coded_evidence_inventory"
+
+
+def has_non_verbatim_evidence(quotes_df: pd.DataFrame) -> bool:
+    """Whether any coded row is a paraphrase or observation rather than verbatim words."""
+    if quotes_df is None or len(quotes_df) == 0 or "evidence_type" not in quotes_df.columns:
+        return False
+    return bool((~quotes_df["evidence_type"].astype(str).isin(VERBATIM_EVIDENCE_TYPES)).any())
+
+
+def verbatim_only(quotes_df: pd.DataFrame) -> pd.DataFrame:
+    """The rows of quotes_df that are verbatim words (see VERBATIM_EVIDENCE_TYPES)."""
+    if "evidence_type" not in quotes_df.columns:
+        return quotes_df
+    return quotes_df[quotes_df["evidence_type"].astype(str).isin(VERBATIM_EVIDENCE_TYPES)].reset_index(drop=True)
 _TOKEN = re.compile(r"\w+")
 
 
@@ -504,6 +534,8 @@ class AtlasEngine:
         interviewer_prompt_patterns: Optional[List[str]] = None,
         root_dir: Optional[str] = None,
         tabular_options: Optional[Dict[str, Any]] = None,
+        include_evidence_types: Optional[Sequence[str]] = None,
+        notes_unit_level: str = "group",
     ) -> Dict[str, Any]:
         """
         Parse transcript and tabular files and generate verified frequency matrices.
@@ -512,14 +544,29 @@ class AtlasEngine:
         given, otherwise the canonical absolute path, so files sharing a basename in
         different folders never collide. tabular_options (text_col, id_col,
         speaker_col, allow_duplicate_ids) apply to .csv/.xlsx inputs.
+        include_evidence_types and notes_unit_level are passed to the parser and only
+        affect structured focus-group notes (.docx).
+
+        Besides the process_turns keys, the result holds document_structures
+        ({source_id: "transcript" | "tabular" | "focus_group_notes"}), notes_metadata
+        (the parser's per-file notes metadata) and note_taker_themes_df: every
+        note-taker "Themes" row of the notes files, read by a separate parse so it is
+        reference only and never enters the coded turns, frequencies or quotes.
         """
         parser = UniversalTranscriptParser(
             facilitator_names=facilitator_names,
             interviewer_prompt_patterns=interviewer_prompt_patterns,
             root_dir=root_dir,
+            include_evidence_types=include_evidence_types,
+            notes_unit_level=notes_unit_level,
+        )
+        themes_parser = UniversalTranscriptParser(
+            root_dir=root_dir, include_evidence_types=(NOTES_THEMES_EVIDENCE_TYPE,),
         )
         all_turns: List[Dict[str, Any]] = []
+        theme_turns: List[Dict[str, Any]] = []
         file_hashes: Dict[str, str] = {}
+        document_structures: Dict[str, str] = {}
         seen_paths = set()
 
         for file_path in transcript_files:
@@ -538,9 +585,16 @@ class AtlasEngine:
             if source_id in file_hashes:
                 raise ValueError(f"Two inputs resolve to the same source_id {source_id!r}")
             file_hashes[source_id] = _sha256_file(file_path)
+            document_structures[source_id] = parser.last_document_structure
             all_turns.extend(turns)
+            if parser.last_document_structure == "focus_group_notes":
+                theme_turns.extend(themes_parser.parse_file(file_path, root_dir=root_dir))
 
-        return self.process_turns(all_turns, file_hashes)
+        results = self.process_turns(all_turns, file_hashes)
+        results["document_structures"] = document_structures
+        results["notes_metadata"] = dict(parser.last_document_metadata)
+        results["note_taker_themes_df"] = pd.DataFrame(theme_turns)
+        return results
 
     process_transcripts = process_corpus
 
@@ -601,6 +655,7 @@ class AtlasEngine:
                     "match_char_end": match_end,
                     "match_text": text[match_start:match_end],
                     "source_sha256": file_hashes[source_id],
+                    **{col: str(turn.get(col) or "") for col in NOTES_PROVENANCE_COLUMNS},
                 })
 
             record = dict(turn)
@@ -701,12 +756,31 @@ class AtlasEngine:
         """
         Export verified matrices to open standard formats (CSV, Parquet, Excel)
         plus provenance_manifest.json.
+
+        verbatim_quotes_inventory.csv / .parquet hold verbatim words only. When the
+        coded evidence also holds paraphrased key points or note-taker observations
+        (structured focus-group notes), every coded row, labelled by evidence_type,
+        is also written to coded_evidence_inventory.csv / .parquet; otherwise the
+        outputs are exactly the v1.1 set, and any coded_evidence_inventory files an
+        earlier export left in output_dir are removed.
         """
         os.makedirs(output_dir, exist_ok=True)
 
+        quotes = results["quotes_df"]
         results["frequencies_df"].to_csv(os.path.join(output_dir, "thematic_frequencies.csv"), index=False)
-        results["quotes_df"].to_csv(os.path.join(output_dir, "verbatim_quotes_inventory.csv"), index=False)
-        results["quotes_df"].to_parquet(os.path.join(output_dir, "verbatim_quotes_inventory.parquet"), index=False)
+        verbatim = verbatim_only(quotes)
+        verbatim.to_csv(os.path.join(output_dir, "verbatim_quotes_inventory.csv"), index=False)
+        verbatim.to_parquet(os.path.join(output_dir, "verbatim_quotes_inventory.parquet"), index=False)
+        coded_paths = [os.path.join(output_dir, f"{CODED_EVIDENCE_EXPORT}{ext}") for ext in (".csv", ".parquet")]
+        if has_non_verbatim_evidence(quotes):
+            quotes.to_csv(coded_paths[0], index=False)
+            quotes.to_parquet(coded_paths[1], index=False)
+        else:
+            # A reused output directory must not keep a coded-evidence inventory from an
+            # earlier corpus; only these ATLAS-named files are removed.
+            for path in coded_paths:
+                if os.path.isfile(path):
+                    os.remove(path)
 
         manifest = self.build_manifest(results)
         self._export_excel(results, manifest, os.path.join(output_dir, "actuarial_parameter_matrix.xlsx"))
@@ -767,9 +841,15 @@ class AtlasEngine:
         for idx, width in enumerate(col_widths, 1):
             ws_summary.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = width
 
-        ws_quotes = wb.create_sheet(title="Verbatim Quotes & Provenance")
+        # Mixed evidence (paraphrases / observations) gets an evidence-labelled sheet so no
+        # summary is presented as a participant's verbatim statement.
+        mixed = has_non_verbatim_evidence(results["quotes_df"])
+        ws_quotes = wb.create_sheet(title="Coded Evidence & Provenance" if mixed else "Verbatim Quotes & Provenance")
         q_headers = ["Domain ID", "Source ID", "Unit ID", "Line", "Timestamp", "Speaker", "Match Start",
-                     "Match End", "Verbatim Statement", "Source File SHA-256"]
+                     "Match End", "Coded Entry Text (see Evidence Type)" if mixed else "Verbatim Statement",
+                     "Source File SHA-256"]
+        if mixed:
+            q_headers += ["Evidence Type", "Question"]
         for col_idx, h in enumerate(q_headers, 1):
             cell = ws_quotes.cell(row=1, column=col_idx, value=h)
             cell.fill = NAVY_FILL
@@ -784,6 +864,9 @@ class AtlasEngine:
                 str(r["timestamp"]), r["speaker"], int(r["match_char_start"]), int(r["match_char_end"]),
                 r["text"], r["source_sha256"],
             ]
+            if mixed:
+                evidence = str(r.get("evidence_type") or "")
+                values += [NOTES_EVIDENCE_LABELS.get(evidence, evidence), str(r.get("question_id") or "")]
             for col_idx, value in enumerate(values, 1):
                 cell = ws_quotes.cell(row=r_num, column=col_idx, value=value)
                 cell.font = FONT_BOLD if col_idx == 1 else FONT_BODY

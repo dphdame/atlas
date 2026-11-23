@@ -497,6 +497,8 @@ class UniversalTranscriptParser:
         self.notes_unit_level = notes_unit_level
         # Focus-group notes metadata per source_id, kept across calls on one parser.
         self.last_document_metadata: Dict[str, Dict[str, Any]] = {}
+        # document_structure of the most recent parse_file / parse_tabular call.
+        self.last_document_structure: Optional[str] = None
         self.facilitator_names = (
             {_normalize_name(f) for f in facilitator_names if _normalize_name(f)}
             if facilitator_names else set()
@@ -537,6 +539,18 @@ class UniversalTranscriptParser:
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
+    @staticmethod
+    def detect_docx_structure(file_path: str) -> str:
+        """
+        "structured_notes" when a Word file holds a "Key Points | Notable Quotes"
+        notes table (parse_file would read it as focus-group notes), else
+        "transcript". A malformed package raises the same errors as parse_file.
+        """
+        blocks = _docx_blocks(file_path)
+        if any(rows is not None and _notes_columns(rows) for _, rows, _ in blocks):
+            return "structured_notes"
+        return "transcript"
+
     def parse_file(self, file_path: str, root_dir: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Detect file format and parse into standardized turns.
@@ -556,9 +570,11 @@ class UniversalTranscriptParser:
         self._reset_call_state()
         source_id = self._source_id(file_path, root_dir)
         self.last_document_metadata.pop(source_id, None)
+        self.last_document_structure = "transcript"
         if ext == ".docx":
             blocks = _docx_blocks(file_path)
             if any(rows is not None and _notes_columns(rows) for _, rows, _ in blocks):
+                self.last_document_structure = "focus_group_notes"
                 return self._parse_focus_group_notes(blocks, file_path, source_id)
             raw_entries = self._parse_docx(file_path)
         elif ext in (".vtt", ".srt"):
@@ -1192,6 +1208,7 @@ class UniversalTranscriptParser:
             unit_ids.append(unit_id)
 
         self.last_document_metadata.pop(source_id, None)
+        self.last_document_structure = "tabular"
         turns = self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=False)
         return self._add_structure_keys(turns, "tabular")
 
