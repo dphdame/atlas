@@ -93,15 +93,22 @@ _NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNOR
 _NOTES_EMBEDDED_QUESTION = re.compile(r"^question\s*\d+\s*(?:[:.)\-]|$)", re.IGNORECASE)
 _NOTES_PROMPT = re.compile(r"^(?:follow[\s-]*ups?|probes?)\s*:", re.IGNORECASE)
 _NOTES_CONSENT = re.compile(
-    r"^consent(?:\s+(?:statement|script)\b|"
-    r"\s+forms?\s*(?::|(?:was\s+|were\s+)?(?:reviewed|read|signed|received|collected|obtained|completed|confirmed)\b)|"
-    r"\s*(?:\([^)]*\))?\s*:)",
+    r"^consent(?:\s+(?:statement|script|forms?))?(?:\s*\([^)]*\))?\s*(?:$|:)|"
+    r"^consent\s+(?:statement|script)\s+(?:(?:was|were)\s+)?(?:read|reviewed|given|delivered|presented|shared|recited|"
+    r"completed|confirmed|signed|received)(?:\s+(?:again|aloud|to\s+all|by\s+all(?:\s+participants)?))*"
+    r"(?:\s+(?:before|after)\s+the\s+(?:paperwork|intake|enrollment|session|interview|discussion|questions?)"
+    r"(?:\s+(?:break|questions?|discussion|session|portion|section))?)?\s*\.?$|"
+    r"^consent\s+forms?\s+(?:(?:was|were)\s+)?(?:reviewed|read|signed|received|collected|obtained|completed|confirmed)"
+    r"(?:\s+(?:and\s+(?:reviewed|read|signed|received|collected|obtained|completed|confirmed)|by\s+all(?:\s+participants)?))?"
+    r"(?:\s+(?:before|after)\s+the\s+(?:paperwork|intake|enrollment|session|interview|discussion|questions?)"
+    r"(?:\s+(?:break|questions?|discussion|session|portion|section))?)?\s*\.?$",
     re.IGNORECASE,
 )
 # Metadata keys that collapse every label variant ("Main Observations (4-5) Ideas:").
 _NOTES_CANONICAL_KEYS = ("summary_of_session", "main_observations")
-_NOTES_SUMMARY_HEADER = re.compile(
-    r"^(?:summary\s+of\s+session|main\s+observations(?:\s*\([^)]*\))?(?:\s+ideas)?)\s*:?$",
+# Strict grammar for the summary boxes: group 1 is the label, group 2 any text after the colon.
+_NOTES_SUMMARY_LABEL = re.compile(
+    r"^(summary\s+of\s+session|main\s+observations(?:\s*\([^)]*\))?(?:\s+ideas)?)\s*(?::\s*(.*)|$)",
     re.IGNORECASE,
 )
 
@@ -872,8 +879,9 @@ class UniversalTranscriptParser:
         where one cell names several participants and an unlabelled contribution became
         "Unknown" are also listed in metadata["ambiguous_multilabel_rows"].
 
-        A row whose only new non-empty cell (merged across the row or typed in one
-        column) is a "Question N:" heading starts that question for the following rows;
+        A row with a structural label cell in any column (the other new cells are its
+        payload), and no explicit "P#:" label, is not evidence: a "Question N:" heading
+        starts that question for the following rows;
         a "Follow-up:" / "Probe:" prompt extends the current question's prompt; a
         "Consent:" statement is dropped; and a "Summary of Session" / "Main
         Observations" box is stored in the metadata. None of them is evidence.
@@ -980,43 +988,45 @@ class UniversalTranscriptParser:
                            question_id: str) -> Optional[str]:
             """
             The question_id after an embedded structural row, or None when the row is
-            evidence. Never reclassifies a row whose vertically merged continuation
-            cells carry a participant label. Handles both merged single-cell rows and
-            split label|value rows (e.g. "Summary of Session: | text").
+            evidence. A row with an explicit "P#:" label in any new cell is evidence. Otherwise
+            the structural label cell is found in any column (Key Points columns first, then
+            left to right) and the other new cells are its payload, so the result does not
+            depend on column order. Inherited labels from vertically merged cells never
+            exempt a genuine structural header; ordinary prose stays evidence.
             """
-            if any(pid for col in cont if col < len(cells) for pid, _ in _participant_segments(cells[col])):
-                return None
-            if any(pid for col in cols["key_points"] if col < len(cells) for pid, _ in _participant_segments(cells[col])):
-                return None
             new_cells = [(col, c) for col, c in enumerate(cells) if c and col not in cont]
             if not new_cells:
                 return None
-            first_col, first_text = new_cells[0]
-            if first_col != 0 and first_col not in cols["key_points"]:
+            if any(pid for _, c in new_cells for pid, _ in _participant_segments(c)):
                 return None
-            first_lines = _box_lines(first_text)
-            if not first_lines:
-                return None
-            extra_lines = [ln for _, c in new_cells[1:] for ln in _box_lines(c)]
-            if _NOTES_EMBEDDED_QUESTION.match(first_lines[0]):
-                match = _NOTES_QUESTION.match(first_text)
-                question_id = f"Question {int(match.group(1))}"
-                questions[question_id] = "\n".join(_box_lines(match.group(2)) + extra_lines)
-                return question_id
-            if _NOTES_PROMPT.match(first_lines[0]):
-                if len(first_lines) == 1 and first_lines[0].endswith(":") and extra_lines:
-                    prompt_lines = [f"{first_lines[0]} {extra_lines[0]}"] + extra_lines[1:]
-                else:
-                    prompt_lines = first_lines + extra_lines
-                if question_id in questions:
-                    questions[question_id] = "\n".join(_box_lines(questions[question_id]) + prompt_lines)
-                return question_id
-            if _NOTES_CONSENT.match(first_lines[0]):
-                return question_id
-            if read_box(first_lines + extra_lines, _NOTES_CANONICAL_KEYS):
-                return question_id
-            if _NOTES_SUMMARY_HEADER.match(first_lines[0]):
-                set_metadata(first_lines[0], "\n".join(first_lines[1:] + extra_lines))
+            order = sorted(new_cells, key=lambda item: (item[0] not in cols["key_points"], item[0]))
+            for label_col, label_text in order:
+                first_lines = _box_lines(label_text)
+                if not first_lines:
+                    continue
+                head = first_lines[0]
+                summary_label = _NOTES_SUMMARY_LABEL.match(head)
+                if not (_NOTES_EMBEDDED_QUESTION.match(head) or _NOTES_PROMPT.match(head)
+                        or _NOTES_CONSENT.match(head) or summary_label):
+                    continue
+                extra_lines = [ln for col, c in new_cells if col != label_col for ln in _box_lines(c)]
+                if _NOTES_EMBEDDED_QUESTION.match(head):
+                    match = _NOTES_QUESTION.match(label_text.strip())
+                    question_id = f"Question {int(match.group(1))}"
+                    questions[question_id] = "\n".join(_box_lines(match.group(2)) + extra_lines)
+                    return question_id
+                if _NOTES_PROMPT.match(head):
+                    if len(first_lines) == 1 and head.endswith(":") and extra_lines:
+                        prompt_lines = [f"{head} {extra_lines[0]}"] + extra_lines[1:]
+                    else:
+                        prompt_lines = first_lines + extra_lines
+                    if question_id in questions:
+                        questions[question_id] = "\n".join(_box_lines(questions[question_id]) + prompt_lines)
+                    return question_id
+                if summary_label:
+                    rest = (summary_label.group(2) or "").strip()
+                    set_metadata(summary_label.group(1),
+                                 "\n".join(([rest] if rest else []) + first_lines[1:] + extra_lines))
                 return question_id
             return None
 

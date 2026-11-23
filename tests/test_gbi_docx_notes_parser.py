@@ -949,5 +949,169 @@ class RepairRound2Tests(unittest.TestCase):
         self.assertEqual(parser.last_document_metadata["prose_obs.docx"]["summary_of_session"], "Paperwork took weeks.")
 
 
+class RepairRound3Tests(unittest.TestCase):
+    """Codex review of 6b88714: column-order independence, participant ownership, consent and summary grammar."""
+
+    ROLES = ("Key Points", "Notable Quotes", "Observations")
+    LABELS = (
+        ("Question 2:", "How long did it take?", "Question 2"),
+        ("Probe:", "Ask about delays.", "Question 1"),
+        ("Follow-up:", "Any portal issues?", "Question 1"),
+        ("Consent:", "Verbal consent received.", "Question 1"),
+        ("Consent form", "Verbal consent received.", "Question 1"),
+        ("Summary of Session:", "Paperwork took weeks.", "Question 1"),
+        ("Main Observations (4-5) Ideas:", "1. Delays.", "Question 1"),
+    )
+
+    @staticmethod
+    def _run(tmp, name, build, header=("Key Points", "Notable Quotes", "Observations"), n_rows=3, intro="Question 1: Start?"):
+        document = docx.Document()
+        document.add_paragraph(intro)
+        table = new_notes_table(document, n_rows, header)
+        build(table)
+        path = Path(tmp) / name
+        document.save(str(path))
+        parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+        turns = parser.parse_file(str(path), root_dir=tmp)
+        return parser, turns, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_structural_labels_are_independent_of_column_order(self):
+        import itertools
+        probes = 0
+        for perm in itertools.permutations(self.ROLES):
+            key_col = perm.index("Key Points")
+            for label, payload, after_q in self.LABELS:
+                for position in range(3):
+                    for shape in ("split", "single"):
+                        def build(table, position=position, shape=shape, label=label, payload=payload):
+                            table.cell(1, key_col).text = "P1: Before."
+                            table.cell(2, position).text = label
+                            if shape == "split":
+                                table.cell(2, (position + 1) % 3).text = payload
+                            table.cell(3, key_col).text = "P2: After."
+                        with self.subTest(perm=perm, label=label, position=position, shape=shape):
+                            probes += 1
+                            with tempfile.TemporaryDirectory() as tmp:
+                                _, turns, _ = self._run(tmp, "order.docx", build, header=perm)
+                            self.assertEqual(
+                                [(t["question_id"], t["speaker"], t["text"]) for t in turns],
+                                [("Question 1", "P1", "Before."), (after_q, "P2", "After.")])
+        self.assertGreaterEqual(probes, 42)
+
+    def test_explicit_participant_label_outside_key_points_keeps_row(self):
+        def build(table):
+            table.cell(1, 0).text = "P1: Start."
+            table.cell(2, 0).text = "Consent form was signed at the wrong office, so my paperwork was delayed."
+            table.cell(2, 1).text = "P1: I had to return twice."
+            table.cell(3, 0).text = "P2: Fine."
+        with tempfile.TemporaryDirectory() as tmp:
+            _, turns, sha = self._run(tmp, "outside_kp.docx", build)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Start."),
+            ("Question 1", "P1", KP, "Consent form was signed at the wrong office, so my paperwork was delayed."),
+            ("Question 1", "P1", QUOTE, "I had to return twice."),
+            ("Question 1", "P2", KP, "Fine."),
+        ])
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"outside_kp.docx": sha})
+        self.assertEqual(results["total_documents"], 2)
+
+    def test_inherited_participant_label_does_not_hide_structure(self):
+        def build(table):
+            table.cell(1, 0).merge(table.cell(4, 0)).text = "P1: Enrollment took weeks."
+            table.cell(1, 1).text = "First quote."
+            table.cell(2, 1).text = "Consent: Verbal consent received from all."
+            table.cell(3, 1).text = "Question 2: How long did it take?"
+            table.cell(4, 1).text = "It took weeks."
+            table.cell(5, 0).text = "P2: Fine."
+        with tempfile.TemporaryDirectory() as tmp:
+            parser, turns, _ = self._run(tmp, "inherited.docx", build, n_rows=5)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Enrollment took weeks."),
+            ("Question 1", "P1", QUOTE, "First quote."),
+            ("Question 2", "P1", QUOTE, "It took weeks."),
+            ("Question 2", "P2", KP, "Fine."),
+        ])
+        self.assertEqual(parser.last_document_metadata["inherited.docx"]["questions"]["Question 2"], "How long did it take?")
+
+    def test_consent_prose_beneath_vertical_merge_stays_evidence(self):
+        def build(table):
+            table.cell(1, 0).merge(table.cell(3, 0)).text = "P1: Enrollment took weeks."
+            table.cell(1, 1).text = "Consent form paperwork was confusing."
+            table.cell(2, 1).text = "Consent form was signed at the wrong office, so my paperwork was delayed."
+            table.cell(3, 1).text = "Consent forms took too long."
+        with tempfile.TemporaryDirectory() as tmp:
+            _, turns, _ = self._run(tmp, "merge_prose.docx", build)
+        self.assertEqual([(t["speaker"], t["text"]) for t in turns], [
+            ("P1", "Enrollment took weeks."),
+            ("P1", "Consent form paperwork was confusing."),
+            ("P1", "Consent form was signed at the wrong office, so my paperwork was delayed."),
+            ("P1", "Consent forms took too long."),
+        ])
+
+    def test_bare_consent_headers_are_structural(self):
+        for header in ("Consent", "Consent form", "Consent forms", "Consent statement", "Consent script",
+                       "Consent form (verbal)", "Consent form reviewed and signed.", "Consent statement read aloud"):
+            def build(table, header=header):
+                table.cell(1, 0).text = "P1: Start."
+                table.cell(2, 0).text = header
+                table.cell(3, 0).text = "P2: After."
+            with self.subTest(header=header), tempfile.TemporaryDirectory() as tmp:
+                _, turns, sha = self._run(tmp, "bare.docx", build)
+                self.assertEqual([t["speaker"] for t in turns], ["P1", "P2"])
+                results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"bare.docx": sha})
+                self.assertEqual(results["total_documents"], 2)
+
+    def test_consent_grammar_rejects_participant_prose(self):
+        from universal_transcript_parser import _NOTES_CONSENT
+        for prose in ("Consent form paperwork was confusing.",
+                      "Consent form was signed at the wrong office, so my paperwork was delayed.",
+                      "Consent forms took too long.",
+                      "Consent statement was confusing and delayed my appointment.",
+                      "Consent script was too long, so I left.",
+                      "Consent statement made me nervous.",
+                      "Consent statement was read before I could ask questions.",
+                      "Consent form signed before I understood the paperwork rules."):
+            self.assertIsNone(_NOTES_CONSENT.match(prose), prose)
+
+    def test_consent_statement_prose_stays_evidence(self):
+        def build(table):
+            table.cell(1, 0).text = "Consent statement was confusing and delayed my appointment."
+            table.cell(1, 1).text = "It took weeks."
+            table.cell(2, 0).text = "Consent script was too long, so I left."
+            table.cell(3, 0).text = "Consent statement was read before I could ask questions."
+        with tempfile.TemporaryDirectory() as tmp:
+            _, turns, _ = self._run(tmp, "consent_prose.docx", build, n_rows=3)
+        self.assertEqual([t["text"] for t in turns], [
+            "Consent statement was confusing and delayed my appointment.", "It took weeks.",
+            "Consent script was too long, so I left.",
+            "Consent statement was read before I could ask questions."])
+
+    def test_colon_containing_observations_prose_is_evidence(self):
+        def build(table):
+            table.cell(1, 0).text = "Main observations about the program: the paperwork was confusing."
+            table.cell(1, 1).text = "It took weeks."
+            table.cell(2, 0).text = "Summary of session notes from P1: paperwork was hard."
+        with tempfile.TemporaryDirectory() as tmp:
+            parser, turns, _ = self._run(tmp, "obs_prose.docx", build, n_rows=2)
+        self.assertEqual([t["text"] for t in turns], [
+            "Main observations about the program: the paperwork was confusing.",
+            "It took weeks.",
+            "Summary of session notes from P1: paperwork was hard.",
+        ])
+        meta = parser.last_document_metadata["obs_prose.docx"]
+        self.assertNotIn("main_observations", meta)
+
+    def test_summary_label_grammar(self):
+        from universal_transcript_parser import _NOTES_SUMMARY_LABEL
+        for ok in ("Summary of Session:", "Summary of Session: Paperwork took weeks.", "Summary of Session",
+                   "Main Observations:", "Main Observations (4-5) Ideas:", "Main Observations (4-5) Ideas: 1. Delays.",
+                   "Main Observations (4-5) Ideas"):
+            self.assertIsNotNone(_NOTES_SUMMARY_LABEL.match(ok), ok)
+        for bad in ("Main observations about the program: the paperwork was confusing.",
+                    "Main observations about the program were positive.",
+                    "Summary of session notes from P1: paperwork was hard."):
+            self.assertIsNone(_NOTES_SUMMARY_LABEL.match(bad), bad)
+
+
 if __name__ == "__main__":
     unittest.main()
