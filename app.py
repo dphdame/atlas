@@ -127,10 +127,15 @@ SOFTWARE_TEST_BANNER = (
 )
 
 REFERENCE_GUIDES = [
+    ("📋 GBI Analyst Quick-Start Guide (Markdown)", "ATLAS_GBI_Analyst_Quick_Start.md"),
     ("📘 User Guide (Markdown)", "ATLAS_User_Guide.md"),
     ("📗 Methodology & Reference Manual (Markdown)", "ATLAS_Methodology_and_Reference_Manual.md"),
     ("📙 Practitioner Field Guide (Markdown)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
 ]
+
+DISCOVERY_METHOD_NMF = "TF-IDF + NMF (Recommended — faster, sharper keywords)"
+DISCOVERY_METHOD_LDA = "LDA (Classic bag-of-words)"
+DISCOVERY_METHOD_MAP = {DISCOVERY_METHOD_NMF: "nmf", DISCOVERY_METHOD_LDA: "lda"}
 
 # Errors raised by reading a malformed upload: bad CSV structure or quoting (ValueError),
 # invalid UTF-8, or a corrupt .xlsx / .docx package or malformed XML part inside one.
@@ -619,8 +624,8 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
 
 
 @st.cache_data(show_spinner=False)
-def run_topic_discovery(turn_records, n_topics):
-    return discover_topics(turn_records, n_topics=n_topics)
+def run_topic_discovery(turn_records, n_topics, method="nmf"):
+    return discover_topics(turn_records, n_topics=n_topics, method=method)
 
 
 def dedupe_terms(terms):
@@ -1157,7 +1162,17 @@ with tab_thematic:
                     )
 
     with qtab_topics:
-        st.markdown("#### Unsupervised topic discovery (LDA topics, TF-IDF cosine medoids)")
+        disc_choice = st.radio(
+            "Discovery method",
+            list(DISCOVERY_METHOD_MAP),
+            index=0,
+            horizontal=True,
+            help="TF-IDF + NMF is faster, deterministic across runs, and produces more distinct topic keywords; "
+                 "LDA is the classic bag-of-words topic model.",
+        )
+        disc_method = DISCOVERY_METHOD_MAP[disc_choice]
+        disc_label = "TF-IDF + NMF topics" if disc_method == "nmf" else "LDA topics"
+        st.markdown(f"#### Unsupervised topic discovery ({disc_label}, TF-IDF cosine medoids)")
         if notes_present:
             st.caption("Each medoid is the coded notes entry closest to its topic's TF-IDF centroid. A medoid "
                        "can be a verbatim quote, a paraphrased key point or a note-taker observation; its "
@@ -1166,7 +1181,7 @@ with tab_thematic:
             st.caption("Each medoid is the real participant turn closest to its topic's TF-IDF centroid.")
         n_topics = st.slider("Number of topics (k)", min_value=1, max_value=10, value=3)
         turn_records = results["tagged_turns_df"].to_dict("records")
-        discovery = run_topic_discovery(turn_records, n_topics)
+        discovery = run_topic_discovery(turn_records, n_topics, method=disc_method)
         topics = discovery["topics"]
         medoid_evidence = {
             (str(r.get("unit_id")), str(r.get("turn_id")), str(r.get("text"))): str(r.get("evidence_type") or "")
@@ -1217,7 +1232,7 @@ with tab_thematic:
                 },
             )
             corpus_digest = hashlib.sha256(b"".join(p for _, p in inputs)).hexdigest()[:8]
-            discovered_label = f"Discovered: {len(topics)} topics · corpus {corpus_digest} (session)"
+            discovered_label = f"Discovered ({disc_method.upper()}): {len(topics)} topics · corpus {corpus_digest} (session)"
             codebook_yaml = yaml.safe_dump(
                 topics_to_codebook_dict(discovery, project_name=f"Discovered Codebook ({corpus_label})"),
                 allow_unicode=True, sort_keys=False,

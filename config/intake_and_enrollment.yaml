@@ -51,4 +51,9 @@ topics:
       - "walked me through"
       - "answered questions"
       - "respectful"
+    exclude_fences:
+      - "patients"
+      - "patient portal"
+      - "impatient"
+    exclude_window: 0
     context_window: 6

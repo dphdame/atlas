@@ -16,6 +16,15 @@ topics:
       - "shelter"
       - "couch surfing"
       - "moved twice"
+    exclude_fences:
+      - "rental car"
+      - "car rental"
+      - "parent"
+      - "parents"
+      - "current"
+      - "currently"
+      - "different"
+    exclude_window: 0
     context_window: 10
 
   food_insecurity:
@@ -30,6 +39,14 @@ topics:
       - "cal fresh"
       - "wic"
       - "hunger"
+    exclude_fences:
+      - "snapshot"
+      - "snapped"
+      - "snapchat"
+      - "wick"
+      - "wicked"
+      - "wicker"
+    exclude_window: 0
     context_window: 8
 
   transportation_barrier:
@@ -44,6 +61,12 @@ topics:
       - "bus pass"
       - "fare"
       - "missed visit"
+    exclude_fences:
+      - "business"
+      - "busy"
+      - "farewell"
+      - "welfare"
+    exclude_window: 0
     context_window: 10
     required_context:
       - "clinic"
@@ -63,4 +86,8 @@ topics:
       - "gas bill"
       - "water bill"
       - "phone disconnected"
+    exclude_fences:
+      - "heath"
+      - "heathen"
+    exclude_window: 0
     context_window: 8

@@ -2,7 +2,8 @@
 ATLAS Discover
 Deterministic, fully offline Phase-1 topic discovery for qualitative corpora.
 
-Fits a bag-of-words Latent Dirichlet Allocation model (scikit-learn) over
+Fits a TF-IDF + Non-Negative Matrix Factorization (NMF, default) or classic
+bag-of-words Latent Dirichlet Allocation (LDA) model (scikit-learn) over
 participant turns, assigns each turn to its dominant topic, picks a TF-IDF
 cosine medoid turn per topic, and converts the discovered topics into an ATLAS
 YAML codebook draft that compiles directly in AtlasEngine. Stopwords are
@@ -16,9 +17,11 @@ import unicodedata
 from typing import Any, Dict, List, Sequence, Union
 
 import numpy as np
-from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.decomposition import LatentDirichletAllocation, NMF
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+DISCOVERY_METHODS = ("nmf", "lda")
 
 EN_STOPWORDS = frozenset("""
 a about above after again against all also am an and any are aren as at be because been before being below
@@ -47,8 +50,8 @@ EN_ES_STOPWORDS = EN_STOPWORDS | ES_STOPWORDS
 _STOP_LIST = sorted(EN_ES_STOPWORDS)
 
 
-def _empty_result() -> Dict[str, Any]:
-    return {"topics": [], "n_analyzed": 0, "doc_topics": [], "assignments": []}
+def _empty_result(method: str = "nmf") -> Dict[str, Any]:
+    return {"method": method, "topics": [], "n_analyzed": 0, "doc_topics": [], "assignments": []}
 
 
 def _turn_records(turns: Sequence[Union[Dict[str, Any], str]]) -> List[Dict[str, Any]]:
@@ -87,6 +90,7 @@ def discover_topics(
     n_topics: int = 5,
     n_top_words: int = 8,
     random_state: int = 42,
+    method: str = "nmf",
 ) -> Dict[str, Any]:
     """
     Discover latent topics over participant turns.
@@ -94,12 +98,18 @@ def discover_topics(
     turns: list of turn dicts (facilitator turns, is_facilitator=True, are dropped)
     or list of plain strings. Empty texts and texts with no tokens after stopword
     filtering are not analyzed. The topic count is clamped to [1, n_valid_docs].
+    method: "nmf" (default: TF-IDF 1-2 grams with sublinear TF + NMF) or "lda"
+    (classic CountVectorizer + LatentDirichletAllocation).
 
-    Returns {"topics": [...], "n_analyzed": int, "doc_topics": [[...], ...],
+    Returns {"method": str, "topics": [...], "n_analyzed": int, "doc_topics": [[...], ...],
     "assignments": [...]}; each topic carries topic_id, label, top_terms,
     turn_count, share_pct and its TF-IDF cosine medoid turn (medoid_text,
     medoid_turn_id, medoid_speaker, medoid_unit_id, medoid_similarity).
     """
+    method_key = str(method).strip().lower()
+    if method_key not in DISCOVERY_METHODS:
+        raise ValueError(f"Unsupported discovery method {method!r}; expected one of {DISCOVERY_METHODS}")
+
     records = _turn_records(turns)
     analyzer = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST).build_analyzer()
 
@@ -112,21 +122,35 @@ def discover_topics(
             continue
         valid.append(dict(rec, normalized=normalized))
     if not valid:
-        return _empty_result()
+        return _empty_result(method_key)
 
     docs = [rec["normalized"] for rec in valid]
     k = min(max(1, int(n_topics)), len(docs))
     n_top_words = max(1, int(n_top_words))
 
-    counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
-    counts = counter.fit_transform(docs)
-    vocab = counter.get_feature_names_out()
-    if len(vocab) == 0:
-        return _empty_result()
-
-    lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
-    doc_topic = lda.fit_transform(counts)
-    components = lda.components_
+    if method_key == "nmf":
+        vec = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, stop_words=_STOP_LIST, min_df=1, max_features=2000)
+        matrix = vec.fit_transform(docs)
+        vocab = vec.get_feature_names_out()
+        if len(vocab) == 0:
+            return _empty_result(method_key)
+        nmf_init = "nndsvda" if (k <= min(matrix.shape[0], matrix.shape[1]) and len(set(docs)) >= k) else "random"
+        model = NMF(n_components=k, init=nmf_init, max_iter=400, random_state=random_state)
+        doc_topic = model.fit_transform(matrix)
+        components = model.components_
+        if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
+            model = NMF(n_components=k, init="random", max_iter=400, random_state=random_state)
+            doc_topic = model.fit_transform(matrix)
+            components = model.components_
+    else:
+        counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
+        counts = counter.fit_transform(docs)
+        vocab = counter.get_feature_names_out()
+        if len(vocab) == 0:
+            return _empty_result(method_key)
+        lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
+        doc_topic = lda.fit_transform(counts)
+        components = lda.components_
 
     # Cross-topic deduplication: each term belongs to the topic where its weight is highest.
     owner = np.argmax(components, axis=0)
@@ -189,6 +213,7 @@ def discover_topics(
     ]
 
     return {
+        "method": method_key,
         "topics": topics,
         "n_analyzed": len(docs),
         "doc_topics": [[float(x) for x in row] for row in doc_topic],

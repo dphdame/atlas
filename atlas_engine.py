@@ -155,17 +155,31 @@ def _parse_window(value: Any, label: str, rule_id: str) -> Optional[int]:
     return window
 
 
-def _normalize_rule(item: Dict[str, Any], default_id: str) -> Dict[str, Any]:
+MATCH_MODES = ("prefix", "exact")
+
+
+def _parse_match_mode(raw: Any, default: str, context: str) -> str:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    mode = str(raw).strip().lower()
+    if mode not in MATCH_MODES:
+        raise ValueError(f"Invalid match_mode {raw!r} in {context}; expected one of {MATCH_MODES}")
+    return mode
+
+
+def _normalize_rule(item: Dict[str, Any], default_id: str, default_match_mode: str = "prefix") -> Dict[str, Any]:
     if not isinstance(item, dict):
         raise ValueError(f"Codebook rule {default_id!r} must be a mapping, got {type(item).__name__}")
     rule_id = str(_first_present(item, ("id",), default_id))
-    roots_en = _term_list(item.get("roots_en")) + _term_list(item.get("keywords"))
+    roots_en = _term_list(item.get("roots_en")) + _term_list(item.get("roots")) + _term_list(item.get("keywords"))
+    match_mode = _parse_match_mode(item.get("match_mode"), default_match_mode, f"rule {rule_id!r}")
     return {
         "id": rule_id,
         "name": str(_first_present(item, ("name", "label"), rule_id)),
         "description": str(_first_present(item, ("description", "definition"), "")),
         "roots_en": _term_list(roots_en),
         "roots_es": _term_list(item.get("roots_es")),
+        "match_mode": match_mode,
         "context_fences": _term_list(_first_present(item, ("context_fences", "required_context"), [])),
         "context_window": _first_present(item, ("context_window", "co_occurrence_window")),
         "exclude_fences": _term_list(_first_present(item, ("exclude_fences", "negative_fences", "exclude_terms"), [])),
@@ -179,6 +193,12 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
     'domains' (researcher), 'topics' as a dict or list (practitioner), or
     'themes' followed by 'frictions' (benchmarking).
     """
+    meta = codebook.get("meta") if isinstance(codebook.get("meta"), dict) else {}
+    default_match_mode = _parse_match_mode(
+        _first_present(codebook, ("match_mode",), meta.get("match_mode")),
+        "prefix",
+        "codebook",
+    )
     items: List[Tuple[Any, str]] = []
     if codebook.get("domains") is not None:
         items = [(d, f"domain_{i}") for i, d in enumerate(codebook["domains"] or [], 1)]
@@ -202,7 +222,7 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
                 raise ValueError(f"Codebook section {section!r} must be a list")
             items.extend((d, f"{section}_{i}") for i, d in enumerate(section_items, 1))
 
-    rules = [_normalize_rule(item, default_id) for item, default_id in items]
+    rules = [_normalize_rule(item, default_id, default_match_mode) for item, default_id in items]
     seen = set()
     for rule in rules:
         if rule["id"] in seen:
@@ -211,18 +231,31 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rules
 
 
-def _compile_terms(terms: Sequence[str]) -> Optional["re.Pattern[str]"]:
-    """Word-boundary-anchored stem alternation over folded terms, longest first."""
+def _term_pattern_str(term: str, match_mode: str = "prefix") -> str:
+    prefix = r"\b" if re.match(r"\w", term[0]) else r"(?<!\w)"
+    if match_mode == "exact":
+        suffix = r"\b" if re.match(r"\w", term[-1]) else r"(?!\w)"
+    else:
+        suffix = ""
+    return prefix + re.escape(term) + suffix
+
+
+def _compile_terms(terms: Sequence[str], match_mode: str = "prefix") -> Optional["re.Pattern[str]"]:
+    """Word-boundary-anchored stem (or exact-word) alternation over folded terms, longest first."""
     folded = sorted({fold_accents(t) for t in terms if fold_accents(t)}, key=lambda t: (-len(t), t))
     if not folded:
         return None
-    return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in folded) + r")", re.IGNORECASE)
+    if match_mode == "prefix":
+        return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in folded) + r")", re.IGNORECASE)
+    return re.compile("(?:" + "|".join(_term_pattern_str(t, "exact") for t in folded) + ")", re.IGNORECASE)
 
 
-def _compile_term_patterns(terms: Sequence[str]) -> List["re.Pattern[str]"]:
-    """One word-boundary-anchored stem pattern per distinct folded term, longest first."""
+def _compile_term_patterns(terms: Sequence[str], match_mode: str = "prefix") -> List["re.Pattern[str]"]:
+    """One word-boundary-anchored stem (or exact-word) pattern per distinct folded term, longest first."""
     folded = sorted({fold_accents(t) for t in terms if fold_accents(t)}, key=lambda t: (-len(t), t))
-    return [re.compile(r"\b" + re.escape(t), re.IGNORECASE) for t in folded]
+    if match_mode == "prefix":
+        return [re.compile(r"\b" + re.escape(t), re.IGNORECASE) for t in folded]
+    return [re.compile(_term_pattern_str(t, "exact"), re.IGNORECASE) for t in folded]
 
 
 def _find_overlapping_spans(patterns: Sequence["re.Pattern[str]"], text: str) -> List[Tuple[int, int]]:
@@ -441,12 +474,14 @@ class AtlasEngine:
         for domain in self.domains:
             rule_id = domain["id"]
             roots = domain.get("roots_en", []) + domain.get("roots_es", [])
+            match_mode = domain.get("match_mode", "prefix")
             self.compiled_rules.append({
                 "id": rule_id,
                 "name": domain["name"],
                 "description": domain.get("description", ""),
-                "root_regex": _compile_terms(roots),
-                "root_patterns": _compile_term_patterns(roots),
+                "match_mode": match_mode,
+                "root_regex": _compile_terms(roots, match_mode),
+                "root_patterns": _compile_term_patterns(roots, match_mode),
                 "fence_regex": _compile_terms(domain.get("context_fences", [])),
                 "fence_patterns": _compile_term_patterns(domain.get("context_fences", [])),
                 "context_window": _parse_window(domain.get("context_window"), "context_window", rule_id),

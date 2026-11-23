@@ -49,4 +49,9 @@ topics:
       - "full time"
       - "hourly rate"
       - "benefits included"
+    exclude_fences:
+      - "raisin"
+      - "fundraise"
+      - "fundraiser"
+    exclude_window: 0
     context_window: 8
