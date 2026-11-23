@@ -71,7 +71,7 @@ For tabular uploads (`.csv` / `.xlsx`), ATLAS auto-detects the free-text column�
 
 ## 4. The sidebar
 
-Every analysis choice lives in the left sidebar and updates the workbench live.
+Every analysis choice lives in the left sidebar and takes effect when you click **`▶ Run Analysis`**.
 
 ![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](figures/atlas_dashboard_ui_walkthrough.png)
 
@@ -85,7 +85,7 @@ Every analysis choice lives in the left sidebar and updates the workbench live.
 | Sample: Community Health Survey (.csv) | `software_test_survey.csv` (text `response`, id `respondent_id`, speaker `role`) |
 | Sample: Teams Multiline Transcript (.docx) | `software_test_teams_multiline.docx` |
 
-When **Upload Custom Files** is selected, table-column selectors appear automatically for `.csv` / `.xlsx` uploads. Optional **Facilitator names** and **Interviewer prompt patterns** sit tucked inside a collapsed **Advanced transcript filters (optional)** expander for free-form transcripts—and stay completely hidden when 3-column focus-group `.docx` notes are loaded in Group Mode, because the structured notes parser already strips headers, prompts, and summary boxes automatically. When no facilitator names are entered on a free-form transcript, any named speaker who asks more than half of at least three questions is treated as the facilitator.
+When **Upload Custom Files** is selected, table-column selectors appear automatically for `.csv` / `.xlsx` uploads. Optional **Facilitator names** and **Interviewer prompt patterns** sit tucked inside a collapsed **Advanced transcript filters (optional)** expander for free-form or mixed uploads—and stay completely hidden when every uploaded file is a 3-column focus-group `.docx` notes table in Group Mode, because the structured notes parser already strips headers, prompts, and summary boxes automatically. When no facilitator names are entered on a free-form transcript, any named speaker who asks more than half of at least three questions is treated as the facilitator.
 
 ### Data Type (Individual vs. Group Mode)
 
@@ -107,7 +107,7 @@ The bottom of the sidebar offers one-click formatted **Word (`.docx`)** download
 
 ## 5. Tab 1: thematic discovery, coding, and false-alarm spot-check
 
-The top of Tab 1 displays a literal, plain-text run summary (corpus, active codebook, and project name) followed by four KPI cards that adapt to the selected Data Type.
+The top of Tab 1 displays a concise, literal plain-text run summary (`Corpus: ... · Codebook: <primary> (+N stacked · K domains)`) followed by four KPI cards that adapt to the selected Data Type.
 
 ### KPI cards
 

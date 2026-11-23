@@ -5,7 +5,10 @@ All inputs here are SOFTWARE_TEST fixtures or repository documentation files.
 """
 
 import io
+import os
+import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,6 +50,7 @@ def _load_app_guide_helpers():
         "split_markdown_for_app",
         "_add_inline_markdown_runs",
         "_set_picture_alt_text",
+        "_png_pixel_size",
         "_neutralize_relative_md_links",
         "format_codebook_summary",
     }
@@ -65,11 +69,16 @@ def _load_app_guide_helpers():
         "SLATE": "#334155",
     }
     # Pull helper imports from python-docx used by markdown_to_docx_bytes
+    from docx.enum.section import WD_ORIENT, WD_SECTION
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement, parse_xml
     from docx.oxml.ns import nsdecls, qn
     from docx.shared import Inches, Pt, RGBColor
 
     ns.update({
+        "WD_ORIENT": WD_ORIENT,
+        "WD_SECTION": WD_SECTION,
+        "WD_ALIGN_PARAGRAPH": WD_ALIGN_PARAGRAPH,
         "Inches": Inches,
         "Pt": Pt,
         "RGBColor": RGBColor,
@@ -115,12 +124,35 @@ class GuideDocxConversionTests(unittest.TestCase):
                 )
                 # Bold syntax should be converted into Word bold runs, leaving no literal ** markers.
                 self.assertNotIn("**", all_para_text, f"{filename}: raw ** bold marker leaked into .docx")
-                # Embedded pictures match expected figure counts.
+                # Embedded pictures match expected figure counts and stay >= 10.5 pt effective label size
+                # inside landscape figure pages (never overflowing 10.0" x 6.85").
                 self.assertEqual(
                     len(doc.inline_shapes),
                     EXPECTED_DOCX_IMAGES[filename],
                     f"{filename}: expected {EXPECTED_DOCX_IMAGES[filename]} embedded figures in .docx",
                 )
+                fig_targets = re.findall(r"!\[[^\]]*\]\(([^)]+\.png)\)", md_text)
+                self.assertEqual(len(fig_targets), len(doc.inline_shapes))
+                png_size = helpers["_png_pixel_size"]
+                for shape, rel_fig in zip(doc.inline_shapes, fig_targets):
+                    px_w, px_h = png_size(DOCS_DIR / rel_fig)
+                    disp_w_in = shape.width / 914400.0
+                    disp_h_in = shape.height / 914400.0
+                    self.assertLessEqual(disp_w_in, 10.01, f"{filename} {rel_fig}: width {disp_w_in:.2f}in")
+                    self.assertLessEqual(disp_h_in, 6.86, f"{filename} {rel_fig}: height {disp_h_in:.2f}in")
+                    # Committed figures render 22 CSS-px labels at 2x DPR (logical width = px_w / 2).
+                    eff_pt = 22.0 / (px_w / 2.0) * (disp_w_in * 72.0)
+                    self.assertGreaterEqual(
+                        eff_pt,
+                        10.5,
+                        f"{filename} {rel_fig}: effective label font {eff_pt:.2f}pt < 10.5pt floor",
+                    )
+                if doc.inline_shapes:
+                    from docx.enum.section import WD_ORIENT
+                    self.assertTrue(
+                        any(s.orientation == WD_ORIENT.LANDSCAPE for s in doc.sections),
+                        f"{filename}: figures must be placed on landscape pages",
+                    )
                 # Guides with Markdown tables must produce native Word tables.
                 if "| :--- |" in md_text:
                     self.assertGreater(len(doc.tables), 0, f"{filename}: Markdown tables not converted to Word tables")
@@ -131,25 +163,44 @@ class GuideDocxConversionTests(unittest.TestCase):
         split_fn = helpers["split_markdown_for_app"]
         convert = helpers["markdown_to_docx_bytes"]
 
-        sample = (
-            "# Title\n\n"
-            "See [Manual](ATLAS_Methodology_and_Reference_Manual.md#3) and "
-            "[GitHub](https://github.com/dphdame/atlas).\n\n"
-            "![escape attempt](../../README.md)\n\n"
-            "![valid figure](figures/atlas_audit_bridge.png)\n"
-        )
-        blocks = split_fn(sample, str(DOCS_DIR))
-        img_blocks = [b for b in blocks if b[0] == "image"]
-        self.assertEqual(len(img_blocks), 1, "only in-directory valid PNG figures should become image blocks")
-        self.assertTrue(str(img_blocks[0][1]).endswith("atlas_audit_bridge.png"))
+        valid_png_bytes = (DOCS_DIR / "figures" / "atlas_audit_bridge.png").read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            outside_png = tmp_root / "outside_secret.png"
+            outside_png.write_bytes(valid_png_bytes)
+            docs_box = tmp_root / "docs_box"
+            (docs_box / "figures").mkdir(parents=True)
+            inside_png = docs_box / "figures" / "inside.png"
+            inside_png.write_bytes(valid_png_bytes)
+            symlink_png = docs_box / "figures" / "escape_link.png"
+            symlink_created = False
+            try:
+                os.symlink(outside_png, symlink_png)
+                symlink_created = True
+            except OSError:
+                pass
 
-        md_joined = "\n".join(b[1] for b in blocks if b[0] == "markdown")
-        self.assertNotIn("ATLAS_Methodology_and_Reference_Manual.md", md_joined)
-        self.assertIn("https://github.com/dphdame/atlas", md_joined)
+            sample = (
+                "# Title\n\n"
+                "See [Manual](ATLAS_Methodology_and_Reference_Manual.md#3) and "
+                "[GitHub](https://github.com/dphdame/atlas).\n\n"
+                "![escape md](../../README.md)\n\n"
+                "![escape outside png](../outside_secret.png)\n\n"
+                + ("![escape symlink png](figures/escape_link.png)\n\n" if symlink_created else "")
+                + "![valid figure](figures/inside.png)\n"
+            )
+            blocks = split_fn(sample, str(docs_box))
+            img_blocks = [b for b in blocks if b[0] == "image"]
+            self.assertEqual(len(img_blocks), 1, "only in-directory valid PNG figures should become image blocks")
+            self.assertTrue(str(img_blocks[0][1]).endswith("inside.png"))
 
-        payload = convert(sample, str(DOCS_DIR))
-        doc = docx.Document(io.BytesIO(payload))
-        self.assertEqual(len(doc.inline_shapes), 1)
+            md_joined = "\n".join(b[1] for b in blocks if b[0] == "markdown")
+            self.assertNotIn("ATLAS_Methodology_and_Reference_Manual.md", md_joined)
+            self.assertIn("https://github.com/dphdame/atlas", md_joined)
+
+            payload = convert(sample, str(docs_box))
+            doc = docx.Document(io.BytesIO(payload))
+            self.assertEqual(len(doc.inline_shapes), 1)
 
 
 class GuideTabsAndDownloadsUITests(unittest.TestCase):
@@ -269,6 +320,29 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         self.assertFalse(any("Facilitator names" in t.label for t in at.text_input))
         self.assertFalse(any("Interviewer prompt patterns" in t.label for t in at.text_area))
 
+        # Uploading a mixed corpus (3-column notes .docx + free-form .txt) MUST keep the collapsed
+        # transcript filters available so facilitator lines in the free-form file can still be excluded.
+        mixed_txt = b"Moderator: How did the bus affect your rent?\nP9: Groceries went up this month.\n"
+        uploader = next(u for u in at.file_uploader if "docx" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        uploader.set_value([
+            ("notes_group_a.docx", sample_notes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("freeform_group_b.txt", mixed_txt, "text/plain"),
+        ])
+        at.run()
+        self.assertTrue(any("Advanced transcript filters" in e.label for e in at.expander))
+        self._widget(at, "text_input", "Facilitator names (optional, comma-separated)").set_value("Moderator")
+        at.run()
+        self._widget(at, "button", "▶ Run Analysis").click()
+        at.run()
+        self.assertFalse(list(at.exception))
+        # Moderator's prompt must NOT appear in any coded quote / evidence table.
+        for df_el in at.dataframe:
+            if hasattr(df_el.value, "columns") and "text" in df_el.value.columns:
+                self.assertFalse(
+                    df_el.value["text"].astype(str).str.contains("How did the bus affect your rent", regex=False).any(),
+                    "Moderator turn leaked into coded evidence on mixed upload",
+                )
+
         # Uploading a plain .txt transcript exposes the collapsed filters and honors facilitator exclusion on Run.
         txt_payload = b"Moderator: How is rent?\nP1: Rent went up this month.\n"
         uploader = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
@@ -318,18 +392,21 @@ class OwnerUXSimplificationTests(unittest.TestCase):
 
 
 class GuidesV12AlignmentTests(unittest.TestCase):
-    def test_all_four_guides_reflect_v12_features_without_stale_v11_drift(self):
+    def test_all_four_guides_and_readme_reflect_v12_features_without_stale_v11_drift(self):
         user_guide = (DOCS_DIR / "ATLAS_User_Guide.md").read_text(encoding="utf-8")
         for req in ("TF-IDF + NMF", "Group / summarized notes", "Quotable Verbatim Only",
                     "Stack Additional Starter Codebooks", "Add Theme to Active Codebook",
-                    "False-Alarm Spot-Check", "match_mode", "Reference Guides"):
+                    "False-Alarm Spot-Check", "match_mode", "Reference Guides", "▶ Run Analysis"):
             self.assertIn(req, user_guide, f"User Guide missing v1.2 feature {req!r}")
-        self.assertNotIn("Suggests emergent topics with LDA", user_guide)
+        for stale in ("Suggests emergent topics with LDA", "updates the workbench live", "and project name"):
+            self.assertNotIn(stale, user_guide, f"User Guide still carries stale wording {stale!r}")
 
         method_manual = (DOCS_DIR / "ATLAS_Methodology_and_Reference_Manual.md").read_text(encoding="utf-8")
         for req in ("TF-IDF", "NMF", "match_mode", "group_by_source", "coded_evidence_inventory",
                     "audit_false_alarm_risks", "merge_codebook_dicts", "append_topic_to_codebook"):
             self.assertIn(req, method_manual, f"Methodology Manual missing v1.2 feature {req!r}")
+        for unbacked in ("Holm-adjusted", "+3.5"):
+            self.assertNotIn(unbacked, method_manual, f"Methodology Manual carries unbacked benchmark claim {unbacked!r}")
 
         field_guide = (DOCS_DIR / "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md").read_text(encoding="utf-8")
         for req in ("gbi_focus_group_starter.yaml", "Group Mode", "Quotable Verbatim Only",
@@ -341,6 +418,11 @@ class GuidesV12AlignmentTests(unittest.TestCase):
         for req in ("Tab 3: Reference Guides", ".docx", "Stack Additional Starter Codebooks",
                     "Add Theme to Active Codebook", "False-Alarm Spot-Check"):
             self.assertIn(req, quick_start, f"Quick-Start Guide missing {req!r}")
+
+        readme = " ".join((REPO_ROOT / "README.md").read_text(encoding="utf-8").split())
+        for req in ("Group Mode", "Focus Groups (G)", "Distinct Participant Voices", "coded_evidence_inventory.csv",
+                    "Quotable Verbatim Only", "TF-IDF + NMF", "False-Alarm Spot-Check", "▶ Run Analysis"):
+            self.assertIn(req, readme, f"README.md missing v1.2 feature {req!r}")
 
 
 if __name__ == "__main__":

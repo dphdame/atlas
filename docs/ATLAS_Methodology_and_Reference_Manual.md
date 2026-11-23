@@ -38,7 +38,7 @@ In both methods, effective `k` is clamped to the corpus's supported unique-patte
 **Roots and `match_mode` (`prefix` vs. `exact`).** Each root term is matched case- and combining-mark-insensitively:
 
 * **`match_mode: "prefix"` (default, backward-compatible with `v1.1`).** Anchors each term at the start of a word (`\b`), so a stem matches inflected forms (`evict` matches `eviction` and `evicted`), while `trabajo` does not match `trabajaba`. The tradeoff is that short stems (`car`, `bus`, `snap`) can also match unrelated longer words (`card`, `business`, `snapshot`) unless fenced.
-* **`match_mode: "exact"` (optional codebook-level or per-domain override introduced in `v1.2`).** Enforces word boundaries on both ends (using `\b` for word characters and `(?<!\w)` / `(?!\w)` for punctuation-edged terms like `c++`), restricting matches strictly to whole words or exact multi-word phrases. In an isolated offline benchmark, switching short unfenced rules from prefix to exact whole-word matching produced a statistically confirmed multi-label precision gain (`+3.5` percentage points, Holm-adjusted `p < 0.001`).
+* **`match_mode: "exact"` (optional codebook-level or per-domain override introduced in `v1.2`).** Enforces word boundaries on both ends (using `\b` for word characters and `(?<!\w)` / `(?!\w)` for punctuation-edged terms like `c++`), restricting matches strictly to whole words or exact multi-word phrases. Use exact mode when short roots would otherwise trigger unrelated longer words (for example, `car` matching `card` or `career`, or `fee` matching `feedback`) without writing a long list of exclusion fences.
 
 Overlapping occurrences of different roots are all enumerated and evaluated against fences.
 

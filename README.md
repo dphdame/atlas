@@ -65,30 +65,46 @@ Installing dependencies needs a network connection; analysis does not.
   focus-group notes `.docx`; bilingual interview `.txt` + Zoom `.vtt`; community survey `.csv`;
   Teams `.docx`). For uploaded `.csv` / `.xlsx` tables the free-text column is detected automatically
   (columns named `id` or ending in `_id` are never chosen) and can be changed; optional respondent-id
-  and speaker columns are shown for tables, and optional facilitator names / prompt regexes sit inside
-  a collapsed **Advanced transcript filters** expander for free-form transcripts (hidden on 3-column
-  focus-group notes).
+  and speaker columns are shown for tables. Optional facilitator names and prompt regexes sit inside a
+  collapsed **Advanced transcript filters (optional)** expander for free-form or mixed uploads and stay
+  hidden when every uploaded file is a 3-column focus-group notes `.docx` in Group Mode.
+* **Data Type:** **Individual transcripts / survey responses** or **Group / summarized notes** (`1 file = 1 group`,
+  auto-selected whenever an uploaded `.docx` contains a 3-column focus-group notes table, with an optional
+  **Include Note-Taker Observations** toggle unchecked by default).
 * **Active YAML Codebook & Stacking:** every `.yaml` file in `config/` (defaulting to
   `gbi_focus_group_starter.yaml`), optional **Stack Additional Starter Codebooks**, any session
   discovered/customized codebook, or **Upload Custom Codebook (.yaml)**.
 * **▶ Run Analysis:** click once after selecting files and codebooks to run coding, discovery, and
-  export generation (changes in the sidebar wait cleanly until you click **▶ Run Analysis**).
+  export generation (sidebar edits wait cleanly until you click **▶ Run Analysis**).
 * **Reference Guides:** formatted Word (`.docx`) downloads in the sidebar plus an in-app formatted
   reader in **Tab 3: Reference Guides**.
 
 **Tab 1: Standalone Thematic Discovery & Qualitative Coding**
-* KPI cards: **Analytical Units (N)**, **Participant Turns**, **Active Domains**, **Matched Turn Mentions**.
-* Prevalence chart and accessible table; a quote browser (search, domain and speaker filters) showing
-  each verbatim turn with its matched span, `source_id`, `unit_id`, line, `match_char_start`–`match_char_end`
-  and `source_sha256`; topic discovery with a topic-count slider, representative medoids (verbatim turns
-  for transcripts, or coded notes entries for structured focus-group notes), a
-  **Download Discovered Codebook (.yaml)** button and an **Apply Discovered Codebook to Engine** button.
+* **KPI cards** adapt to **Data Type**: in **Individual Mode**, **Analytical Units (N)**, **Participant Turns**,
+  **Active Domains**, and **Matched Turn Mentions**; in **Group Mode**, **Focus Groups (G)**, **Distinct
+  Participant Voices**, **Coded Notes Entries**, and **Active Domains**.
+* **Prevalence & Distribution:** domain prevalence bar chart and accessible table in Individual Mode; integer
+  **Groups Reporting (`g of G`)** bar chart, **Group × Theme** participant-voice matrix, and a reference-only
+  **Note-Taker Themes Summary** expander in Group Mode.
+* **Evidence & Provenance Browser:** search and filter matches with highlighted spans, `source_id`, `unit_id`,
+  line, `match_char_start`–`match_char_end`, and `source_sha256`. When paraphrased key points or observations
+  are present, entries carry explicit evidence-type badges and Group Mode adds a **Quotable Verbatim Only**
+  checkbox so paraphrases are never misquoted.
+* **Topic Discovery:** offline **TF-IDF + NMF** (default) or **LDA** with a topic-count slider, representative
+  medoids (tagged with `evidence_type` for structured notes), **Download Discovered Codebook (.yaml)**,
+  **Apply Discovered Codebook to Engine**, and one-click **➕ Add Theme to Active Codebook** (exact whole-word
+  matching by default).
+* **False-Alarm Spot-Check:** flags prefix extensions, nearby negations, and short unfenced stems, exports
+  `atlas_false_alarm_spot_check.csv`, and offers one-click exclusion fences or exact whole-word tightening.
 
 **Tab 2: Econometric & Actuarial Ledger Export**
-* Parameter matrix with N (analytical units), units reporting, prevalence, `p`, binomial
-  SE = √(p(1 − p)/N) and a normal-approximation 95% interval.
+* In **Individual Mode** (ordinary transcripts and surveys), reports per-domain units reporting, N, prevalence,
+  `p`, binomial SE = √(p(1 − p)/N), and a normal-approximation 95% interval. In **Group Mode** (and whenever
+  structured focus-group notes are loaded), displays an explicit statistical guardrail banner, hides Binomial SE
+  and 95% intervals, and reports integer **Groups Reporting (`g of G`)** and distinct participant voices.
 * Downloads produced by `AtlasEngine.export_results`: `actuarial_parameter_matrix.xlsx`,
-  `provenance_manifest.json`, `verbatim_quotes_inventory.csv`, plus the workbook integrity result.
+  `provenance_manifest.json`, `verbatim_quotes_inventory.csv`, plus `coded_evidence_inventory.csv` (for
+  structured notes), `atlas_active_codebook.yaml` (when stacked or customized), and the workbook integrity result.
 
 ### SOFTWARE_TEST walkthrough: survey sample × `pfl_case_study_codebook.yaml`
 

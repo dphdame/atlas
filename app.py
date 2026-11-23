@@ -31,6 +31,8 @@ import docx
 import pandas as pd
 import streamlit as st
 import yaml
+from docx.enum.section import WD_ORIENT, WD_SECTION
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
@@ -850,6 +852,14 @@ def _set_picture_alt_text(run, alt_text):
             break
 
 
+def _png_pixel_size(path):
+    """Read (width, height) from a PNG IHDR header without extra dependencies; None if not PNG."""
+    raw = Path(path).read_bytes()[:24]
+    if len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n" and raw[12:16] == b"IHDR":
+        return int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big")
+    return None
+
+
 def _add_inline_markdown_runs(paragraph, text, *, base_color=None, base_bold=False, base_italic=False, font_size=10.5):
     """Parse inline Markdown (**bold**, *italic*, `code`, [links](url)) recursively into styled Word runs."""
     token_pat = re.compile(
@@ -1042,7 +1052,8 @@ def markdown_to_docx_bytes(md_text, base_dir):
             i += 1
             continue
 
-        # Standalone image embed
+        # Standalone image embed: place wide figures on a US Letter Landscape page
+        # (10.0" x 6.85" max image box) so 22 CSS-px labels render at >= 11.0 pt on page.
         im = img_pat.match(stripped)
         if im:
             alt_text, rel_target = im.group(1).strip(), im.group(2).strip()
@@ -1052,18 +1063,73 @@ def markdown_to_docx_bytes(md_text, base_dir):
                 and candidate.is_file()
                 and candidate.suffix.lower() in {".png", ".jpg", ".jpeg"}
             ):
+                caption_text = None
+                if i + 1 < n and lines[i + 1].strip().startswith("*") and not lines[i + 1].strip().startswith("**"):
+                    cap_parts = []
+                    j = i + 1
+                    while (
+                        j < n
+                        and lines[j].strip()
+                        and not lines[j].strip().startswith(("#", "|", ">", "```", "!["))
+                    ):
+                        cap_parts.append(lines[j].strip())
+                        j += 1
+                        if cap_parts[-1].endswith("*"):
+                            break
+                    if cap_parts and cap_parts[-1].endswith("*"):
+                        caption_text = " ".join(cap_parts)
+                        i = j - 1
+
+                if document.paragraphs or document.tables:
+                    sec_fig = document.add_section(WD_SECTION.NEW_PAGE)
+                else:
+                    sec_fig = document.sections[0]
+                sec_fig.orientation = WD_ORIENT.LANDSCAPE
+                sec_fig.page_width = Inches(11.0)
+                sec_fig.page_height = Inches(8.5)
+                sec_fig.top_margin = Inches(0.45)
+                sec_fig.bottom_margin = Inches(0.45)
+                sec_fig.left_margin = Inches(0.5)
+                sec_fig.right_margin = Inches(0.5)
+
+                dims = _png_pixel_size(candidate)
+                if dims and dims[0] > 0 and dims[1] > 0:
+                    disp_w = dims[0] * min(10.0 / dims[0], 6.85 / dims[1])
+                else:
+                    disp_w = 9.5
+
                 p = document.add_paragraph()
-                p.paragraph_format.space_before = Pt(6)
-                p.paragraph_format.space_after = Pt(3)
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.space_before = Pt(2)
+                p.paragraph_format.space_after = Pt(4)
                 p.paragraph_format.keep_with_next = True
                 run = p.add_run()
-                run.add_picture(str(candidate), width=Inches(6.3))
+                run.add_picture(str(candidate), width=Inches(disp_w))
                 _set_picture_alt_text(run, alt_text)
-                next_line = lines[i + 1].strip() if i + 1 < n else ""
-                if alt_text and not (next_line.startswith("*") and next_line.endswith("*")):
+
+                cap_source = caption_text or alt_text
+                if cap_source:
                     cap = document.add_paragraph()
-                    cap.paragraph_format.space_after = Pt(6)
-                    _add_inline_markdown_runs(cap, alt_text, base_color=slate_rgb, base_italic=True, font_size=9.0)
+                    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    cap.paragraph_format.space_before = Pt(0)
+                    cap.paragraph_format.space_after = Pt(4)
+                    _add_inline_markdown_runs(
+                        cap,
+                        cap_source,
+                        base_color=slate_rgb,
+                        base_italic=caption_text is None,
+                        font_size=10.0,
+                    )
+
+                if any(ln.strip() for ln in lines[i + 1 :]):
+                    sec_back = document.add_section(WD_SECTION.NEW_PAGE)
+                    sec_back.orientation = WD_ORIENT.PORTRAIT
+                    sec_back.page_width = Inches(8.5)
+                    sec_back.page_height = Inches(11.0)
+                    sec_back.top_margin = Inches(0.8)
+                    sec_back.bottom_margin = Inches(0.8)
+                    sec_back.left_margin = Inches(0.85)
+                    sec_back.right_margin = Inches(0.85)
             i += 1
             continue
 
@@ -1363,7 +1429,9 @@ with st.sidebar:
     else:
         detect_items = [(f.name, f.getvalue()) for f in uploaded_files]
     detect_digest = tuple((name, len(payload), hashlib.sha256(payload).hexdigest()) for name, payload in detect_items)
-    has_structured_notes = any(detect_structured_notes(name, payload) for name, payload in detect_items)
+    structured_flags = [detect_structured_notes(name, payload) for name, payload in detect_items]
+    has_structured_notes = any(structured_flags)
+    all_structured_notes = bool(structured_flags) and all(structured_flags)
     data_type_fingerprint = (corpus_choice, detect_digest)
     if st.session_state.get("data_type_fingerprint") != data_type_fingerprint:
         st.session_state.data_type_fingerprint = data_type_fingerprint
@@ -1383,10 +1451,10 @@ with st.sidebar:
         )
         draft_notes_evidence = NOTES_EVIDENCE_WITH_OBSERVATIONS if include_observations else NOTES_EVIDENCE_CORE
 
-    # Advanced free-form transcript filters stay hidden on 3-column focus-group notes (which
-    # strip headers, prompts, and summaries structurally) and tucked inside a collapsed expander
-    # when uploading ordinary transcripts or tables.
-    if corpus_choice == CORPUS_UPLOAD and not (draft_group_mode and has_structured_notes):
+    # Advanced free-form transcript filters stay hidden only when every uploaded file is a
+    # 3-column focus-group notes table in Group mode (which strips headers and prompts structurally);
+    # free-form and mixed uploads keep the collapsed expander available.
+    if corpus_choice == CORPUS_UPLOAD and not (draft_group_mode and all_structured_notes):
         with st.expander("⚙️ Advanced transcript filters (optional)", expanded=False):
             st.caption("Only needed for free-form interview transcripts—3-column focus-group notes filter headers and prompts automatically.")
             names_raw = st.text_input(
