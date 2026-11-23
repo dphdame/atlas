@@ -1232,7 +1232,7 @@ with tab_thematic:
                 },
             )
             corpus_digest = hashlib.sha256(b"".join(p for _, p in inputs)).hexdigest()[:8]
-            discovered_label = f"Discovered ({disc_method.upper()}): {len(topics)} topics · corpus {corpus_digest} (session)"
+            discovered_label = f"Discovered: {len(topics)} topics ({disc_method.upper()}) · corpus {corpus_digest} (session)"
             codebook_yaml = yaml.safe_dump(
                 topics_to_codebook_dict(discovery, project_name=f"Discovered Codebook ({corpus_label})"),
                 allow_unicode=True, sort_keys=False,
