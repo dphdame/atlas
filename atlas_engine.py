@@ -1182,9 +1182,13 @@ def append_topic_to_codebook(
         resolved_name = f"{base_name} ({name_idx})"
         name_idx += 1
 
-    base_id = _slugify_id(domain_id) if domain_id and str(domain_id).strip() else (
-        f"discovered_{_slugify_id(resolved_name) or f'topic_{topic_num}'}"
-    )
+    if domain_id is not None and str(domain_id).strip():
+        base_id = _slugify_id(domain_id)
+        if not base_id:
+            raise ValueError(f"domain_id {domain_id!r} must contain at least one ASCII letter or digit.")
+    else:
+        slug = _slugify_id(resolved_name)
+        base_id = f"discovered_{slug}" if slug else f"discovered_topic_{topic_num}"
     resolved_id = base_id
     id_idx = 2
     while resolved_id in seen_ids:
@@ -1457,9 +1461,21 @@ def audit_false_alarm_risks(
             quoted_words = ", ".join(f"'{w}'" for w in ext_words_ordered)
             reasons.append(f"Prefix extension ('{ext_entries[0][2]}' inside {quoted_words})")
             excl_hint = ", ".join(f"'{w.lower()}'" for w in ext_words_ordered)
-            fixes.append(
-                f"Add {excl_hint} to exclude_fences (window 0) or switch domain to match_mode: exact"
-            )
+            excl_win = compiled_rule["exclude_window"] if compiled_rule else None
+            if (not has_exclude and excl_win is None) or excl_win == 0:
+                fixes.append(
+                    f"Add {excl_hint} to exclude_fences (window 0) or switch domain to match_mode: exact"
+                )
+            elif excl_win is not None:
+                fixes.append(
+                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
+                    f"(preserves {excl_win}-token window)"
+                )
+            else:
+                fixes.append(
+                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
+                    "(preserves turn-level window)"
+                )
         if nearest_neg is not None:
             codes.append("negation_nearby")
             reasons.append(f"Nearby negation ('{nearest_neg[1]}')")

@@ -152,6 +152,16 @@ class AddonBAppendDiscoveredTopicTests(unittest.TestCase):
             atlas_engine.append_topic_to_codebook(base_cb, {"topic_id": 1, "top_terms": []})
         with self.assertRaises(ValueError):
             atlas_engine.append_topic_to_codebook(base_cb, {"topic_id": 1, "top_terms": ["rent"]}, match_mode="fuzzy")
+        with self.assertRaises(ValueError):
+            atlas_engine.append_topic_to_codebook(base_cb, {"topic_id": 1, "top_terms": ["voucher"]}, domain_id="交通")
+
+        # Non-ASCII display name with omitted domain_id must still generate a non-empty valid domain id.
+        non_ascii_name_cb = atlas_engine.append_topic_to_codebook(
+            base_cb, {"topic_id": 1, "top_terms": ["voucher"]}, domain_name="交通"
+        )
+        added = non_ascii_name_cb["domains"][0]
+        self.assertTrue(added["id"], "auto-generated domain id must be non-empty")
+        self.assertEqual(added["name"], "交通")
 
 
 class AddonCFalseAlarmSpotCheckTests(unittest.TestCase):
@@ -373,6 +383,78 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         text = QUICK_START.read_text(encoding="utf-8")
         for required in ("Stack Additional Starter Codebooks", "Add Theme to Active Codebook", "False-Alarm Spot-Check"):
             self.assertIn(required, text)
+
+    def test_same_update_callbacks_markdown_literal_meta_and_preserved_window_disclosure(self):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=25)
+        at.run()
+        corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
+        up_opt = next(o for o in corpus_box.options if "Upload" in str(o))
+        corpus_box.set_value(up_opt)
+        at.run()
+        uploader = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        uploader.set_value((
+            "software_test_r1.txt",
+            b"# SOFTWARE_TEST\nP1: My car and card sat near the bus stop.\n",
+            "text/plain",
+        ))
+        at.run()
+        cb_box = self._widget(at, "selectbox", "Active YAML Codebook")
+        cb_box.set_value("Upload Custom Codebook (.yaml)")
+        at.run()
+        cb_uploader = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        cb_yaml = yaml.safe_dump({
+            "project": "SOFTWARE_TEST Windowed",
+            "domains": [{
+                "id": "car_dom",
+                "name": "Car Access",
+                "roots_en": ["car"],
+                "exclude_fences": ["zebra"],
+                "exclude_window": 4,
+            }],
+        }).encode("utf-8")
+        cb_uploader.set_value(("software_test_windowed.yaml", cb_yaml, "application/x-yaml"))
+        at.run()
+        self.assertFalse(list(at.exception))
+
+        # P2 #3: Exclusion multiselect must advertise the actual preserved 4-token window, not "0-token fence".
+        excl_ms = next((m for m in at.multiselect if "False-alarm words to exclude" in m.label), None)
+        self.assertIsNotNone(excl_ms)
+        self.assertIn("4-token", excl_ms.label)
+        self.assertNotIn("0-token", excl_ms.label)
+
+        # P2 #1 (Spot-Check): Clearing exclusions and clicking Exclude in the same update must NOT apply stale words.
+        excl_ms.set_value([])
+        excl_btn = self._widget(at, "button", "🛡️ Exclude Selected Words from Domain")
+        excl_btn.click()
+        at.run()
+        self.assertFalse(list(at.exception))
+        self.assertEqual(
+            self._widget(at, "selectbox", "Active YAML Codebook").value,
+            "Upload Custom Codebook (.yaml)",
+            "Empty exclusion selection in the same update must be a no-op, not apply stale words",
+        )
+
+        # P2 #1 (Add Theme) + P2 #2 (Literal Markdown-safe metadata):
+        # Unchecking exact mode, entering Markdown image syntax as custom name, and clicking Add in one update
+        # must apply match_mode='prefix' AND never render the custom name via Markdown st.caption.
+        img_name = "![x](https://example.invalid/pixel.png)"
+        self._widget(at, "checkbox", "Use exact whole-word matching for added theme (recommended)").uncheck()
+        self._widget(at, "text_input", "New domain name (optional)").set_value(img_name)
+        self._widget(at, "button", "➕ Add Theme to Active Codebook").click()
+        at.run()
+        self.assertFalse(list(at.exception))
+        active_label = self._widget(at, "selectbox", "Active YAML Codebook").value
+        active_cb = yaml.safe_load(at.session_state["discovered_codebooks"][active_label])
+        self.assertEqual(active_cb["domains"][-1]["match_mode"], "prefix")
+        self.assertEqual(active_cb["domains"][-1]["name"], img_name)
+        self.assertFalse(
+            any(img_name in str(c.value) for c in at.caption),
+            "Custom domain name with Markdown syntax must not be interpolated into Markdown st.caption",
+        )
+        self.assertTrue(
+            any(img_name in str(t.value) for t in at.text),
+            "Workbench metadata must render literally via st.text",
+        )
 
 
 if __name__ == "__main__":

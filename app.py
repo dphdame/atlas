@@ -46,6 +46,7 @@ from atlas_engine import (
     audit_false_alarm_risks,
     has_non_verbatim_evidence,
     merge_codebook_dicts,
+    normalize_codebook_rules,
     summarize_false_alarm_risks,
     tighten_codebook_domain,
     verbatim_only as verbatim_rows,
@@ -675,17 +676,29 @@ def apply_discovered_codebook(label, yaml_bytes):
     st.session_state.stacked_codebooks = []
 
 
-def add_theme_to_active_codebook(current_bytes, topic, custom_name, match_mode):
+def esc_inline(value):
+    collapsed = re.sub(r"[\r\n\x0b\x0c\x85\u2028\u2029]+", " ", "" if value is None else str(value))
+    return html.escape(collapsed, quote=True)
+
+
+def add_theme_to_active_codebook(current_bytes, topic_choices):
+    if not topic_choices:
+        return
+    picked_label = st.session_state.get("add_topic_select")
+    topic = topic_choices.get(picked_label) or next(iter(topic_choices.values()))
+    custom_name = str(st.session_state.get("add_topic_name", "") or "").strip()
+    match_mode = "exact" if st.session_state.get("add_topic_exact", True) else "prefix"
     current_dict = yaml.safe_load(current_bytes) or {}
     updated_dict = append_topic_to_codebook(
         current_dict,
         topic,
-        domain_name=str(custom_name or "").strip() or None,
+        domain_name=custom_name or None,
         match_mode=match_mode,
     )
     new_domain = updated_dict["domains"][-1]
     updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
-    base = f"Custom: +{new_domain['name']} ({len(updated_dict['domains'])} domains)"
+    clean_name = re.sub(r"[\r\n]+", " ", str(new_domain["name"])).strip()
+    base = f"Custom: +{clean_name} ({len(updated_dict['domains'])} domains)"
     label, idx = base, 2
     while label in st.session_state.discovered_codebooks:
         label = f"{base} #{idx}"
@@ -696,10 +709,22 @@ def add_theme_to_active_codebook(current_bytes, topic, custom_name, match_mode):
     st.session_state.add_topic_name = ""
 
 
-def apply_tightened_codebook(current_bytes, domain_id, domain_name, exclude_words, set_exact_mode):
-    words = [str(w).strip() for w in (exclude_words or []) if str(w).strip()]
-    if not words and not set_exact_mode:
+def apply_tightened_codebook(current_bytes, domain_choice_map, rendered_fix_label, ext_key, set_exact_mode):
+    if not domain_choice_map:
         return
+    live_label = st.session_state.get("spotcheck_fix_domain")
+    if live_label not in domain_choice_map:
+        live_label = rendered_fix_label if rendered_fix_label in domain_choice_map else next(iter(domain_choice_map))
+    domain_id, domain_name = domain_choice_map[live_label]
+
+    words = []
+    if not set_exact_mode:
+        if live_label != rendered_fix_label or not ext_key:
+            return
+        words = [str(w).strip() for w in (st.session_state.get(ext_key) or []) if str(w).strip()]
+        if not words:
+            return
+
     current_dict = yaml.safe_load(current_bytes) or {}
     updated_dict = tighten_codebook_domain(
         current_dict,
@@ -709,7 +734,8 @@ def apply_tightened_codebook(current_bytes, domain_id, domain_name, exclude_word
     )
     updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
     action = "exact" if set_exact_mode and not words else "fenced"
-    base = f"Custom: {domain_name} ({action}, {len(updated_dict['domains'])} domains)"
+    clean_name = re.sub(r"[\r\n]+", " ", str(domain_name)).strip()
+    base = f"Custom: {clean_name} ({action}, {len(updated_dict['domains'])} domains)"
     label, idx = base, 2
     while label in st.session_state.discovered_codebooks:
         label = f"{base} #{idx}"
@@ -1051,7 +1077,12 @@ tab_thematic, tab_econometric = st.tabs([
 # ==============================================================================
 with tab_thematic:
     st.markdown("### Qualitative Thematic Workbench")
-    st.caption(f"Corpus: {corpus_label} · Codebook: {active_codebook_label} · Project: {results['project_name']}")
+    workbench_meta = re.sub(
+        r"[\r\n\x0b\x0c\x85\u2028\u2029]+",
+        " ",
+        f"Corpus: {corpus_label} · Codebook: {active_codebook_label} · Project: {results['project_name']}",
+    )
+    st.text(workbench_meta)
 
     k1, k2, k3, k4 = st.columns(4)
     if group_mode:
@@ -1397,7 +1428,7 @@ with tab_thematic:
             st.button(
                 "➕ Add Theme to Active Codebook",
                 on_click=add_theme_to_active_codebook,
-                args=(codebook_bytes, picked_topic, custom_theme_name, "exact" if exact_mode_add else "prefix"),
+                args=(codebook_bytes, topic_choices),
                 key="add_topic_to_active_btn",
                 **stretch_kwargs(st.button),
                 help="Appends this topic to the active codebook, immediately re-codes the corpus, and lets you download the updated YAML.",
@@ -1461,21 +1492,60 @@ with tab_thematic:
                 for w in str(cell).split(",")
                 if w.strip()
             })
+            active_rules_by_id = {
+                r["id"]: r for r in normalize_codebook_rules(yaml.safe_load(codebook_bytes) or {})
+            }
+            target_rule = active_rules_by_id.get(fix_domain_id, {})
+            existing_excludes = bool(target_rule.get("exclude_fences"))
+            raw_excl_win = target_rule.get("exclude_window")
+            existing_excl_win = int(float(raw_excl_win)) if raw_excl_win is not None else None
+            if (not existing_excludes and existing_excl_win is None) or existing_excl_win == 0:
+                excl_label = "False-alarm words to exclude (0-token fence)"
+                excl_help = "Adds these words to exclude_fences with a 0-token window so only the flagged word is blocked."
+                excl_scope_note = None
+            elif existing_excl_win is not None:
+                excl_label = f"False-alarm words to exclude (preserves {existing_excl_win}-token exclusion window)"
+                excl_help = (
+                    f"This domain already uses a {existing_excl_win}-token exclusion window. Adding words preserves "
+                    f"that window and may also block valid matches within {existing_excl_win} tokens of an excluded word."
+                )
+                excl_scope_note = (
+                    f"Note: this domain already has exclude_fences with a {existing_excl_win}-token window. "
+                    f"Adding an exclusion word preserves that {existing_excl_win}-token window (so nearby valid matches "
+                    f"within {existing_excl_win} tokens could also be suppressed). Switch to Exact Whole-Word Matching "
+                    "if you only want to block prefix extensions."
+                )
+            else:
+                excl_label = "False-alarm words to exclude (preserves turn-level exclusion window)"
+                excl_help = (
+                    "This domain already uses turn-level exclude_fences (no token window). Adding a word preserves "
+                    "turn-level suppression whenever that word appears anywhere in a turn."
+                )
+                excl_scope_note = (
+                    "Note: this domain already uses turn-level exclude_fences. Adding an exclusion word suppresses "
+                    "the whole turn if that word appears anywhere in it. Switch to Exact Whole-Word Matching if you "
+                    "only want to block prefix extensions."
+                )
+
             selected_exclude_words = []
+            ext_key = None
             if ext_words:
                 ext_sig = hashlib.sha256(",".join(ext_words).encode("utf-8")).hexdigest()[:8]
+                ext_key = f"spotcheck_excl_{fix_domain_id}_{ext_sig}"
                 selected_exclude_words = sc2.multiselect(
-                    "False-alarm words to exclude (0-token fence)",
+                    excl_label,
                     ext_words,
                     default=ext_words,
-                    key=f"spotcheck_excl_{fix_domain_id}_{ext_sig}",
-                    help="Adds these words to exclude_fences so they stop matching this domain.",
+                    key=ext_key,
+                    help=excl_help,
                 )
+                if excl_scope_note:
+                    st.caption(excl_scope_note)
             b1, b2 = st.columns(2)
             b1.button(
                 "🛡️ Exclude Selected Words from Domain",
                 on_click=apply_tightened_codebook,
-                args=(codebook_bytes, fix_domain_id, fix_domain_name, selected_exclude_words, False),
+                args=(codebook_bytes, domain_choice_map, picked_fix_label, ext_key, False),
                 disabled=not selected_exclude_words,
                 key="spotcheck_exclude_btn",
                 **stretch_kwargs(st.button),
@@ -1484,7 +1554,7 @@ with tab_thematic:
             b2.button(
                 "🎯 Switch Domain to Exact Whole-Word Matching",
                 on_click=apply_tightened_codebook,
-                args=(codebook_bytes, fix_domain_id, fix_domain_name, [], True),
+                args=(codebook_bytes, domain_choice_map, picked_fix_label, ext_key, True),
                 key="spotcheck_exact_btn",
                 **stretch_kwargs(st.button),
                 help="Switches this domain to match_mode: exact so short stems only match whole words.",
@@ -1514,13 +1584,13 @@ with tab_thematic:
                 st.markdown(
                     f'<div class="quote-box {box_cls}">'
                     f'<div class="quote-meta">{risk_badge_html(row["risk_level"])}{ev_badge}'
-                    f'{esc(row["domain_name"])} · {esc(row["speaker"])} · '
-                    f'matched <code>{esc(row["matched_span"])}</code> inside <code>{esc(row["full_word"])}</code></div>'
+                    f'{esc_inline(row["domain_name"])} · {esc_inline(row["speaker"])} · '
+                    f'matched <code>{esc_inline(row["matched_span"])}</code> inside <code>{esc_inline(row["full_word"])}</code></div>'
                     f'<div style="font-size:0.88rem;color:#334155;margin-bottom:0.35rem;">'
-                    f'<strong>Why flagged:</strong> {esc(row["flag_reason"])}</div>'
+                    f'<strong>Why flagged:</strong> {esc_inline(row["flag_reason"])}</div>'
                     f'<div class="quote-text">{highlighted_quote(row["text"], row["match_char_start"], row["match_char_end"])}</div>'
-                    f'<div class="quote-provenance">SOURCE {esc(row["source_id"])} · LINE {esc(row["line_number"])} · '
-                    f'FIX: {esc(row["suggested_fix"])}</div>'
+                    f'<div class="quote-provenance">SOURCE {esc_inline(row["source_id"])} · LINE {esc_inline(row["line_number"])} · '
+                    f'FIX: {esc_inline(row["suggested_fix"])}</div>'
                     f"</div>",
                     unsafe_allow_html=True,
                 )
