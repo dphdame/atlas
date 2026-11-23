@@ -57,4 +57,4 @@ Open **Tab 2: Econometric & Actuarial Ledger Export**, confirm **Workbook integr
 - **`actuarial_parameter_matrix.xlsx`** — Domain prevalence sheet with embedded `ATLAS VERIFICATION AUDIT STAMP` comments on every prevalence cell plus full provenance.
 - **`verbatim_quotes_inventory.csv`** — Direct verbatim quotes only (safe for quotation review).
 - **`coded_evidence_inventory.csv`** — All coded entries (quotes + paraphrases/observations) with explicit `Evidence Type` and `Question` columns.
-- **`provenance_manifest.json`** — Cryptographic SHA-256 hashes of every uploaded source file and codebook so results can be independently verified later.
+- **`provenance_manifest.json`** — Cryptographic SHA-256 hashes of every uploaded source file so input files can be independently verified later. Save a copy of the exact `.yaml` codebook you used alongside the export folder so your coding rules stay archived with the results.

@@ -97,7 +97,9 @@ def discover_topics(
 
     turns: list of turn dicts (facilitator turns, is_facilitator=True, are dropped)
     or list of plain strings. Empty texts and texts with no tokens after stopword
-    filtering are not analyzed. The topic count is clamped to [1, n_valid_docs].
+    filtering are not analyzed. Effective topic count is clamped to the supported
+    unique-pattern and vocabulary ceiling in [1, n_valid_docs], and empty or
+    ownerless components are dropped so topics stay supported with exclusive top terms.
     method: "nmf" (default: TF-IDF 1-2 grams with sublinear TF + NMF) or "lda"
     (classic CountVectorizer + LatentDirichletAllocation).
 
@@ -125,7 +127,7 @@ def discover_topics(
         return _empty_result(method_key)
 
     docs = [rec["normalized"] for rec in valid]
-    k = min(max(1, int(n_topics)), len(docs))
+    requested_k = max(1, int(n_topics))
     n_top_words = max(1, int(n_top_words))
 
     if method_key == "nmf":
@@ -134,40 +136,81 @@ def discover_topics(
         vocab = vec.get_feature_names_out()
         if len(vocab) == 0:
             return _empty_result(method_key)
-        nmf_init = "nndsvda" if (k <= min(matrix.shape[0], matrix.shape[1]) and len(set(docs)) >= k) else "random"
-        model = NMF(n_components=k, init=nmf_init, max_iter=400, random_state=random_state)
-        doc_topic = model.fit_transform(matrix)
-        components = model.components_
-        if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
-            model = NMF(n_components=k, init="random", max_iter=400, random_state=random_state)
+        unique_patterns = len({
+            (tuple(matrix[i].indices), tuple(np.round(matrix[i].data, 12)))
+            for i in range(matrix.shape[0])
+        })
+        k = min(requested_k, len(docs), len(vocab), max(1, unique_patterns))
+        corpus_weights = np.asarray(matrix.sum(axis=0)).ravel()
+        if k == 1:
+            doc_topic = np.ones((len(docs), 1), dtype=float)
+            components = corpus_weights.reshape(1, -1)
+        else:
+            nmf_init = "nndsvda" if k <= min(matrix.shape[0], matrix.shape[1]) else "random"
+            model = NMF(n_components=k, init=nmf_init, max_iter=400, random_state=random_state)
             doc_topic = model.fit_transform(matrix)
             components = model.components_
+            if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
+                model = NMF(n_components=k, init="random", max_iter=400, random_state=random_state)
+                doc_topic = model.fit_transform(matrix)
+                components = model.components_
     else:
         counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
         counts = counter.fit_transform(docs)
         vocab = counter.get_feature_names_out()
         if len(vocab) == 0:
             return _empty_result(method_key)
-        lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
-        doc_topic = lda.fit_transform(counts)
-        components = lda.components_
+        unique_patterns = len({
+            (tuple(counts[i].indices), tuple(counts[i].data))
+            for i in range(counts.shape[0])
+        })
+        k = min(requested_k, len(docs), len(vocab), max(1, unique_patterns))
+        corpus_weights = np.asarray(counts.sum(axis=0)).ravel()
+        if k == 1:
+            doc_topic = np.ones((len(docs), 1), dtype=float)
+            components = corpus_weights.reshape(1, -1)
+        else:
+            lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
+            doc_topic = lda.fit_transform(counts)
+            components = lda.components_
 
-    # Cross-topic deduplication: each term belongs to the topic where its weight is highest.
-    owner = np.argmax(components, axis=0)
-    top_terms: List[List[str]] = []
-    for t in range(k):
-        owned = [j for j in range(len(vocab)) if owner[j] == t]
-        owned.sort(key=lambda j: (-components[t, j], vocab[j]))
-        if not owned:
-            owned = sorted(range(len(vocab)), key=lambda j: (-components[t, j], vocab[j]))
-        top_terms.append([str(vocab[j]) for j in owned[:n_top_words]])
+    # Cross-topic deduplication: each term belongs to the single component with
+    # the highest positive weight. Drop ownerless or zero-member components so
+    # degenerate corpora never emit empty or duplicate domains.
+    raw_owner = np.argmax(components, axis=0)
+    term_supported = [
+        t for t in range(k)
+        if any(raw_owner[j] == t and components[t, j] > 0 for j in range(len(vocab)))
+    ]
 
-    best_topic = [int(np.argmax(doc_topic[i])) for i in range(len(docs))]
+    if not term_supported:
+        doc_topic = np.ones((len(docs), 1), dtype=float)
+        best_topic = [0] * len(docs)
+        ranked_vocab = sorted(range(len(vocab)), key=lambda j: (-float(corpus_weights[j]), str(vocab[j])))
+        top_terms: List[List[str]] = [[str(vocab[j]) for j in ranked_vocab[:n_top_words]]]
+        n_kept = 1
+    else:
+        sub_doc_topic = doc_topic[:, term_supported]
+        raw_best = [int(np.argmax(sub_doc_topic[i])) for i in range(len(docs))]
+        kept_local = sorted(set(raw_best))
+        kept = [term_supported[idx] for idx in kept_local]
+        doc_topic = doc_topic[:, kept]
+        kept_components = components[kept, :]
+        remap = {old_idx: new_idx for new_idx, old_idx in enumerate(kept_local)}
+        best_topic = [remap[idx] for idx in raw_best]
+
+        owner = np.argmax(kept_components, axis=0)
+        top_terms = []
+        for t in range(len(kept)):
+            owned = [j for j in range(len(vocab)) if owner[j] == t and kept_components[t, j] > 0]
+            owned.sort(key=lambda j: (-float(kept_components[t, j]), str(vocab[j])))
+            top_terms.append([str(vocab[j]) for j in owned[:n_top_words]])
+        n_kept = len(kept)
 
     tfidf = TfidfVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1).fit_transform(docs)
 
     topics = []
-    for t in range(k):
+    for t in range(n_kept):
         members = [i for i, bt in enumerate(best_topic) if bt == t]
         topic = {
             "topic_id": t + 1,

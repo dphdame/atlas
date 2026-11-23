@@ -13,7 +13,7 @@ recordings exported as text, and open-ended survey tables into counts that can b
 * **Parse** `.docx` (including 3-column focus-group notes tables), `.vtt`, `.srt`, `.txt`, `.md`
   transcripts and `.csv` / `.xlsx` response tables into speaker-attributed turns (`universal_transcript_parser.py`).
 * **Discover** emergent topics with TF-IDF + NMF (default) or LDA and show each topic's TF-IDF medoid, a real
-  participant turn (`atlas_discover.py`).
+  participant turn or coded notes entry (`atlas_discover.py`).
 * **Code** every participant turn against a YAML codebook with root terms (prefix or exact-word `match_mode`),
   context fences and exclusion fences, and report prevalence over individual units or focus groups (`atlas_engine.py`).
 * **Export** an `.xlsx` parameter matrix whose prevalence cells carry an `ATLAS VERIFICATION AUDIT STAMP`
@@ -74,7 +74,8 @@ Installing dependencies needs a network connection; analysis does not.
 * KPI cards: **Analytical Units (N)**, **Participant Turns**, **Active Domains**, **Matched Turn Mentions**.
 * Prevalence chart and accessible table; a quote browser (search, domain and speaker filters) showing
   each verbatim turn with its matched span, `source_id`, `unit_id`, line, `match_char_start`–`match_char_end`
-  and `source_sha256`; topic discovery with a topic-count slider, verbatim medoids, a
+  and `source_sha256`; topic discovery with a topic-count slider, representative medoids (verbatim turns
+  for transcripts, or coded notes entries for structured focus-group notes), a
   **Download Discovered Codebook (.yaml)** button and an **Apply Discovered Codebook to Engine** button.
 
 **Tab 2: Econometric & Actuarial Ledger Export**

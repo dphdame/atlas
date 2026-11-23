@@ -59,13 +59,32 @@ class DiscoveryMethodTests(unittest.TestCase):
 
     def test_rank_deficient_duplicate_turns_produce_finite_nmf_outputs(self):
         import math
-        for texts, k in ((["rent landlord", "rent landlord"], 2), (["rent", "rent", "rent"], 3)):
-            res = atlas_discover.discover_topics(texts, n_topics=k, method="nmf")
-            self.assertEqual(res["n_analyzed"], len(texts))
-            for row in res["doc_topics"]:
-                self.assertTrue(all(math.isfinite(v) for v in row), row)
-            for a in res["assignments"]:
-                self.assertTrue(math.isfinite(a["topic_weight"]), a)
+        cases = (
+            (["rent landlord", "rent landlord"], 2, 1),
+            (["rent", "rent", "rent"], 3, 1),
+            (["rent", "Rent.", "RENT!"], 3, 1),
+            (["rent", "rent", "bus"], 3, 2),
+        )
+        for method in ("nmf", "lda"):
+            for texts, k, expected_topics in cases:
+                with self.subTest(method=method, texts=texts, k=k):
+                    res = atlas_discover.discover_topics(texts, n_topics=k, method=method)
+                    self.assertEqual(res["n_analyzed"], len(texts))
+                    self.assertEqual(len(res["topics"]), expected_topics)
+                    self.assertEqual(sum(t["turn_count"] for t in res["topics"]), len(texts))
+                    self.assertTrue(all(t["turn_count"] >= 1 for t in res["topics"]))
+                    self.assertEqual([t["topic_id"] for t in res["topics"]], list(range(1, expected_topics + 1)))
+                    all_terms = [w for t in res["topics"] for w in t["top_terms"]]
+                    self.assertTrue(all_terms)
+                    self.assertEqual(len(all_terms), len(set(all_terms)), "top terms must stay exclusive across topics")
+                    for row in res["doc_topics"]:
+                        self.assertEqual(len(row), len(res["topics"]))
+                        self.assertTrue(all(math.isfinite(v) for v in row), row)
+                    for a in res["assignments"]:
+                        self.assertIn(a["topic_id"], range(1, expected_topics + 1))
+                        self.assertTrue(math.isfinite(a["topic_weight"]), a)
+                    cb = atlas_discover.topics_to_codebook_dict(res)
+                    self.assertEqual(len(cb["domains"]), expected_topics)
 
     def test_unknown_discovery_method_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -161,8 +180,9 @@ class DiscoveryUIAndQuickStartTests(unittest.TestCase):
         text = QUICK_START.read_text(encoding="utf-8")
         for required in ("run.bat", "run.command", "Group", "Quotable Verbatim Only", "TF-IDF + NMF", "actuarial_parameter_matrix.xlsx"):
             self.assertIn(required, text)
-        for forbidden in ("2,500", "KII-01", "YET"):
+        for forbidden in ("2,500", "KII-01", "YET", "file and codebook"):
             self.assertNotIn(forbidden, text)
+        self.assertIn("alongside", text.lower())
 
         at = AppTest.from_file(str(APP_PATH), default_timeout=20)
         at.run()
