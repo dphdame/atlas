@@ -197,6 +197,11 @@ class DiscoveryUIAndQuickStartTests(unittest.TestCase):
     def test_app_discovery_defaults_to_nmf_and_allows_lda_toggle(self):
         at = AppTest.from_file(str(APP_PATH), default_timeout=20)
         at.run()
+        corpus_box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
+        corpus_box.set_value(next(o for o in corpus_box.options if "Bilingual" in str(o)))
+        at.run()
+        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        at.run()
         self.assertFalse(list(at.exception))
         radios = [r for r in at.radio if r.label == "Discovery method"]
         self.assertEqual(len(radios), 1, [r.label for r in at.radio])

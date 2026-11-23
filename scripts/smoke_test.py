@@ -788,25 +788,41 @@ def app_check() -> list[str]:
             box.set_value(option)
             at.run()
 
+    def run_analysis(at) -> None:
+        btn = widget(at, "button", "▶ Run Analysis")
+        check("Run Analysis button rendered", btn is not None)
+        if btn is not None:
+            btn.click()
+            at.run()
+
     at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
     at.run()
     no_exceptions(at, "boot")
-    check("SOFTWARE_TEST notice on boot", any("SOFTWARE_TEST" in str(i.value) for i in at.info))
+    check("boot: clean onboarding without SOFTWARE_TEST jargon or auto-run",
+          len(at.metric) == 0
+          and any("Ready to analyze" in str(i.value) for i in at.info)
+          and not any("SOFTWARE_TEST" in str(i.value) for i in at.info))
+
+    select(at, "Corpus Dataset", "Bilingual")
+    run_analysis(at)
+    no_exceptions(at, "bilingual x pfl")
     bilingual = [samples / "software_test_bilingual_interview.txt", samples / "software_test_zoom_session.vtt"]
-    check("boot KPIs match engine (bilingual x pfl)",
+    check("bilingual x pfl: KPIs match engine",
           metrics(at) == expected("pfl_case_study_codebook.yaml", bilingual), str(metrics(at)))
 
     survey_opts = {"text_col": "response", "id_col": "respondent_id", "speaker_col": "role"}
     select(at, "Corpus Dataset", "Survey")
     for codebook in ("pfl_case_study_codebook.yaml", "intake_and_enrollment.yaml", "sdoh_basic_needs.yaml"):
         select(at, "Active YAML Codebook", codebook)
+        run_analysis(at)
         no_exceptions(at, f"survey x {codebook}")
         check(f"survey x {codebook}: KPIs match engine",
               metrics(at) == expected(codebook, [samples / "software_test_survey.csv"], survey_opts),
               str(metrics(at)))
 
-    select(at, "Corpus Dataset", "DOCX")
+    select(at, "Corpus Dataset", "Teams")
     select(at, "Active YAML Codebook", "intake_and_enrollment.yaml")
+    run_analysis(at)
     no_exceptions(at, "docx x intake")
     check("docx x intake: KPIs match engine",
           metrics(at) == expected("intake_and_enrollment.yaml", [samples / "software_test_teams_multiline.docx"]),
@@ -836,6 +852,7 @@ def app_check() -> list[str]:
         uploader.set_value(("software_test_app_upload.csv", APP_UPLOAD_CSV.encode("utf-8"), "text/csv"))
         at.run()
         select(at, "Active YAML Codebook", "pfl_case_study_codebook.yaml")
+        run_analysis(at)
         no_exceptions(at, "uploaded csv")
         text_box = widget(at, "selectbox", "Text column (free-text responses)")
         check("text column auto-detected as 'response'", text_box is not None and text_box.value == "response",
@@ -885,11 +902,16 @@ def app_check() -> list[str]:
         if force_col is not None and text_box is not None:
             check(f"{case}: detection agrees on 'response' before override", text_box.value == "response",
                   str(text_box.value))
+            run_analysis(at)
             check(f"{case}: agreeing tables are analysed before override",
                   len(at.error) == 0 and len(at.metric) == 4, f"{len(at.error)} errors, {len(at.metric)} metrics")
+            text_box = widget(at, "selectbox", "Text column (free-text responses)")
             text_box.set_value(force_col)
             at.run()
+            run_analysis(at)
             text_box = widget(at, "selectbox", "Text column (free-text responses)")
+        else:
+            run_analysis(at)
         no_exceptions(at, case)
         check(f"{case}: validation error shown", len(at.error) == 1, str([e.value for e in at.error]))
         check(f"{case}: no analysis run", len(at.metric) == 0 and len(at.dataframe) == 0,
@@ -1147,6 +1169,24 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         info.value.save_as(str(target))
         return target
 
+    def click_run(page) -> None:
+        deadline = time.monotonic() + UI_WAIT_SECONDS
+        last_exc = None
+        while time.monotonic() < deadline:
+            try:
+                page.locator('[data-testid="stStatusWidget"]').wait_for(state="hidden", timeout=5000)
+            except PlaywrightError:
+                pass
+            try:
+                btn = page.get_by_role("button", name=re.compile(r"Run Analysis"))
+                btn.scroll_into_view_if_needed(timeout=5000)
+                btn.click(timeout=5000)
+                return
+            except PlaywrightError as exc:
+                last_exc = exc
+                page.wait_for_timeout(300)
+        raise last_exc
+
     print(f"    PLAYWRIGHT_BROWSERS_PATH={os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '(Playwright default cache)')}")
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -1160,24 +1200,34 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             page.on("websocket", lambda ws: requested.append(ws.url))
             page.on("pageerror", lambda err: page_errors.append(str(err)))
             page.goto(url, wait_until="domcontentloaded")
-            page.locator('[data-testid="stMetric"]').first.wait_for(timeout=UI_WAIT_SECONDS * 1000)
+            page.get_by_role("button", name=re.compile(r"Run Analysis")).wait_for(timeout=UI_WAIT_SECONDS * 1000)
+            page.get_by_text("Ready to analyze").wait_for(timeout=UI_WAIT_SECONDS * 1000)
 
-            # 1. Boot render: SOFTWARE_TEST notice and KPI cards matching the engine.
+            # 1. Boot render: clean onboarding, zero SOFTWARE_TEST jargon, then manual Run on Bilingual sample.
             alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
-            check("boot: SOFTWARE_TEST notice rendered", "SOFTWARE_TEST" in alerts, alerts[:200])
+            check("boot: clean onboarding without SOFTWARE_TEST notice",
+                  "Ready to analyze" in alerts and "SOFTWARE_TEST" not in alerts, alerts[:200])
+            select_option(page, "Corpus Dataset", re.compile(r"Bilingual"))
+            click_run(page)
+            page.locator('[data-testid="stMetric"]').first.wait_for(timeout=UI_WAIT_SECONDS * 1000)
             boot_codebook = caption_codebook(page)
-            check("boot: active codebook shown", bool(boot_codebook))
+            check("sample run: active codebook shown", bool(boot_codebook))
             samples = REPO / "data" / "samples"
             boot = engine_results(REPO / "config" / (boot_codebook or "missing.yaml"),
                                   [samples / "software_test_bilingual_interview.txt",
                                    samples / "software_test_zoom_session.vtt"], REPO)
-            boot_kpis = wait_for(page, "boot: KPI cards match engine", kpis, engine_kpis(boot))
-            check("boot: four KPI cards", isinstance(boot_kpis, dict) and set(boot_kpis) == set(KPI_LABELS),
+            boot_kpis = wait_for(page, "sample run: KPI cards match engine", kpis, engine_kpis(boot))
+            check("sample run: four KPI cards", isinstance(boot_kpis, dict) and set(boot_kpis) == set(KPI_LABELS),
                   repr(boot_kpis))
 
-            # 2. Upload a custom transcript; KPIs and the domain table recompute in the live DOM.
+            # 2. Upload a custom transcript; KPIs and the domain table recompute after clicking Run Analysis.
             select_option(page, "Corpus Dataset", UPLOAD_OPTION)
-            page.locator("input[type='file']").first.set_input_files(str(upload))
+            tx_uploader = page.get_by_test_id("stFileUploader").filter(has_text="Upload Transcript")
+            tx_uploader.locator("input[type='file']").set_input_files(str(upload))
+            tx_uploader.locator('[data-testid="stFileChip"], [data-testid="stFileUploaderFile"]').first.wait_for(
+                state="attached", timeout=UI_WAIT_SECONDS * 1000
+            )
+            click_run(page)
             page.get_by_text(f"Corpus: {BROWSER_UPLOAD_NAME}").wait_for(timeout=UI_WAIT_SECONDS * 1000)
             codebook = caption_codebook(page)
             uploaded_root = scratch / "engine_root"
@@ -1188,12 +1238,12 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             want_kpis = engine_kpis(want)
             check("upload: engine finds matches in the SOFTWARE_TEST upload",
                   want_kpis["Matched Turn Mentions"] > 0, repr(want_kpis))
-            check("upload: expected KPIs differ from boot", want_kpis != engine_kpis(boot))
+            check("upload: expected KPIs differ from sample run", want_kpis != engine_kpis(boot))
             wait_for(page, "upload: KPI cards recomputed to engine values", kpis, want_kpis)
             wait_for(page, "upload: domain table recomputed to engine values", domain_table,
                      engine_domain_counts(want))
             alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
-            check("upload: SOFTWARE_TEST notice for the bannered upload", "SOFTWARE_TEST" in alerts)
+            check("upload: no SOFTWARE_TEST notice in live UI", "SOFTWARE_TEST" not in alerts)
             check("upload: workbook integrity passes in the app", "integrity check passed" in alerts, alerts[:300])
 
             # 3. Download the engine's workbook and manifest and verify them offline.
@@ -1202,10 +1252,14 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             manifest_path = download(page, re.compile(r"provenance_manifest\.json"), scratch / "downloaded.json")
 
             # 4. A custom codebook whose domain names are Markdown and Streamlit shortcodes: both
-            #    st.html chart summaries show them verbatim.
+            #    st.html chart summaries show them verbatim after clicking Run Analysis.
             select_option(page, "Active YAML Codebook", CODEBOOK_UPLOAD_OPTION)
-            page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION).locator(
-                "input[type='file']").set_input_files(str(markdown_codebook))
+            cb_uploader = page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION)
+            cb_uploader.locator("input[type='file']").set_input_files(str(markdown_codebook))
+            cb_uploader.locator('[data-testid="stFileChip"], [data-testid="stFileUploaderFile"]').first.wait_for(
+                state="attached", timeout=UI_WAIT_SECONDS * 1000
+            )
+            click_run(page)
             for tab in ("Tab 1", "Tab 2"):
                 page.get_by_role("tab", name=re.compile(tab)).click()
                 wait_for(page, f"markdown domains: {tab} chart summary shows both names verbatim",
@@ -1221,6 +1275,14 @@ def browser_check(url: str, scratch: Path) -> list[str]:
                       markup == [0], repr(markup))
             leaked = page.locator("img[src*='example.invalid'], a[href*='example.invalid']").count()
             check("markdown domains: no example.invalid image or link anywhere in the page", leaked == 0, str(leaked))
+
+            # 5. Tab 3 Reference Guides renders formatted documentation and serves valid .docx downloads offline.
+            page.get_by_role("tab", name=re.compile(r"Tab 3")).click()
+            guide_docx = download(
+                page, re.compile(r"ATLAS_GBI_Analyst_Quick_Start\.docx"), scratch / "quick_start.docx"
+            )
+            check("guides: Tab 3 Word .docx download is a valid OOXML package",
+                  guide_docx.read_bytes().startswith(b"PK\x03\x04"))
         finally:
             browser.close()
 

@@ -260,28 +260,34 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
                 return w
         self.fail(f"Widget {accessor} {label!r} not found")
 
+    def _run(self, at):
+        self._widget(at, "button", "▶ Run Analysis").click()
+        at.run()
+
     def test_sidebar_stack_and_add_theme_and_spotcheck_work_together_cleanly(self):
         at = AppTest.from_file(str(APP_PATH), default_timeout=25)
         at.run()
         self.assertFalse(list(at.exception), [e.value for e in at.exception])
-        # Metric count must stay strictly 4 (smoke_test.py contract).
-        self.assertEqual(len(at.metric), 4)
-        self.assertTrue(any("False-Alarm Spot-Check" in t.label for t in at.tabs))
+        self.assertEqual(len(at.metric), 0)
 
-        # Switch to Multi-Group Focus-Group Notes sample (8 GBI starter domains).
+        # Switch to Multi-Group Focus-Group Notes sample (8 GBI starter domains) and Run Analysis.
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         gbi_opt = next(o for o in corpus_box.options if "Focus-Group Notes" in str(o))
         corpus_box.set_value(gbi_opt)
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
+        # Metric count must stay strictly 4 (smoke_test.py contract).
         self.assertEqual(len(at.metric), 4)
+        self.assertTrue(any("False-Alarm Spot-Check" in t.label for t in at.tabs))
         active_domains_before = int(next(m.value for m in at.metric if m.label == "Active Domains"))
         self.assertEqual(active_domains_before, 8)
 
-        # Add-on A: stack sdoh_basic_needs.yaml (+4 domains => 12 domains).
+        # Add-on A: stack sdoh_basic_needs.yaml (+4 domains => 12 domains) and click Run Analysis.
         stack_box = self._widget(at, "multiselect", "Stack Additional Starter Codebooks (optional)")
         stack_box.set_value(["sdoh_basic_needs.yaml"])
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.metric), 4)
         active_domains_stacked = int(next(m.value for m in at.metric if m.label == "Active Domains"))
@@ -335,6 +341,7 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         }).encode("utf-8")
         cb_uploader.set_value(("software_test_unfenced.yaml", cb_yaml, "application/x-yaml"))
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.metric), 4)
         self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 2)
@@ -350,12 +357,14 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         uploader = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
         uploader.set_value(("software_test_spotcheck_alt.txt", alt_txt, "text/plain"))
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
 
         # Restore original text and test Exclude Selected Words button removes 'card'/'career' hit while keeping 'car'.
         uploader = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
         uploader.set_value(("software_test_spotcheck.txt", sample_txt, "text/plain"))
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
 
         excl_btn = self._widget(at, "button", "🛡️ Exclude Selected Words from Domain")
@@ -364,13 +373,14 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         at.run()
         self.assertFalse(list(at.exception))
         self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 1)
-        # Switch back to uploaded unfenced codebook and test Exact Whole-Word Matching button.
+        # Switch back to uploaded unfenced codebook, Run Analysis, and test Exact Whole-Word Matching button.
         cb_box = self._widget(at, "selectbox", "Active YAML Codebook")
         cb_box.set_value("Upload Custom Codebook (.yaml)")
         at.run()
         cb_uploader = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
         cb_uploader.set_value(("software_test_unfenced.yaml", cb_yaml, "application/x-yaml"))
         at.run()
+        self._run(at)
         self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 2)
         exact_btn = self._widget(at, "button", "🎯 Switch Domain to Exact Whole-Word Matching")
         exact_btn.click()
@@ -414,6 +424,7 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         }).encode("utf-8")
         cb_uploader.set_value(("software_test_windowed.yaml", cb_yaml, "application/x-yaml"))
         at.run()
+        self._run(at)
         self.assertFalse(list(at.exception))
 
         # P2 #3: Exclusion multiselect must advertise the actual preserved 4-token window, not "0-token fence".

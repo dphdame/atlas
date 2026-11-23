@@ -63,6 +63,8 @@ def boot_upload(files):
     at.run()
     at.file_uploader[0].set_value(files)
     at.run()
+    next(b for b in at.button if b.label == "▶ Run Analysis").click()
+    at.run()
     return at
 
 

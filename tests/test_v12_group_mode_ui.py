@@ -70,7 +70,7 @@ GBI_DOMAIN_IDS = [
 
 DATA_TYPE_INDIVIDUAL = "Individual transcripts / survey responses"
 DATA_TYPE_GROUP = "Group / summarized notes"
-CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes DOCX (SOFTWARE_TEST)"
+CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes (.docx)"
 GROUP_TABLE_COLUMNS = [
     "Domain ID", "Domain", "Groups Reporting", "Total Groups (G)", "Group Share (%)",
     "Distinct Participant Voices", "Verbatim Quotes", "Paraphrased Key Points", "Matching Entries",
@@ -520,15 +520,21 @@ def chart_frames(at, description):
     raise AssertionError(f"no chart described {description!r}")
 
 
-def choose_corpus(at, needle):
-    box = widget(at, "selectbox", "Corpus Dataset")
-    box.select(next(o for o in box.options if needle in o))
+def run_analysis(at):
+    widget(at, "button", "▶ Run Analysis").click()
     at.run()
     return at
 
 
+def choose_corpus(at, needle, *, run=True):
+    box = widget(at, "selectbox", "Corpus Dataset")
+    box.select(next(o for o in box.options if needle in o))
+    at.run()
+    return run_analysis(at) if run else at
+
+
 def upload(at, files, codebook=None, codebook_name=None):
-    choose_corpus(at, "Upload")
+    choose_corpus(at, "Upload", run=False)
     if codebook_name is not None:
         widget(at, "selectbox", "Active YAML Codebook").select(codebook_name)
         at.run()
@@ -540,7 +546,7 @@ def upload(at, files, codebook=None, codebook_name=None):
         next(u for u in at.file_uploader if u.label.startswith("Upload Custom Codebook")).set_value(
             ("software_test_codebook.yaml", codebook, "application/x-yaml"))
     at.run()
-    return at
+    return run_analysis(at)
 
 
 def assert_clean(test, at):
@@ -561,19 +567,21 @@ class GroupModeAppTests(unittest.TestCase):
                                        "group_labels_for", "count_distinct_voices", "chart_summary_html")
         cls.at = choose_corpus(boot(), "Multi-Group")
 
-    def test_sample_registered_without_moving_default(self):
+    def test_upload_default_and_clean_sample_registration(self):
         box = widget(boot(), "selectbox", "Corpus Dataset")
-        self.assertIn("Bilingual", box.options[0])
+        self.assertIn("Upload", box.options[0])
         self.assertEqual(box.value, box.options[0])
         self.assertIn(CORPUS_GBI_NOTES, box.options)
-        self.assertLess(box.options.index(CORPUS_GBI_NOTES), next(i for i, o in enumerate(box.options) if "Upload" in o))
+        self.assertTrue(all("SOFTWARE_TEST" not in str(o) for o in box.options))
 
-    def test_default_boot_is_individual(self):
+    def test_default_boot_is_individual_and_waits_for_run(self):
         at = boot()
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL)
         self.assertEqual(list(widget(at, "radio", "Data Type").options), [DATA_TYPE_INDIVIDUAL, DATA_TYPE_GROUP])
         self.assertFalse(has_widget(at, "checkbox", "Include Note-Taker Observations"))
+        self.assertFalse(has_widget(at, "metric", "Analytical Units (N)"))
+        choose_corpus(at, "Bilingual")
         self.assertTrue(has_widget(at, "metric", "Analytical Units (N)"))
 
     def test_auto_selects_group_mode_and_codebook(self):
@@ -690,6 +698,7 @@ class GroupModeAppTests(unittest.TestCase):
         at = choose_corpus(boot(), "Multi-Group")
         widget(at, "checkbox", "Include Note-Taker Observations").check()
         at.run()
+        run_analysis(at)
         assert_clean(self, at)
         res = expected_results((KP, QUOTE, OBS))
         self.assertEqual(metric(at, "Coded Notes Entries"), res["participant_turns_analyzed"])
@@ -699,6 +708,7 @@ class GroupModeAppTests(unittest.TestCase):
         at = choose_corpus(boot(), "Multi-Group")
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_INDIVIDUAL)
         at.run()
+        run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL)
         self.assertTrue(has_widget(at, "metric", "Analytical Units (N)"))
@@ -754,7 +764,7 @@ class GroupModeAppTests(unittest.TestCase):
 
 class IndividualModeAppTests(unittest.TestCase):
     def test_individual_tab2_keeps_binomial_se_and_ci(self):
-        at = boot()
+        at = choose_corpus(boot(), "Bilingual")
         assert_clean(self, at)
         matrix = next(f for f in frames(at) if "binomial_se" in f.columns)
         for col in ("ci95_low_pct", "ci95_high_pct", "n_units", "proportion"):
@@ -795,6 +805,7 @@ class UploadDetectionAppTests(unittest.TestCase):
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL)
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_GROUP)
         at.run()
+        run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_GROUP)
         self.assertEqual(metric(at, "Focus Groups (G)"), 2)
@@ -853,7 +864,7 @@ class BadgeContrastTests(unittest.TestCase):
 # Repair round 1: source-file grouping, mixed-evidence labels, chart contrast
 # ------------------------------------------------------------------------------
 SURVEY_CSV = SAMPLES / "software_test_survey.csv"
-CORPUS_SURVEY = "Sample: Community Health Survey CSV (SOFTWARE_TEST)"
+CORPUS_SURVEY = "Sample: Community Health Survey (.csv)"
 UPLOAD_CSV_A = b"id,response\n1,The paperwork took two visits.\n2,I filled the forms at home.\n3,Rent was late again.\n"
 UPLOAD_CSV_B = b"id,response\n1,Forms were confusing.\n2,Paperwork again.\n"
 
@@ -888,6 +899,7 @@ class GroupBySourceAppTests(unittest.TestCase):
         at = choose_corpus(boot(), "Community Health Survey")
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_GROUP)
         at.run()
+        run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(metric(at, "Focus Groups (G)"), 1)
         tables = [f for f in frames(at) if list(f.columns) == GROUP_TABLE_COLUMNS]
@@ -906,6 +918,7 @@ class GroupBySourceAppTests(unittest.TestCase):
         at = upload(boot(), files, codebook_name="gbi_focus_group_starter.yaml")
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_GROUP)
         at.run()
+        run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(metric(at, "Focus Groups (G)"), 2)
         for t in [f for f in frames(at) if list(f.columns) == GROUP_TABLE_COLUMNS]:
@@ -956,6 +969,7 @@ class MixedEvidenceLabelTests(unittest.TestCase):
         at = upload(boot(), files, codebook_name="gbi_focus_group_starter.yaml")
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_GROUP)
         at.run()
+        run_analysis(at)
         widget(at, "checkbox", "Quotable Verbatim Only").check()
         at.run()
         assert_clean(self, at)
@@ -1031,7 +1045,7 @@ class GroupChartContrastTests(unittest.TestCase):
             self.assertIn(text, dumped)
 
     def test_individual_chart_also_on_light_surface(self):
-        at = boot()
+        at = choose_corpus(boot(), "Bilingual")
         spec = next(s for s in chart_specs(at) if s.get("mark") or s.get("layer"))
         self.assertEqual(spec.get("config", {}).get("background"), "#FFFFFF")
 

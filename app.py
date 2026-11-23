@@ -27,10 +27,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import altair as alt
+import docx
 import pandas as pd
 import streamlit as st
 import yaml
 from docx.opc.exceptions import PackageNotFoundError
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
+from docx.shared import Inches, Pt, RGBColor
 from openpyxl.utils.exceptions import InvalidFileException
 
 try:  # python-docx parses document.xml with lxml; a malformed part raises XMLSyntaxError.
@@ -66,13 +70,18 @@ NAVY = "#1E3A8A"
 TEAL = "#0F766E"
 SLATE = "#334155"
 
-CORPUS_BILINGUAL = "Sample: Bilingual Interview Transcripts (SOFTWARE_TEST)"
-CORPUS_SURVEY = "Sample: Community Health Survey CSV (SOFTWARE_TEST)"
-CORPUS_DOCX = "Sample: Teams Multiline Transcript DOCX (SOFTWARE_TEST)"
-CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes DOCX (SOFTWARE_TEST)"
+CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes (.docx)"
+CORPUS_BILINGUAL = "Sample: Bilingual Interview Transcripts"
+CORPUS_SURVEY = "Sample: Community Health Survey (.csv)"
+CORPUS_DOCX = "Sample: Teams Multiline Transcript (.docx)"
 CORPUS_UPLOAD = "Upload Custom Files (.docx, .vtt, .srt, .txt, .md, .csv, .xlsx)"
 
 SAMPLE_CORPORA = {
+    CORPUS_GBI_NOTES: {
+        "files": ["software_test_gbi_group_treatment.docx", "software_test_gbi_group_control.docx"],
+        "tabular_options": None,
+        "codebook": "gbi_focus_group_starter.yaml",
+    },
     CORPUS_BILINGUAL: {
         "files": ["software_test_bilingual_interview.txt", "software_test_zoom_session.vtt"],
         "tabular_options": None,
@@ -88,13 +97,8 @@ SAMPLE_CORPORA = {
         "tabular_options": None,
         "codebook": "intake_and_enrollment.yaml",
     },
-    CORPUS_GBI_NOTES: {
-        "files": ["software_test_gbi_group_treatment.docx", "software_test_gbi_group_control.docx"],
-        "tabular_options": None,
-        "codebook": "gbi_focus_group_starter.yaml",
-    },
 }
-CORPUS_OPTIONS = [*SAMPLE_CORPORA, CORPUS_UPLOAD]
+CORPUS_OPTIONS = [CORPUS_UPLOAD, *SAMPLE_CORPORA]
 UPLOAD_TYPES = ["docx", "vtt", "srt", "txt", "md", "csv", "xlsx"]
 
 CODEBOOK_UPLOAD = "Upload Custom Codebook (.yaml)"
@@ -131,16 +135,14 @@ GROUP_TILE_COLOURS = {
     "voices": (NAVY, "#FFFFFF"),
 }
 
-SOFTWARE_TEST_BANNER = (
-    "🧪 SOFTWARE_TEST FIXTURE ACTIVE — Built-in sample files demonstrate software "
-    "mechanics only and are not empirical research findings."
-)
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+RUN_BUTTON_LABEL = "▶ Run Analysis"
 
 REFERENCE_GUIDES = [
-    ("📋 GBI Analyst Quick-Start Guide (Markdown)", "ATLAS_GBI_Analyst_Quick_Start.md"),
-    ("📘 User Guide (Markdown)", "ATLAS_User_Guide.md"),
-    ("📗 Methodology & Reference Manual (Markdown)", "ATLAS_Methodology_and_Reference_Manual.md"),
-    ("📙 Practitioner Field Guide (Markdown)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
+    ("📋 GBI Analyst Quick-Start Guide (.docx)", "ATLAS_GBI_Analyst_Quick_Start.md"),
+    ("📘 User Guide (.docx)", "ATLAS_User_Guide.md"),
+    ("📗 Methodology & Reference Manual (.docx)", "ATLAS_Methodology_and_Reference_Manual.md"),
+    ("📙 Practitioner Field Guide (.docx)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
 ]
 
 DISCOVERY_METHOD_NMF = "TF-IDF + NMF (Recommended — faster, sharper keywords)"
@@ -670,10 +672,38 @@ def highlighted_quote(text, start, end):
     return f"{esc(text[:start])}<mark>{esc(text[start:end])}</mark>{esc(text[end:])}"
 
 
-def apply_discovered_codebook(label, yaml_bytes):
+def format_codebook_summary(primary_label, extra_codebooks, n_domains):
+    """Concise, non-redundant codebook summary for the Tab 1 header."""
+    unit = "domain" if int(n_domains) == 1 else "domains"
+    if extra_codebooks:
+        return f"{primary_label} (+{len(extra_codebooks)} stacked · {int(n_domains)} {unit})"
+    if f"{int(n_domains)} {unit}" in str(primary_label):
+        return str(primary_label)
+    return f"{primary_label} ({int(n_domains)} {unit})"
+
+
+def _update_snapshot_codebook(label, yaml_bytes):
     st.session_state.discovered_codebooks[label] = yaml_bytes
     st.session_state.codebook_choice = label
     st.session_state.stacked_codebooks = []
+    snap = st.session_state.get("run_snapshot")
+    if isinstance(snap, dict):
+        updated = dict(snap)
+        updated["codebook_bytes"] = yaml_bytes
+        updated["primary_codebook_label"] = label
+        updated["extra_codebooks"] = ()
+        updated["is_custom_or_stacked"] = True
+        updated["codebook_choice"] = label
+        updated["codebook_sha256"] = hashlib.sha256(yaml_bytes).hexdigest()
+        fp = snap.get("fingerprint")
+        if isinstance(fp, tuple) and len(fp) == 11:
+            updated["fingerprint"] = (*fp[:8], label, None, ())
+        st.session_state.run_snapshot = updated
+        st.session_state.run_error = None
+
+
+def apply_discovered_codebook(label, yaml_bytes):
+    _update_snapshot_codebook(label, yaml_bytes)
 
 
 def esc_inline(value):
@@ -703,9 +733,7 @@ def add_theme_to_active_codebook(current_bytes, topic_choices):
     while label in st.session_state.discovered_codebooks:
         label = f"{base} #{idx}"
         idx += 1
-    st.session_state.discovered_codebooks[label] = updated_bytes
-    st.session_state.codebook_choice = label
-    st.session_state.stacked_codebooks = []
+    _update_snapshot_codebook(label, updated_bytes)
     st.session_state.add_topic_name = ""
 
 
@@ -740,9 +768,7 @@ def apply_tightened_codebook(current_bytes, domain_choice_map, rendered_fix_labe
     while label in st.session_state.discovered_codebooks:
         label = f"{base} #{idx}"
         idx += 1
-    st.session_state.discovered_codebooks[label] = updated_bytes
-    st.session_state.codebook_choice = label
-    st.session_state.stacked_codebooks = []
+    _update_snapshot_codebook(label, updated_bytes)
 
 
 def risk_badge_html(risk_level):
@@ -752,19 +778,507 @@ def risk_badge_html(risk_level):
     return f'<span class="risk-badge {cls}">{label}</span>'
 
 
+def _neutralize_relative_md_links(text):
+    """Turn relative .md / #anchor Markdown links into bold text for in-app viewing,
+    while preserving external scheme links and fenced code blocks."""
+    link_pat = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)")
+    scheme_pat = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+
+    def _replace(match):
+        label, target = match.group(1), match.group(2).strip()
+        if scheme_pat.match(target):
+            return match.group(0)
+        return f"**{label}**"
+
+    out_lines = []
+    in_fence = False
+    for line in str(text).splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        out_lines.append(line if in_fence else link_pat.sub(_replace, line))
+    return "\n".join(out_lines)
+
+
+def split_markdown_for_app(md_text, base_dir):
+    """Split a Markdown guide into ('markdown', text) and ('image', Path, alt_text) blocks
+    for formatted in-app rendering. Local images are strictly confined inside base_dir."""
+    root = Path(base_dir).resolve()
+    img_line_pat = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
+    blocks = []
+    buf = []
+    in_fence = False
+
+    def _flush():
+        chunk = "\n".join(buf).strip()
+        if chunk:
+            blocks.append(("markdown", _neutralize_relative_md_links(chunk)))
+        buf.clear()
+
+    for line in str(md_text).splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            buf.append(line)
+            continue
+        if not in_fence:
+            m = img_line_pat.match(line.strip())
+            if m:
+                alt_text, rel_target = m.group(1).strip(), m.group(2).strip()
+                candidate = (root / rel_target).resolve()
+                _flush()
+                if (
+                    candidate.is_relative_to(root)
+                    and candidate.is_file()
+                    and candidate.suffix.lower() in {".png", ".jpg", ".jpeg"}
+                ):
+                    blocks.append(("image", candidate, alt_text))
+                continue
+        buf.append(line)
+    _flush()
+    return blocks
+
+
+def _set_picture_alt_text(run, alt_text):
+    """Attach descriptive alt text to an inline Word picture's wp:docPr element."""
+    if not alt_text:
+        return
+    for elem in run._r.iter():
+        if elem.tag.endswith("}docPr"):
+            elem.set("descr", str(alt_text))
+            elem.set("title", str(alt_text)[:120])
+            break
+
+
+def _add_inline_markdown_runs(paragraph, text, *, base_color=None, base_bold=False, base_italic=False, font_size=10.5):
+    """Parse inline Markdown (**bold**, *italic*, `code`, [links](url)) recursively into styled Word runs."""
+    token_pat = re.compile(
+        r"`([^`]+)`"
+        r"|\*\*\*(.+?)\*\*\*"
+        r"|\*\*(.+?)\*\*"
+        r"|(?<!\*)\*([^*\n]+)\*(?!\*)"
+        r"|\[([^\]]+)\]\(([^)]+)\)"
+    )
+    scheme_pat = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+    default_rgb = base_color or RGBColor(0x0F, 0x17, 0x2A)
+    navy_rgb = RGBColor(0x1E, 0x3A, 0x8A)
+    slate_rgb = RGBColor(0x47, 0x55, 0x69)
+
+    def _emit(chunk, *, bold=False, italic=False, code=False, color=None):
+        if not chunk:
+            return
+        run = paragraph.add_run(chunk)
+        run.bold = bool(base_bold or bold)
+        run.italic = bool(base_italic or italic)
+        run.font.size = Pt(font_size - 1.0 if code else font_size)
+        run.font.name = "Consolas" if code else "Calibri"
+        run.font.color.rgb = color or (navy_rgb if code else default_rgb)
+
+    pos = 0
+    src = str(text)
+    for m in token_pat.finditer(src):
+        if m.start() > pos:
+            _emit(src[pos:m.start()])
+        if m.group(1) is not None:
+            _emit(m.group(1), code=True)
+        elif m.group(2) is not None:
+            _add_inline_markdown_runs(
+                paragraph, m.group(2), base_color=default_rgb, base_bold=True, base_italic=True, font_size=font_size,
+            )
+        elif m.group(3) is not None:
+            _add_inline_markdown_runs(
+                paragraph, m.group(3), base_color=default_rgb, base_bold=True, base_italic=base_italic, font_size=font_size,
+            )
+        elif m.group(4) is not None:
+            _add_inline_markdown_runs(
+                paragraph, m.group(4), base_color=default_rgb, base_bold=base_bold, base_italic=True, font_size=font_size,
+            )
+        elif m.group(5) is not None:
+            label, target = m.group(5), m.group(6).strip()
+            if scheme_pat.match(target):
+                _emit(label, bold=True, color=navy_rgb)
+                _emit(f" ({target})", color=slate_rgb)
+            else:
+                _emit(label, bold=True)
+        pos = m.end()
+    if pos < len(src):
+        _emit(src[pos:])
+
+
+def markdown_to_docx_bytes(md_text, base_dir):
+    """Convert a Markdown reference guide into a formatted, accessible Word (.docx)
+    document in memory (headings, tables, lists, callouts, code blocks, and embedded figures)."""
+    root = Path(base_dir).resolve()
+    document = docx.Document()
+    for section in document.sections:
+        section.top_margin = Inches(0.8)
+        section.bottom_margin = Inches(0.8)
+        section.left_margin = Inches(0.85)
+        section.right_margin = Inches(0.85)
+
+    normal = document.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+    normal.paragraph_format.space_after = Pt(5)
+    normal.paragraph_format.line_spacing = 1.15
+
+    navy_rgb = RGBColor(0x1E, 0x3A, 0x8A)
+    teal_rgb = RGBColor(0x0F, 0x76, 0x6E)
+    slate_rgb = RGBColor(0x33, 0x41, 0x55)
+    white_rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+    def _shade_cell(cell, fill_hex):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_pr.append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>'))
+
+    def _set_cell_margins(cell, top=80, bottom=80, left=120, right=120):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_mar = OxmlElement("w:tcMar")
+        for side, val in (("top", top), ("bottom", bottom), ("left", left), ("right", right)):
+            node = OxmlElement(f"w:{side}")
+            node.set(qn("w:w"), str(val))
+            node.set(qn("w:type"), "dxa")
+            tc_mar.append(node)
+        tc_pr.append(tc_mar)
+
+    def _set_table_borders(table, color_hex="CBD5E1"):
+        tbl_pr = table._tbl.tblPr
+        tbl_pr.append(parse_xml(
+            f'<w:tblBorders {nsdecls("w")}>'
+            f'<w:top w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f'<w:left w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f'<w:bottom w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f'<w:right w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f'<w:insideH w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f'<w:insideV w:val="single" w:sz="4" w:space="0" w:color="{color_hex}"/>'
+            f"</w:tblBorders>"
+        ))
+
+    def _add_p_border(paragraph, side, color_hex, sz="12"):
+        p_pr = paragraph._p.get_or_add_pPr()
+        p_pr.append(parse_xml(
+            f'<w:pBdr {nsdecls("w")}><w:{side} w:val="single" w:sz="{sz}" w:space="6" w:color="{color_hex}"/></w:pBdr>'
+        ))
+
+    def _split_table_row(line):
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        return [c.strip() for c in stripped.split("|")]
+
+    def _is_table_sep(line):
+        cells = _split_table_row(line)
+        return bool(cells) and all(re.match(r"^:?-{2,}:?$", c) for c in cells)
+
+    lines = str(md_text).splitlines()
+    i = 0
+    n = len(lines)
+    heading_pat = re.compile(r"^(#{1,6})\s+(.*)$")
+    img_pat = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
+    checkbox_pat = re.compile(r"^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$")
+    bullet_pat = re.compile(r"^(\s*)[-*]\s+(.*)$")
+    num_pat = re.compile(r"^(\s*)(\d+)\.\s+(.*)$")
+
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+
+        if not stripped:
+            i += 1
+            continue
+
+        # Fenced code block
+        if stripped.startswith("```"):
+            i += 1
+            code_lines = []
+            while i < n and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if i < n:
+                i += 1
+            box = document.add_table(rows=1, cols=1)
+            box.autofit = True
+            _set_table_borders(box, "CBD5E1")
+            cell = box.cell(0, 0)
+            _shade_cell(cell, "F1F5F9")
+            _set_cell_margins(cell, top=100, bottom=100, left=140, right=140)
+            p = cell.paragraphs[0]
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.05
+            run = p.add_run("\n".join(code_lines))
+            run.font.name = "Consolas"
+            run.font.size = Pt(8.5)
+            run.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+            spacer = document.add_paragraph()
+            spacer.paragraph_format.space_before = Pt(0)
+            spacer.paragraph_format.space_after = Pt(4)
+            continue
+
+        # Horizontal rule
+        if re.match(r"^-{3,}$", stripped):
+            p = document.add_paragraph()
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(6)
+            _add_p_border(p, "bottom", "CBD5E1", sz="6")
+            i += 1
+            continue
+
+        # Heading
+        hm = heading_pat.match(stripped)
+        if hm:
+            lvl = min(len(hm.group(1)), 4)
+            p = document.add_heading(level=min(lvl, 3))
+            p.clear()
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.space_before = Pt(14 if lvl <= 2 else 9)
+            p.paragraph_format.space_after = Pt(4)
+            size = {1: 18.0, 2: 14.0, 3: 11.5, 4: 10.5}[lvl]
+            color = {1: navy_rgb, 2: navy_rgb, 3: teal_rgb, 4: slate_rgb}[lvl]
+            _add_inline_markdown_runs(p, hm.group(2).strip(), base_color=color, base_bold=True, font_size=size)
+            i += 1
+            continue
+
+        # Standalone image embed
+        im = img_pat.match(stripped)
+        if im:
+            alt_text, rel_target = im.group(1).strip(), im.group(2).strip()
+            candidate = (root / rel_target).resolve()
+            if (
+                candidate.is_relative_to(root)
+                and candidate.is_file()
+                and candidate.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ):
+                p = document.add_paragraph()
+                p.paragraph_format.space_before = Pt(6)
+                p.paragraph_format.space_after = Pt(3)
+                p.paragraph_format.keep_with_next = True
+                run = p.add_run()
+                run.add_picture(str(candidate), width=Inches(6.3))
+                _set_picture_alt_text(run, alt_text)
+                next_line = lines[i + 1].strip() if i + 1 < n else ""
+                if alt_text and not (next_line.startswith("*") and next_line.endswith("*")):
+                    cap = document.add_paragraph()
+                    cap.paragraph_format.space_after = Pt(6)
+                    _add_inline_markdown_runs(cap, alt_text, base_color=slate_rgb, base_italic=True, font_size=9.0)
+            i += 1
+            continue
+
+        # Markdown table
+        if "|" in stripped and i + 1 < n and _is_table_sep(lines[i + 1]):
+            headers = _split_table_row(lines[i])
+            i += 2
+            rows = []
+            while i < n and lines[i].strip() and "|" in lines[i]:
+                row_cells = _split_table_row(lines[i])
+                if len(row_cells) < len(headers):
+                    row_cells.extend([""] * (len(headers) - len(row_cells)))
+                rows.append(row_cells[: len(headers)])
+                i += 1
+            tbl = document.add_table(rows=1 + len(rows), cols=len(headers))
+            tbl.autofit = True
+            _set_table_borders(tbl)
+            hdr_row = tbl.rows[0]
+            hdr_tr_pr = hdr_row._tr.get_or_add_trPr()
+            hdr_tr_pr.append(OxmlElement("w:tblHeader"))
+            hdr_tr_pr.append(OxmlElement("w:cantSplit"))
+            for col_idx, h_text in enumerate(headers):
+                cell = hdr_row.cells[col_idx]
+                _shade_cell(cell, "1E3A8A")
+                _set_cell_margins(cell, top=80, bottom=80, left=100, right=100)
+                p = cell.paragraphs[0]
+                p.paragraph_format.space_after = Pt(0)
+                _add_inline_markdown_runs(p, h_text, base_color=white_rgb, base_bold=True, font_size=9.5)
+            for r_idx, r_cells in enumerate(rows):
+                row = tbl.rows[r_idx + 1]
+                row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+                fill = "F8FAFC" if r_idx % 2 == 1 else "FFFFFF"
+                for col_idx, val in enumerate(r_cells):
+                    cell = row.cells[col_idx]
+                    _shade_cell(cell, fill)
+                    _set_cell_margins(cell, top=70, bottom=70, left=100, right=100)
+                    p = cell.paragraphs[0]
+                    p.paragraph_format.space_after = Pt(0)
+                    _add_inline_markdown_runs(p, val, font_size=9.5)
+            spacer = document.add_paragraph()
+            spacer.paragraph_format.space_before = Pt(0)
+            spacer.paragraph_format.space_after = Pt(4)
+            continue
+
+        # Blockquote callout
+        if stripped.startswith(">"):
+            quote_parts = []
+            while i < n and lines[i].strip().startswith(">"):
+                quote_parts.append(re.sub(r"^>\s?", "", lines[i].strip()))
+                i += 1
+            p = document.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0.25)
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(6)
+            _add_p_border(p, "left", "0F766E", sz="18")
+            p._p.get_or_add_pPr().append(parse_xml(f'<w:shd {nsdecls("w")} w:fill="F8FAFC"/>'))
+            _add_inline_markdown_runs(p, " ".join(part for part in quote_parts if part), base_color=slate_rgb, font_size=10.0)
+            continue
+
+        # Checklist / bullet / numbered item (with indented wrapped continuations)
+        cbm = checkbox_pat.match(raw)
+        bm = None if cbm else bullet_pat.match(raw)
+        nm = None if (cbm or bm) else num_pat.match(raw)
+        if cbm or bm or nm:
+            if cbm:
+                indent_spaces = len(cbm.group(1))
+                prefix = "☑ " if cbm.group(2).lower() == "x" else "☐ "
+                item_parts = [cbm.group(3).strip()]
+            elif bm:
+                indent_spaces = len(bm.group(1))
+                prefix = None
+                item_parts = [bm.group(2).strip()]
+            else:
+                indent_spaces = len(nm.group(1))
+                prefix = f"{nm.group(2)}. "
+                item_parts = [nm.group(3).strip()]
+            i += 1
+            while (
+                i < n
+                and lines[i].strip()
+                and lines[i].startswith("  ")
+                and not checkbox_pat.match(lines[i])
+                and not bullet_pat.match(lines[i])
+                and not num_pat.match(lines[i])
+                and not lines[i].strip().startswith((">", "```", "|", "#", "!["))
+            ):
+                item_parts.append(lines[i].strip())
+                i += 1
+            item_text = " ".join(item_parts)
+            nest = min(indent_spaces // 2, 3)
+            if bm:
+                p = document.add_paragraph(style="List Bullet")
+                if nest:
+                    p.paragraph_format.left_indent = Inches(0.25 * (nest + 1))
+                p.paragraph_format.space_after = Pt(3)
+                _add_inline_markdown_runs(p, item_text, font_size=10.5)
+            else:
+                p = document.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.25 * (nest + 1))
+                p.paragraph_format.first_line_indent = Inches(-0.2)
+                p.paragraph_format.space_after = Pt(3)
+                lead = p.add_run(prefix)
+                lead.bold = True
+                lead.font.name = "Calibri"
+                lead.font.size = Pt(10.5)
+                lead.font.color.rgb = navy_rgb
+                _add_inline_markdown_runs(p, item_text, font_size=10.5)
+            continue
+
+        # Normal paragraph (coalesce wrapped prose lines)
+        para_parts = [stripped]
+        i += 1
+        while (
+            i < n
+            and lines[i].strip()
+            and not heading_pat.match(lines[i].strip())
+            and not img_pat.match(lines[i].strip())
+            and not re.match(r"^-{3,}$", lines[i].strip())
+            and not lines[i].strip().startswith(("```", ">"))
+            and not checkbox_pat.match(lines[i])
+            and not bullet_pat.match(lines[i])
+            and not num_pat.match(lines[i])
+            and not ("|" in lines[i] and i + 1 < n and _is_table_sep(lines[i + 1]))
+        ):
+            para_parts.append(lines[i].strip())
+            i += 1
+        p = document.add_paragraph()
+        _add_inline_markdown_runs(p, " ".join(para_parts), font_size=10.5)
+
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+@st.cache_data(show_spinner=False)
+def load_guide_docx_bytes(filename, file_sha256):
+    _ = file_sha256  # cache key invalidates automatically whenever guide text changes
+    guide_path = DOCS_DIR / filename
+    return markdown_to_docx_bytes(guide_path.read_text(encoding="utf-8"), str(DOCS_DIR))
+
+
+def render_reference_guides_tab():
+    st.markdown("### Reference Guides")
+    st.caption(
+        "Read any ATLAS guide formatted right inside the workbench, or download a formatted Word (.docx) "
+        "copy to print or share with colleagues."
+    )
+    available_guides = [
+        (label.replace(" (.docx)", ""), filename)
+        for label, filename in REFERENCE_GUIDES
+        if (DOCS_DIR / filename).is_file()
+    ]
+    if available_guides:
+        guide_map = dict(available_guides)
+        g_col1, g_col2 = st.columns([3, 2])
+        chosen_guide_label = g_col1.selectbox(
+            "Choose a guide to read",
+            list(guide_map),
+            index=0,
+            key="tab3_guide_selector",
+        )
+        chosen_filename = guide_map[chosen_guide_label]
+        chosen_path = DOCS_DIR / chosen_filename
+        chosen_raw = chosen_path.read_bytes()
+        chosen_docx = load_guide_docx_bytes(chosen_filename, hashlib.sha256(chosen_raw).hexdigest())
+        g_col2.markdown("<div style='height:1.75rem;'></div>", unsafe_allow_html=True)
+        g_col2.download_button(
+            f"📥 Download {chosen_path.with_suffix('.docx').name}",
+            data=chosen_docx,
+            file_name=chosen_path.with_suffix(".docx").name,
+            mime=DOCX_MIME,
+            key="tab3_guide_docx_download",
+            **stretch_kwargs(st.download_button),
+        )
+        st.markdown("---")
+        for block in split_markdown_for_app(chosen_raw.decode("utf-8"), str(DOCS_DIR)):
+            if block[0] == "markdown":
+                st.markdown(block[1])
+            else:
+                _, img_path, alt_text = block
+                st.image(str(img_path), caption=alt_text or None, **stretch_kwargs(st.image))
+    else:
+        st.info("No reference guide files found in docs/.")
+
+
+def render_footer():
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align:center;color:#475569;font-size:0.85rem;padding:1rem 0;'>"
+        "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 if "discovered_codebooks" not in st.session_state:
     st.session_state.discovered_codebooks = {}
 if "stacked_codebooks" not in st.session_state:
     st.session_state.stacked_codebooks = []
+if "run_snapshot" not in st.session_state:
+    st.session_state.run_snapshot = None
+if "run_error" not in st.session_state:
+    st.session_state.run_error = None
 
 
 # ------------------------------------------------------------------------------
-# 3. Sidebar: corpus, codebook and parser controls
+# 3. Sidebar: corpus, codebook, Run button, and Word reference guides
 # ------------------------------------------------------------------------------
 config_codebooks = list_config_codebooks()
+default_codebook = "gbi_focus_group_starter.yaml" if "gbi_focus_group_starter.yaml" in config_codebooks else (
+    config_codebooks[0] if config_codebooks else CODEBOOK_UPLOAD
+)
 
 with st.sidebar:
-    st.markdown("### Inputs & Codebook")
+    st.markdown("### 1. Data & Codebook")
 
     corpus_choice = st.selectbox("Corpus Dataset", CORPUS_OPTIONS, index=0)
 
@@ -840,58 +1354,63 @@ with st.sidebar:
                             tabular_options["id_col"] = id_col
                         if speaker_col != NONE_OPTION:
                             tabular_options["speaker_col"] = speaker_col
-        names_raw = st.text_input(
-            "Facilitator names (optional, comma-separated)", "",
-            help="Turns by these speakers are treated as facilitator prompts and excluded from coding.",
-        )
-        facilitator_names = [n.strip() for n in names_raw.split(",") if n.strip()]
-        patterns_raw = st.text_area(
-            "Interviewer prompt patterns (optional, one regular expression per line)", "",
-            help="Speakerless turns matching a pattern are excluded as interviewer prompts.",
-        )
-        prompt_patterns = [p.strip() for p in patterns_raw.splitlines() if p.strip()]
 
     # Data Type follows the inputs: whenever the selected corpus changes, Group mode is
-    # chosen if any .docx holds a structured notes table. The user may override it.
+    # chosen automatically if any .docx holds a structured 3-column focus-group notes table.
     selected_sample = SAMPLE_CORPORA.get(corpus_choice)
     if selected_sample is not None:
         detect_items = [(name, (SAMPLES_DIR / name).read_bytes()) for name in selected_sample["files"]]
     else:
         detect_items = [(f.name, f.getvalue()) for f in uploaded_files]
-    data_type_fingerprint = (
-        corpus_choice,
-        tuple((name, len(payload), hashlib.sha256(payload).hexdigest()) for name, payload in detect_items),
-    )
+    detect_digest = tuple((name, len(payload), hashlib.sha256(payload).hexdigest()) for name, payload in detect_items)
+    has_structured_notes = any(detect_structured_notes(name, payload) for name, payload in detect_items)
+    data_type_fingerprint = (corpus_choice, detect_digest)
     if st.session_state.get("data_type_fingerprint") != data_type_fingerprint:
         st.session_state.data_type_fingerprint = data_type_fingerprint
-        st.session_state.data_type = (
-            DATA_TYPE_GROUP if any(detect_structured_notes(name, payload) for name, payload in detect_items)
-            else DATA_TYPE_INDIVIDUAL
-        )
+        st.session_state.data_type = DATA_TYPE_GROUP if has_structured_notes else DATA_TYPE_INDIVIDUAL
     data_type = st.radio(
         "Data Type", DATA_TYPES, key="data_type",
         help="Group mode treats each file as one focus group (1 file = 1 group). It is chosen automatically "
-             "for structured focus-group notes and can be switched at any time.",
+             "for 3-column focus-group notes and can be switched at any time.",
     )
-    group_mode = data_type == DATA_TYPE_GROUP
-    notes_evidence = None
-    if group_mode:
+    draft_group_mode = data_type == DATA_TYPE_GROUP
+    draft_notes_evidence = None
+    if draft_group_mode:
         include_observations = st.checkbox(
             "Include Note-Taker Observations", value=False,
             help="Also code the Observations column of structured notes (key points and notable quotes are "
                  "always coded).",
         )
-        notes_evidence = NOTES_EVIDENCE_WITH_OBSERVATIONS if include_observations else NOTES_EVIDENCE_CORE
+        draft_notes_evidence = NOTES_EVIDENCE_WITH_OBSERVATIONS if include_observations else NOTES_EVIDENCE_CORE
 
-    # Default the codebook to the one suited to the selected sample whenever the corpus changes.
+    # Advanced free-form transcript filters stay hidden on 3-column focus-group notes (which
+    # strip headers, prompts, and summaries structurally) and tucked inside a collapsed expander
+    # when uploading ordinary transcripts or tables.
+    if corpus_choice == CORPUS_UPLOAD and not (draft_group_mode and has_structured_notes):
+        with st.expander("⚙️ Advanced transcript filters (optional)", expanded=False):
+            st.caption("Only needed for free-form interview transcripts—3-column focus-group notes filter headers and prompts automatically.")
+            names_raw = st.text_input(
+                "Facilitator names (optional, comma-separated)", "",
+                help="Turns by these speakers are treated as facilitator prompts and excluded from coding.",
+            )
+            facilitator_names = [n.strip() for n in names_raw.split(",") if n.strip()]
+            patterns_raw = st.text_area(
+                "Interviewer prompt patterns (optional, one regular expression per line)", "",
+                help="Speakerless turns matching a pattern are excluded as interviewer prompts.",
+            )
+            prompt_patterns = [p.strip() for p in patterns_raw.splitlines() if p.strip()]
+
+    # Default the codebook to the GBI starter on boot, or to a sample's matching starter when switched.
     if st.session_state.get("last_corpus_choice") != corpus_choice:
         st.session_state.last_corpus_choice = corpus_choice
         suggested = SAMPLE_CORPORA.get(corpus_choice, {}).get("codebook")
         if suggested in config_codebooks:
             st.session_state.codebook_choice = suggested
+        elif "codebook_choice" not in st.session_state:
+            st.session_state.codebook_choice = default_codebook
     codebook_options = [*config_codebooks, *st.session_state.discovered_codebooks, CODEBOOK_UPLOAD]
     if st.session_state.get("codebook_choice") not in codebook_options:
-        st.session_state.codebook_choice = codebook_options[0]
+        st.session_state.codebook_choice = default_codebook if default_codebook in codebook_options else codebook_options[0]
     codebook_choice = st.selectbox("Active YAML Codebook", codebook_options, key="codebook_choice")
 
     uploaded_codebook = None
@@ -909,135 +1428,255 @@ with st.sidebar:
         help="Combine domains from additional starter codebooks with the active codebook without editing YAML by hand.",
     )
 
-    st.markdown("---")
-    st.markdown("### Reference Guides")
-    for label, filename in REFERENCE_GUIDES:
-        guide = DOCS_DIR / filename
-        if guide.is_file():
-            st.download_button(
-                label=label, data=guide.read_bytes(), file_name=filename,
-                mime="text/markdown", **stretch_kwargs(st.download_button), key=f"guide_{filename}",
-            )
+    run_clicked = st.button(
+        RUN_BUTTON_LABEL,
+        type="primary",
+        key="run_analysis_btn",
+        **stretch_kwargs(st.button),
+        help="Run ATLAS on the selected files and codebook(s).",
+    )
 
 
 # ------------------------------------------------------------------------------
-# 4. Header and fixture notice
+# 4. Header
 # ------------------------------------------------------------------------------
 st.markdown(
     """
 <div class="brand-header">
 <h1>ATLAS</h1>
-<p>Local qualitative coding, topic discovery, and auditable frequency tables for transcripts and surveys.</p>
+<p>Local qualitative coding, topic discovery, and auditable frequency tables for focus-group notes, transcripts, and surveys.</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-sample = SAMPLE_CORPORA.get(corpus_choice)
-uploaded_fixture = any("software_test" in f.name.lower() for f in uploaded_files)
-if sample is not None or uploaded_fixture:
-    st.info(SOFTWARE_TEST_BANNER)
-
 
 # ------------------------------------------------------------------------------
-# 5. Resolve inputs and run the live engine
+# 5. Commit inputs on Run Analysis click (snapshot-isolated execution)
 # ------------------------------------------------------------------------------
-if sample is not None:
-    inputs = tuple(
-        ((SAMPLES_DIR / name).relative_to(APP_DIR).as_posix(), (SAMPLES_DIR / name).read_bytes())
-        for name in sample["files"]
-    )
-    tabular_options = sample["tabular_options"]
-    corpus_label = corpus_choice
-else:
-    if not uploaded_files:
-        st.info("Upload one or more transcript or tabular files in the sidebar to start the analysis.")
-        st.stop()
-    if tabular_error:
-        st.error(tabular_error)
-        st.stop()
-    if any(os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS for f in uploaded_files) and not tabular_options:
-        st.error("Choose a text column for the uploaded tables before analysis.")
-        st.stop()
-    taken = set()
-    inputs = tuple((f"uploads/{safe_upload_name(f.name, taken)}", f.getvalue()) for f in uploaded_files)
-    unsupported = [rel for rel, _ in inputs
-                   if os.path.splitext(rel)[1].lower() not in TRANSCRIPT_EXTENSIONS | TABULAR_EXTENSIONS]
-    if unsupported:
-        st.error(f"Unsupported file type: {', '.join(unsupported)}")
-        st.stop()
-    corpus_label = ", ".join(os.path.basename(rel) for rel, _ in inputs)
+uploaded_cb_sig = (
+    (uploaded_codebook.name, hashlib.sha256(uploaded_codebook.getvalue()).hexdigest())
+    if uploaded_codebook is not None else None
+)
+draft_tabular_items = tuple(sorted(tabular_options.items())) if tabular_options else None
+draft_fingerprint = (
+    corpus_choice,
+    detect_digest,
+    draft_tabular_items,
+    tabular_error,
+    tuple(facilitator_names),
+    tuple(prompt_patterns),
+    draft_group_mode,
+    draft_notes_evidence,
+    codebook_choice,
+    uploaded_cb_sig,
+    tuple(extra_codebooks),
+)
 
-if codebook_choice == CODEBOOK_UPLOAD:
-    if uploaded_codebook is None:
-        st.info("Upload a YAML codebook in the sidebar, or choose one from the list.")
-        st.stop()
-    primary_codebook_bytes = uploaded_codebook.getvalue()
-    primary_codebook_label = uploaded_codebook.name
-elif codebook_choice in st.session_state.discovered_codebooks:
-    primary_codebook_bytes = st.session_state.discovered_codebooks[codebook_choice]
-    primary_codebook_label = codebook_choice
-else:
-    primary_codebook_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
-    primary_codebook_label = codebook_choice
+if run_clicked:
+    commit_error = None
+    sample = SAMPLE_CORPORA.get(corpus_choice)
+    commit_inputs = None
+    commit_tabular = None
+    commit_corpus_label = None
+    if sample is not None:
+        commit_inputs = tuple(
+            ((SAMPLES_DIR / name).relative_to(APP_DIR).as_posix(), (SAMPLES_DIR / name).read_bytes())
+            for name in sample["files"]
+        )
+        commit_tabular = sample["tabular_options"]
+        commit_corpus_label = corpus_choice
+    else:
+        if not uploaded_files:
+            commit_error = "Upload one or more files in the sidebar before clicking Run Analysis."
+        elif tabular_error:
+            commit_error = tabular_error
+        elif any(os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS for f in uploaded_files) and not tabular_options:
+            commit_error = "Choose a text column for the uploaded tables before running analysis."
+        else:
+            taken = set()
+            commit_inputs = tuple((f"uploads/{safe_upload_name(f.name, taken)}", f.getvalue()) for f in uploaded_files)
+            unsupported = [rel for rel, _ in commit_inputs
+                           if os.path.splitext(rel)[1].lower() not in TRANSCRIPT_EXTENSIONS | TABULAR_EXTENSIONS]
+            if unsupported:
+                commit_error = f"Unsupported file type: {', '.join(unsupported)}"
+            else:
+                commit_tabular = tabular_options
+                commit_corpus_label = ", ".join(os.path.basename(rel) for rel, _ in commit_inputs)
 
-if extra_codebooks:
-    try:
-        primary_dict = yaml.safe_load(primary_codebook_bytes)
-        if not isinstance(primary_dict, dict):
-            raise ValueError(f"Primary codebook {primary_codebook_label!r} must be a YAML mapping.")
-        to_merge = [(primary_codebook_label, primary_dict)]
-        for extra_name in extra_codebooks:
-            extra_dict = yaml.safe_load((CONFIG_DIR / extra_name).read_bytes())
-            if not isinstance(extra_dict, dict):
-                raise ValueError(f"Stacked codebook {extra_name!r} must be a YAML mapping.")
-            to_merge.append((extra_name, extra_dict))
-        merged_dict = merge_codebook_dicts(to_merge)
-        codebook_bytes = yaml.safe_dump(merged_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
-    except (*UPLOAD_READ_ERRORS, yaml.YAMLError) as exc:
-        st.error(f"ATLAS could not combine the selected codebooks: {exc}")
-        st.stop()
-    active_codebook_label = " + ".join([primary_codebook_label, *extra_codebooks])
-else:
-    codebook_bytes = primary_codebook_bytes
-    active_codebook_label = primary_codebook_label
+    commit_cb_bytes = None
+    commit_primary_label = None
+    if commit_error is None:
+        if codebook_choice == CODEBOOK_UPLOAD:
+            if uploaded_codebook is None:
+                commit_error = "Upload a YAML codebook in the sidebar, or choose one from the list."
+            else:
+                primary_cb_bytes = uploaded_codebook.getvalue()
+                commit_primary_label = uploaded_codebook.name
+        elif codebook_choice in st.session_state.discovered_codebooks:
+            primary_cb_bytes = st.session_state.discovered_codebooks[codebook_choice]
+            commit_primary_label = codebook_choice
+        else:
+            primary_cb_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
+            commit_primary_label = codebook_choice
 
-is_custom_or_stacked = bool(extra_codebooks or codebook_choice in st.session_state.discovered_codebooks)
-if is_custom_or_stacked:
-    with st.sidebar:
+        if commit_error is None:
+            if extra_codebooks:
+                try:
+                    primary_dict = yaml.safe_load(primary_cb_bytes)
+                    if not isinstance(primary_dict, dict):
+                        raise ValueError(f"Primary codebook {commit_primary_label!r} must be a YAML mapping.")
+                    to_merge = [(commit_primary_label, primary_dict)]
+                    for extra_name in extra_codebooks:
+                        extra_dict = yaml.safe_load((CONFIG_DIR / extra_name).read_bytes())
+                        if not isinstance(extra_dict, dict):
+                            raise ValueError(f"Stacked codebook {extra_name!r} must be a YAML mapping.")
+                        to_merge.append((extra_name, extra_dict))
+                    merged_dict = merge_codebook_dicts(to_merge)
+                    commit_cb_bytes = yaml.safe_dump(merged_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
+                except (*UPLOAD_READ_ERRORS, yaml.YAMLError) as exc:
+                    commit_error = f"ATLAS could not combine the selected codebooks: {exc}"
+            else:
+                commit_cb_bytes = primary_cb_bytes
+
+    if commit_error is None:
+        bad_patterns = []
+        for pattern in prompt_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                bad_patterns.append(f"{pattern!r} ({exc})")
+        if bad_patterns:
+            commit_error = "Invalid interviewer prompt pattern: " + "; ".join(bad_patterns)
+
+    if commit_error is not None:
+        st.session_state.run_snapshot = None
+        st.session_state.run_error = commit_error
+    else:
+        st.session_state.run_snapshot = {
+            "inputs": commit_inputs,
+            "tabular_items": tuple(sorted(commit_tabular.items())) if commit_tabular else None,
+            "facilitator_names": tuple(facilitator_names),
+            "prompt_patterns": tuple(prompt_patterns),
+            "notes_evidence": draft_notes_evidence,
+            "group_mode": draft_group_mode,
+            "corpus_label": commit_corpus_label,
+            "codebook_bytes": commit_cb_bytes,
+            "primary_codebook_label": commit_primary_label,
+            "extra_codebooks": tuple(extra_codebooks),
+            "is_custom_or_stacked": bool(extra_codebooks or codebook_choice in st.session_state.discovered_codebooks),
+            "codebook_choice": codebook_choice,
+            "codebook_sha256": hashlib.sha256(commit_cb_bytes).hexdigest(),
+            "fingerprint": draft_fingerprint,
+        }
+        st.session_state.run_error = None
+
+# Add Active Codebook download (when stacked/customized) and Word Reference Guides to the sidebar.
+snap = st.session_state.get("run_snapshot")
+with st.sidebar:
+    if isinstance(snap, dict) and snap.get("is_custom_or_stacked"):
         st.download_button(
             "📥 Download Active Codebook (.yaml)",
-            data=codebook_bytes,
+            data=snap["codebook_bytes"],
             file_name="atlas_active_codebook.yaml",
             mime="application/x-yaml",
             key="download_active_codebook_sidebar",
             help="Save a copy of the exact stacked or customized YAML codebook alongside your export files.",
             **stretch_kwargs(st.download_button),
         )
+    st.markdown("---")
+    st.markdown("### Reference Guides")
+    st.caption("Download formatted Word (.docx) copies, or read inside Tab 3: Reference Guides.")
+    for label, filename in REFERENCE_GUIDES:
+        guide = DOCS_DIR / filename
+        if guide.is_file():
+            raw_bytes = guide.read_bytes()
+            docx_bytes = load_guide_docx_bytes(filename, hashlib.sha256(raw_bytes).hexdigest())
+            st.download_button(
+                label=label,
+                data=docx_bytes,
+                file_name=guide.with_suffix(".docx").name,
+                mime=DOCX_MIME,
+                **stretch_kwargs(st.download_button),
+                key=f"guide_{filename}",
+            )
 
-bad_patterns = []
-for pattern in prompt_patterns:
-    try:
-        re.compile(pattern)
-    except re.error as exc:
-        bad_patterns.append(f"{pattern!r} ({exc})")
-if bad_patterns:
-    st.error("Invalid interviewer prompt pattern: " + "; ".join(bad_patterns))
+if st.session_state.get("run_error"):
+    tab_thematic, tab_econometric, tab_guides = st.tabs([
+        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
+        "📊 Tab 2: Econometric & Actuarial Ledger Export",
+        "📚 Tab 3: Reference Guides",
+    ])
+    with tab_thematic:
+        st.error(st.session_state.run_error)
+    with tab_econometric:
+        st.info("Fix the input error in the sidebar and click **▶ Run Analysis** to generate exports.")
+    with tab_guides:
+        render_reference_guides_tab()
+    render_footer()
     st.stop()
+
+if not isinstance(snap, dict):
+    tab_thematic, tab_econometric, tab_guides = st.tabs([
+        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
+        "📊 Tab 2: Econometric & Actuarial Ledger Export",
+        "📚 Tab 3: Reference Guides",
+    ])
+    with tab_thematic:
+        st.info(
+            "**Ready to analyze.** Choose your files (or a built-in sample) and codebook in the left sidebar, "
+            "then click **▶ Run Analysis**."
+        )
+        st.markdown(
+            "1. **Load files:** Drag in your 3-column Word focus-group notes (`.docx`), transcripts, or survey "
+            "tables—or pick a built-in sample dataset from **Corpus Dataset**.\n"
+            "2. **Choose or stack codebooks:** Start with `gbi_focus_group_starter.yaml` (selected by default) "
+            "and optionally stack extra starter packs.\n"
+            "3. **Click `▶ Run Analysis`** in the left sidebar to code your corpus, spot emergent themes, "
+            "check false alarms, and export verified tables and quotes."
+        )
+    with tab_econometric:
+        st.info("Click **▶ Run Analysis** in the left sidebar to generate tables and audited exports.")
+    with tab_guides:
+        render_reference_guides_tab()
+    render_footer()
+    st.stop()
+
+# Unpack the committed run snapshot so displayed results never mix with un-run sidebar edits.
+inputs = snap["inputs"]
+codebook_bytes = snap["codebook_bytes"]
+corpus_label = snap["corpus_label"]
+group_mode = snap["group_mode"]
+is_custom_or_stacked = snap["is_custom_or_stacked"]
+pending_changes = draft_fingerprint != snap["fingerprint"]
 
 try:
     with st.spinner("Parsing and coding the corpus..."):
         results = analyze_corpus(
             codebook_bytes,
             inputs,
-            tuple(sorted(tabular_options.items())) if tabular_options else None,
-            tuple(facilitator_names),
-            tuple(prompt_patterns),
-            notes_evidence,
+            snap["tabular_items"],
+            snap["facilitator_names"],
+            snap["prompt_patterns"],
+            snap["notes_evidence"],
             group_mode,
         )
 except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
-    st.error(f"ATLAS could not analyse this corpus with this codebook: {exc}")
+    err_msg = f"ATLAS could not analyse this corpus with this codebook: {exc}"
+    st.session_state.run_snapshot = None
+    st.session_state.run_error = err_msg
+    tab_thematic, tab_econometric, tab_guides = st.tabs([
+        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
+        "📊 Tab 2: Econometric & Actuarial Ledger Export",
+        "📚 Tab 3: Reference Guides",
+    ])
+    with tab_thematic:
+        st.error(err_msg)
+    with tab_econometric:
+        st.info("Fix the input error in the sidebar and click **▶ Run Analysis** to generate exports.")
+    with tab_guides:
+        render_reference_guides_tab()
+    render_footer()
     st.stop()
 
 freq = results["frequencies_df"]
@@ -1049,6 +1688,9 @@ matched_mentions = int(freq["matching_turns"].sum()) if len(freq) else 0
 # interval is withheld for them whatever the Data Type, and their coded entries are
 # labelled by evidence type wherever verbatim words could be implied.
 notes_present = NOTES_STRUCTURE in set(results.get("document_structures", {}).values())
+active_codebook_summary = format_codebook_summary(
+    snap["primary_codebook_label"], snap["extra_codebooks"], len(freq)
+)
 
 if group_mode:
     group_labels = group_labels_for(results["file_hashes"])
@@ -1063,13 +1705,16 @@ if group_mode:
     if themes_df is None:
         themes_df = pd.DataFrame()
 
+if pending_changes:
+    st.warning("Sidebar inputs have changed since the last run. Click **▶ Run Analysis** in the left sidebar to refresh results.")
 
 # ------------------------------------------------------------------------------
-# 6. Dual-track interface
+# 6. Dual-track interface + formatted Reference Guides
 # ------------------------------------------------------------------------------
-tab_thematic, tab_econometric = st.tabs([
+tab_thematic, tab_econometric, tab_guides = st.tabs([
     "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
     "📊 Tab 2: Econometric & Actuarial Ledger Export",
+    "📚 Tab 3: Reference Guides",
 ])
 
 # ==============================================================================
@@ -1080,7 +1725,7 @@ with tab_thematic:
     workbench_meta = re.sub(
         r"[\r\n\x0b\x0c\x85\u2028\u2029]+",
         " ",
-        f"Corpus: {corpus_label} · Codebook: {active_codebook_label} · Project: {results['project_name']}",
+        f"Corpus: {corpus_label} · Codebook: {active_codebook_summary}",
     )
     st.text(workbench_meta)
 
@@ -1745,13 +2390,14 @@ with tab_econometric:
         )
 
 
+# ==============================================================================
+# TAB 3: FORMATTED IN-APP REFERENCE GUIDES
+# ==============================================================================
+with tab_guides:
+    render_reference_guides_tab()
+
+
 # ------------------------------------------------------------------------------
 # 7. Footer
 # ------------------------------------------------------------------------------
-st.markdown("---")
-st.markdown(
-    "<div style='text-align:center;color:#475569;font-size:0.85rem;padding:1rem 0;'>"
-    "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License"
-    "</div>",
-    unsafe_allow_html=True,
-)
+render_footer()

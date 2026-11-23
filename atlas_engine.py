@@ -1129,7 +1129,7 @@ def merge_codebook_dicts(
     elif len(entries) == 1:
         resolved_project = _codebook_project_name(entries[0][1])
     else:
-        resolved_project = f"Stacked Codebook ({' + '.join(labels)})"
+        resolved_project = f"Combined Codebook ({len(entries)} packs, {len(merged_domains)} domains)"
 
     return {
         "project": resolved_project,

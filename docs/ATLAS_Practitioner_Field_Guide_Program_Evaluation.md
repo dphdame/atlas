@@ -1,48 +1,45 @@
 # ATLAS Practitioner Field Guide
-## Writing Clear Program Evaluations with Community Voices
+## Writing Clear Program Evaluations with Community Voices (`v1.2`)
 
 **Victoria Cholette**  
 *Open ATLAS Toolkit for Community Programs and Applied Evaluation*
+
+**Strong program evaluations pair human stories with exact, verifiable scale—and ATLAS (`v1.2`) lets community evaluation teams produce both offline on their own workstation.** This guide shows how to move from raw interviews, surveys, or 3-column focus-group notes to clear, audit-ready evaluation narratives without uploading confidential community records to the cloud.
 
 ---
 
 ## 1. Communicating Program Value
 
-Community programs do important work every day. They connect families to healthcare, food, and job training. At grant renewal time, funders ask a central question:  
-**"Did the program achieve its intended impact, and what evidence supports that conclusion?"**
+Community programs connect families to healthcare, food, housing stability, cash assistance, and job training. When grants come up for renewal or boards review pilot outcomes, decision-makers ask one central question: **"Did the program achieve its intended impact, and what evidence supports that conclusion?"**
 
-This guide demonstrates how to use data from interviews, surveys, and intake forms to write evaluation reports that communicate program value clearly.
-
-Direct participant quotes are powerful: they give human voice to key themes and show what program services feel like on the ground. Pairing those quotes with statistics helps funders understand how widespread those experiences really are. Together, quotes and numbers provide both the human story and the evidence of scale.
+Direct participant quotes show what services feel like on the ground, while counts show how widespread each experience actually was. When an evaluation report relies only on general summaries, readers cannot tell whether a barrier affected 3 families out of 50 or 35 families out of 50. Pairing verified verbatim quotes with exact counts closes that gap so funders see both the human reality and the operational scale.
 
 ---
 
 ## 2. How Evaluators Report Findings (And Where Information Gaps Emerge)
 
-Evaluation reports draw on many sources of community feedback. These include intake notes, focus groups, and survey comments.
-
-When summarizing this qualitative feedback, it is common and reasonable to write statements like this:
+Evaluation teams draw on intake logs, focus-group notes, interviews, and open-ended survey comments. Summarizing that feedback in broad prose often yields statements such as:
 
 > *"Participants reported that clinic hours helped, while several families faced travel barriers and paperwork delays."*
 
-This statement is accurate and reflects real staff observations. But funders and review teams face clear information gaps when reading general descriptions:
+That sentence reflects real observations, yet it leaves three gaps that review committees notice immediately:
 
-* **Scope and Prevalence:** Did the problem affect 3 people out of 50, or 35 people? Without a clear count, funders cannot tell if the issue was an isolated case or a widespread barrier.
-* **Mechanism:** What part of the system broke down? Was it bus schedules, gas costs, or appointment times?
-* **Accountability:** Funders want to know how the theme was identified and whether counter-examples were reviewed.
+* **Scope and prevalence:** Words like *"several"* hide whether an issue was isolated or systemic, which makes resource decisions difficult.
+* **Mechanism:** General labels like *"travel barriers"* blur distinct operational causes—hourly bus schedules, transit fares, and car repairs require different fixes.
+* **Accountability:** Reviewers need to know how themes were defined, whether negative or counter-examples were checked, and whether quoted remarks are authentic participant speech rather than staff paraphrases.
 
-When reports pair direct quotes with exact counts and percentages, those gaps disappear. Funders see both the depth of the story and its true scale.
+Pairing exact denominators, verified verbatim quotes, and a saved codebook resolves all three gaps at once.
 
 ---
 
 ## 3. Two Ways to Learn from Stories: Inductive and Deductive Evaluation
 
-Program evaluation uses two main ways of thinking: **inductive reasoning** and **deductive reasoning**. Strong evaluation reports use both.
+Reliable evaluations combine two complementary ways of working with text: **inductive discovery** (listening openly for surprises) and **deductive measurement** (counting defined program goals consistently across every record).
 
 ```
 +--------------------------------------------------------+
 |                   COMMUNITY DATA                       |
-|    (Interviews, Survey Responses, Program Notes)       |
+|   (Interviews, Survey Comments, Focus-Group Notes)     |
 +---------------------------+----------------------------+
                             |
               +-------------+-------------+
@@ -60,158 +57,116 @@ Program evaluation uses two main ways of thinking: **inductive reasoning** and *
               Human Context  +  Verified Scale
 ```
 
-### Inductive Reasoning ("Listening to Learn")
-Inductive evaluation starts with an open mind. Instead of checking fixed boxes, the evaluator reads community notes to find surprise patterns.
+**Inductive evaluation ("Listening to Learn")** starts without a closed checklist so staff catch blind spots they did not anticipate. For example, a nutrition program may assume low workshop turnout reflects a lack of cooking tools, while open reading of participant comments reveals that families work evening shifts and cannot attend daytime sessions.
 
-* **Example:** A nutrition program may assume class attendance is low due to a lack of cooking tools. Through open listening, staff learn that clients work night shifts and cannot attend day classes.
-* **The Benefit:** Inductive review catches blind spots that program staff never expected.
-
-### Deductive Reasoning ("Measuring What Matters")
-Deductive evaluation starts with clear program goals. The evaluator builds a checklist of key topics and counts how often each topic appears across all notes.
-
-* **Example:** A grant contract requires tracking benefit cliffs. The evaluator searches the notes to count how many workers lost public aid after getting a wage raise.
-* **The Benefit:** Deductive review gives exact numbers that match grant goals.
-
-By combining inductive discovery (finding the surprise barriers) with deductive counts (measuring their prevalence), reports become both deep and accurate.
+**Deductive evaluation ("Measuring What Matters")** starts from clear program outcomes and applies consistent rules across every document. For example, if a grant tracks benefit cliffs, the team defines the exact terms that signal losing public aid after a wage gain and counts how many participants or focus groups raised that barrier. Combining both approaches ensures the report answers funders' required questions without missing unexpected community needs.
 
 ---
 
-## 4. The 2-Step Evaluation Workflow: From Discovery to Measurement
+## 4. The Practical ATLAS `v1.2` Evaluation Loop
 
-Evaluation teams often face a difficult puzzle:
-* If you only count fixed questions, you miss unexpected community needs.
-* If you only look at word clouds or open topics, you cannot report clear percentages to funders.
-
-ATLAS bridges the two with a short loop: **discover, then measure**.
+Historically, combining discovery with measurement meant juggling separate tools or hand-editing codebooks in a text editor. ATLAS `v1.2` puts the full workflow inside one offline workbench:
 
 ```
-+-------------------------------------------------------------+
-|                      YOUR RAW DATA                          |
-|             (Survey comments, interview notes)              |
-+------------------------------+------------------------------+
-                               |
-                               v
-+-------------------------------------------------------------+
-|        STEP 1: INDUCTIVE DISCOVERY (Tab 1, sub-tab 3)       |
-|  * Set the number of topics and read each topic's terms.    |
-|  * Read the medoid: the real comment closest to the topic.  |
-+------------------------------+------------------------------+
-                               |
-                               v
-+-------------------------------------------------------------+
-|        STEP 2: SHAPE THE CHECKLIST (the YAML codebook)      |
-|  * Download the discovered codebook (.yaml).                |
-|  * Rename topics, drop filler words, add fences.            |
-|  * Upload it as a custom codebook.                          |
-+------------------------------+------------------------------+
-                               |
-                               v
-+-------------------------------------------------------------+
-|             STEP 3: DEDUCTIVE MEASUREMENT                   |
-|  * ATLAS codes every response against the checklist.        |
-|  * Read counts, percentages and verbatim quotes.            |
-+-------------------------------------------------------------+
++-------------------------------------------------------------------+
+|                        YOUR RAW DATA                              |
+|     (Interviews, surveys, or 3-column Word focus-group notes)     |
++--------------------------------+----------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------+
+|  STEP 1: PICK OR STACK STARTER CODEBOOKS (Sidebar)                |
+|  * Start with gbi_focus_group_starter.yaml or another starter.    |
+|  * Stack extra packs via Stack Additional Starter Codebooks.      |
++--------------------------------+----------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------+
+|  STEP 2: SPOT MISSED THEMES & ADD THEM IN ONE CLICK (Tab 1)       |
+|  * Run TF-IDF + NMF discovery (or classic LDA) and read medoids.  |
+|  * Click Add Theme to Active Codebook (exact whole-word default). |
++--------------------------------+----------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------+
+|  STEP 3: RUN FALSE-ALARM SPOT-CHECK & EXPORT (Tab 1 -> Tab 2)     |
+|  * Review prefix extensions and nearby negations in 2 minutes.    |
+|  * Filter Quotable Verbatim Only, then export audited files.      |
++-------------------------------------------------------------------+
 ```
 
-### Step A: Run Inductive Discovery
-Load the survey or interview files in the sidebar (**Corpus Dataset → Upload Custom Files**) and open
-**Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)**.
-* Choose **Number of topics (k)** between 1 and 10.
-* Each topic lists its top terms (a word belongs to one topic only), how many responses it covers, and
-  its **medoid**, the actual response that best represents the topic.
-* For example, a topic might gather *landlord*, *rent*, *deposit* and *eviction*, even if the grant
-  only asked about job training.
+### Step A: Load Your Files and Check Individual vs. Group Mode
 
-### Step B: Shape the Checklist
-Discovered topics are a starting draft, not a finished checklist:
-1. Click **📥 Download Discovered Codebook (.yaml)** and open the file in any text editor.
-2. **Name each category** with a label funders recognise (change `name:` to *Housing Security*).
-3. **Prune filler words** such as *actually* or *know* from `roots_en`.
-4. **Add project terms** (*voucher*, *stipend*) and context fences so a word only counts in the right
-   setting.
-5. In the sidebar choose **Active YAML Codebook → Upload Custom Codebook (.yaml)** and upload the edited
-   file.
+In the sidebar, choose **Corpus Dataset → Upload Custom Files** and drag in your transcripts, survey tables, or 3-column Word focus-group notes (`Key Points | Notable Quotes | Observations`). If ATLAS detects 3-column focus-group notes, it automatically switches **Data Type** to **Group / summarized notes** (**Group Mode**).
 
-For a quick look before editing, **⚡ Apply Discovered Codebook to Engine** codes the corpus with the
-raw draft. Raw drafts have no fences, so their counts are exploratory only.
+Why does **Group Mode** matter? In a focus-group pilot, each file represents one room of people who hear and react to one another, and total group counts (`G`) are typically small. Reporting individual-level survey error bars on small, clustered focus groups overstates statistical precision. Group Mode therefore counts `1 file = 1 focus group`, reports exact integer **Groups Reporting (`g of G`)** counts alongside a **Group × Theme Matrix**, keeps `P1` in separate rooms counted as distinct voices, and hides invalid Binomial error bars.
 
-### Step C: Report Verified Percentages
-With the edited codebook active, ATLAS codes every response:
-* Tab 1 shows how many units mention each theme and every matching quote with its line and file hash
-  (for example, *"34 of 50 families (68.0%) mentioned Housing Security"*; illustrative numbers).
-* Tab 2 adds the standard error and the downloadable workbook, manifest and quote list. Keep the
-  `.yaml` codebook with the report so others can see exactly what was counted.
+### Step B: Start from a Starter Pack, Stack Extras, and Click `▶ Run Analysis`
+
+**Active YAML Codebook** starts on **`gbi_focus_group_starter.yaml`** (for guaranteed basic income or cash-assistance pilots). If your evaluation spans two areas—such as cash-assistance stability and clinic access—select a second pack under **Stack Additional Starter Codebooks (optional)** (for example, stack `sdoh_basic_needs.yaml` or `workforce_and_mobility.yaml`). ATLAS combines their rules automatically without duplicating domain IDs or losing existing fences. Once your files and codebooks are selected, click **`▶ Run Analysis`** in the sidebar to run the coding pass.
+
+### Step C: Discover Local Themes and Add Them in One Click
+
+Open **Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)** and leave **Discovery method** on **`TF-IDF + NMF`** (faster, repeatable across runs, and sharper non-overlapping keywords; classic **LDA** remains available for comparison). Choose **Number of topics (k)** between `1` and `10` and read each topic's top terms alongside its **medoid**—the real participant turn or coded notes entry closest to that topic's center.
+
+If discovery surfaces an unexpected local issue (such as prepaid card fees or a local housing waitlist), you do not have to edit YAML by hand: pick that topic under **Add a discovered theme to your active codebook**, type a clear program label, leave exact whole-word matching checked, and click **`➕ Add Theme to Active Codebook`**. ATLAS appends the new theme onto your active codebook using `match_mode: exact` so short words like `car` or `fee` never spill into `career` or `feedback`. *(You can still click **`📥 Download Discovered Codebook (.yaml)`** or **`⚡ Apply Discovered Codebook to Engine`** if you prefer to explore a full draft codebook from scratch.)*
+
+### Step D: Run the 2-Minute False-Alarm Spot-Check
+
+Before trusting counts, open **Tab 1 → 🔎 False-Alarm Spot-Check**. ATLAS automatically flags matches most likely to be false alarms: short or non-inflectional prefix extensions (such as `car` firing inside `card` or `career`), nearby negation words (`not`, `never`, `didn't`), and short unfenced stems. Right inside that tab, you can click **`🛡️ Exclude Selected Words from Domain`** or **`🎯 Switch Domain to Exact Whole-Word Matching`** to tighten a noisy rule immediately and watch the false alarms drop away, or download `atlas_false_alarm_spot_check.csv` for team review.
+
+### Step E: Separate Direct Quotes from Paraphrases and Export
+
+Before pulling direct quotations for slides or leadership briefs, open the Evidence Browser and check **`Quotable Verbatim Only`**. In focus-group notes, that single checkbox hides paraphrased `Key Points` and staff `Observations` so you only quote participants' own words. Then move to **Tab 2** to confirm the green integrity banner and download your Excel workbook, JSON provenance manifest, quote CSVs (`verbatim_quotes_inventory.csv` and, when mixed evidence is present, `coded_evidence_inventory.csv`), and your final customized **`atlas_active_codebook.yaml`**.
 
 ---
 
-## 5. How ATLAS Supports Both Approaches (Local and Confidential)
+## 5. How ATLAS Protects Confidentiality and Auditability
 
-ATLAS (Automated Text-to-Ledger Actuarial Synthesis) is a free tool built for this dual evaluation workflow.
+Many commercial qualitative tools upload transcripts to external cloud servers, which can conflict with participant consent agreements or agency data policies. **ATLAS executes locally on your workstation.** Input files remain on your disk during parsing, discovery, coding, and export without being transmitted to external APIs (subject to your local computer's security). On a shared network, launch ATLAS with `--server.address=localhost` so other devices cannot view the local web page (see [Privacy and network use](../README.md#privacy-and-network-use)).
 
-### Local Processing and Data Confidentiality
-Protecting community participant confidentiality is essential. Many commercial cloud tools transmit qualitative notes over the internet to remote servers, which can conflict with organizational data-handling protocols or participant consent agreements.
+Keeping core measurement deterministic rather than relying on a generative language model provides three practical advantages for program evaluation:
 
-**ATLAS executes locally on your workstation.** Transcript files remain on your local disk during analysis without being transmitted across external cloud APIs (subject to the security of your local operating system and storage environment). ATLAS shows its results in a local web page; on a shared network, start it with `--server.address=localhost` so other computers cannot open that page (see [Privacy and network use](../README.md#privacy-and-network-use)).
+1. **No paraphrasing drift:** Instead of summarizing remarks in an AI voice, ATLAS extracts exact verbatim text paired with source file, speaker, line number, character offsets, evidence type, and source file SHA-256 hash.
+2. **Exact repeatability:** Running the same codebook on the same files yields identical counts and percentages every time—eliminating run-to-run randomness during board or funder audits.
+3. **Clear role for upstream brainstorming:** If your team uses a separate general-purpose AI tool to brainstorm candidate synonyms during early design, keep it strictly abstract (never upload raw participant transcripts or identifiable notes). Once you vet candidate words and place them in a local YAML codebook, ATLAS performs every search, fence check, and count offline.
 
-### The ATLAS Evaluation Engine
-1. **Surfacing Emergent Patterns (Inductive):** ATLAS groups high-frequency word patterns to help evaluators identify unanticipated themes without pre-filtering.
-2. **Context-Fenced Measurement (Deductive):** Evaluators define an explicit keyword checklist. ATLAS identifies matching dialogue turns and calculates prevalence using case- and accent-insensitive word-start matching, optional context fences (such as counting *"delay"* only when *"bus"* or *"transit"* appears in the same turn, or within a set number of words), and optional exclusion fences that veto false matches.
-3. **Audit Receipts & Verbatim Provenance:** For every matching quote, ATLAS records the source document name, speaker label, timestamp, line number, character span, and the source file's SHA-256 cryptographic digest. This allows evaluators to verify authentic verbatim excerpts against the original transcripts without paraphrasing.
+**Choosing the right unit of measurement.** Always state your denominator explicitly in reports:
 
-### Methodological Boundaries: Deterministic Execution and Generative AI
-
-Community evaluation teams often ask whether analyzing qualitative transcripts requires commercial artificial intelligence subscriptions or cloud language models. In ATLAS, **the core analytical workflow executes entirely through local, deterministic algorithms.**
-
-Separating qualitative vocabulary ideation from deterministic measurement addresses three practical evaluation considerations:
-
-1. **Local Data Handling:** ATLAS processes transcript files directly on the user's workstation. Transcripts and participant identifiers are not transmitted across external networks or third-party cloud APIs during analysis (subject to the security of the local workstation and storage environment).
-2. **Verbatim Quote Provenance:** Rather than relying on a generative model that may summarize or paraphrase participant remarks, ATLAS uses deterministic pattern matching. It extracts the authentic, unedited dialogue spoken by participants, pairing every excerpt with its source file name, speaker label, timestamp, line number, character span, and source file SHA-256 digest.
-3. **Reproducible Measurement:** Executing the same codebook across the same corpus yields identical counts and percentages on every run. Funders, boards, and research partners can review matching dialogue turns and document prevalence without run-to-run stochastic variation.
-
-#### The Role of Generative AI: Upstream Vocabulary Ideation
-Generative models can serve an optional, strictly upstream role during initial evaluation design:
-* **Upstream Synonym Discovery:** Evaluators may find large language models useful during initial codebook drafting to brainstorm synonyms, regional terminology, or colloquial phrasing (for example, generating candidate terms for transportation hurdles or enrollment paperwork).
-* **Local Processing:** Once candidate keywords are selected, vetted by evaluators, and saved into a YAML codebook, ATLAS performs all keyword searching, context-window filtering, quote extraction, and frequency calculations locally on your workstation.
-* **Confidentiality Precaution:** To protect community member confidentiality, never upload raw interview transcripts or identifiable participant narratives to third-party cloud services. Reserve external tools for abstract vocabulary brainstorming, and process authentic qualitative records locally.
-
-#### Unit of Analysis: Dialogue Turns and Documents
-ATLAS reports findings across two defined units of measurement:
-1. **Dialogue Turns:** The number of individual spoken conversational blocks that match a theme.
-2. **Unit Prevalence:** The number and percentage of analytical units in which a theme appears. Each transcript file is one unit and each survey row is one unit. When each transcript records one participant, unit prevalence corresponds to participant prevalence.
+* **Individual transcripts or survey tables:** Report analytical units (one per transcript or survey respondent row) alongside matching turns.
+* **Focus-group notes (Group Mode):** Report focus groups (`g of G` groups) alongside distinct participant voices and coded entries, and do not report individual-sample survey error bars.
 
 ---
 
 ## 6. Setting Up an Evaluation Checklist (The Codebook)
 
-To measure program goals deductively, staff organize their core questions into a checklist of 3 to 5 topics.
-
-Below is an evaluation checklist for a community health navigation initiative:
+When building a checklist from scratch, organize your core evaluation questions into a focused set of domains (typically 4 to 8 clear categories). Below is an example checklist for a community health navigation initiative:
 
 | Domain | Evaluation Target | Words and Context Rules |
 | :--- | :--- | :--- |
-| **Transit Access** | Travel barriers causing missed clinic visits | bus, transit, route, ride, late, schedule |
-| **Intake Burden** | Paperwork delays during program signup | forms, documentation, pay stub, verification, delay |
-| **Benefit Cliffs** | Loss of public aid after modest wage gains | cliff, threshold, medi-cal, cal fresh, lost coverage |
-| **Staff Support** | Positive rapport and care from navigators | navigator, listened, advocate, patient, answered |
+| **Transit Access** | Travel barriers causing missed clinic visits | `bus`, `transit`, `route`, `ride`, `car trouble`, `fare` (with clinic/appointment context or `match_mode: exact` on short stems) |
+| **Intake Burden** | Paperwork delays during program signup | `forms`, `documentation`, `pay stub`, `verification`, `delay` |
+| **Benefit Cliffs** | Loss of public aid after modest wage gains | `cliff`, `threshold`, `medi-cal`, `calfresh`, `lost coverage` |
+| **Staff Support** | Positive rapport and care from navigators | `navigator`, `listened`, `advocate`, `patient` (excluding `patients` / `patient portal`), `answered` |
 
-In ATLAS, staff type these words into a plain text file. The tool scans every transcript against this list, producing an evidence table in seconds.
+Notice the exclusion note on `patient`: because *"patient"* can mean either a respectful staff member or a medical clinic patient, fencing out `patients` and `patient portal` (or adding a staff context fence) prevents false matches before they ever enter your tables.
 
 ---
 
 ## 7. Writing the Evaluation Section: 4 Core Elements
 
-Evaluation summaries achieve the greatest clarity when organized into four structured elements:
+Evaluation narratives read most clearly when each finding moves through four connected steps:
 
-1. **The Context:** State the specific community barrier or service condition being studied.
-2. **The Program Activity:** Describe what the program did to help.
-3. **The Evidence (Counts Paired with Quotes):** State the exact count and percentage from the data, followed immediately by a direct quote that shows the human reality.
-4. **The Action Plan:** Explain the operational change or shift in resources the team will make in response to what was learned.
+1. **The Context:** State the specific community condition or service hurdle being examined.
+2. **The Program Activity:** Explain what the program delivered to address that condition.
+3. **The Evidence (Verified Scale Paired with Direct Quotes):** State the exact count and denominator (`29 of 45 individual transcripts` or `3 of 4 focus groups`), followed immediately by a verbatim quote (never a paraphrase presented as direct speech) that illustrates the mechanism.
+4. **The Action Plan:** State the concrete operational adjustment the team made—or recommends—in response to that evidence.
 
 ---
 
 ## 8. Writing Models: From General Descriptions to Verifiable Findings
 
-The following models illustrate how general qualitative descriptions transform into structured, verifiable evaluation findings.
+The models below show how moving from vague prose to denominator-clear counts and traceable quotes makes an evaluation immediately actionable.
 
 > **Hypothetical writing models.** The counts, quotes and line numbers in Models 1 and 2 are invented to
 > show sentence structure. They are not ATLAS output and not findings. For real ATLAS output on the
@@ -219,123 +174,78 @@ The following models illustrate how general qualitative descriptions transform i
 
 ### Model 1: Transportation Barriers
 
-* **General Description:**  
+* **General Description:**
   > *"Transportation continues to be a major obstacle for our community members. Many participants reported that buses were unreliable, which led to missed clinic visits."*
 
-* **Verifiable Evaluation Narrative:**  
-  > *"Transportation barriers directly affected clinic attendance across the cohort. Out of 45 individual interview transcripts (where each transcript records a 1:1 participant interview), 29 documents (64.4%) reported that transit delays caused them to arrive late or miss scheduled medical appointments across 38 matching dialogue turns. As one participant explained:  
-  > 'The cross-town bus only runs once an hour. If an appointment is at 9:00 AM, my family has to leave home before 7:00 AM, and any transfer delay causes a missed visit' (Intake Log, Line 114).  
-  > In response to this measured prevalence, the program shifted funds to provide guaranteed ride-share vouchers for morning specialty visits."*
+* **Verifiable Evaluation Narrative:**
+  > *"Transportation barriers directly affected clinic attendance across the cohort. Out of 45 individual interview transcripts (one per participant), 29 transcripts (64.4%) reported that transit delays caused late arrivals or missed medical appointments across 38 matching dialogue turns. As one participant explained: 'The cross-town bus only runs once an hour. If an appointment is at 9:00 AM, my family has to leave home before 7:00 AM, and any transfer delay causes a missed visit' (Intake Log, Line 114). In response to this measured prevalence, the program shifted funds to provide guaranteed ride-share vouchers for morning specialty visits."*
 
 ### Model 2: Enrollment Administrative Friction
 
-* **General Description:**  
+* **General Description:**
   > *"Participants expressed appreciation for navigator staff, although paperwork requirements created frustration during the initial enrollment period."*
 
-* **Verifiable Evaluation Narrative:**  
-  > *"Participant feedback reflected strong satisfaction with staff navigation alongside measurable paperwork delays during onboarding. Across 45 individual interview transcripts (one per participant), 41 documents (91.1%) recorded positive, respectful interactions with community navigators, while 16 documents (35.6%) noted that assembling three consecutive months of pay stubs delayed enrollment by more than two weeks. One participant noted:  
-  > 'Finding old pay stubs from two past jobs took three weeks, during which my application sat waiting' (Interview 08, Line 62).  
-  > Based on these findings, the team updated the intake protocol to permit self-attestation for seasonal income, cutting onboarding time from 18 days to 4 days."*
+* **Verifiable Evaluation Narrative:**
+  > *"Participant feedback reflected strong satisfaction with staff navigation alongside measurable paperwork delays during onboarding. Across 45 individual interview transcripts (one per participant), 41 transcripts (91.1%) recorded positive, respectful interactions with community navigators, while 16 transcripts (35.6%) noted that assembling three consecutive months of pay stubs delayed enrollment by more than two weeks. One participant noted: 'Finding old pay stubs from two past jobs took three weeks, during which my application sat waiting' (Interview 08, Line 62). Based on these findings, the team updated the intake protocol to permit self-attestation for seasonal income, cutting onboarding time from 18 days to 4 days."*
 
 ---
 
 ## 9. Verifying Evaluation Findings: The Audit Receipt
 
-Funders and evaluation monitors want to know that numbers and quotes are real.
+Funders and evaluation monitors want assurance that reported numbers and quotes match the underlying files. ATLAS builds an automated verification trail for every run:
 
-ATLAS creates an automated proof sheet for every run:
-
-1. **Digital Fingerprint (SHA-256 Code):** A cryptographic hash that enables reviewers to verify whether local source files match retained reference versions.
-2. **Transcript Line References & Character Spans:** Every cited quote lists its transcript line number and turn character span, allowing an evaluator to locate the excerpt within the interview record.
-3. **Deterministic Reproducibility:** Because ATLAS applies fixed matching rules rather than a probabilistic language model, re-running the same codebook on the same files yields identical counts and percentages every time.
-4. **Workbook Check:** Each prevalence cell in the Excel export carries an audit-stamp comment, and ATLAS re-checks the workbook against its provenance manifest; the result is shown in Tab 2.
+1. **Cryptographic File Fingerprints (SHA-256):** `provenance_manifest.json` records the SHA-256 digest of every uploaded source file so reviewers can confirm whether local originals match the files analyzed.
+2. **Line, Character-Span, and Evidence-Type Receipts:** Every exported quote lists its source file, line number, character offsets, and evidence type (`verbatim` vs. `paraphrase`), making every citation verifiable in seconds.
+3. **Deterministic Reproducibility:** Archiving your final `.yaml` codebook alongside `provenance_manifest.json` allows any reviewer to re-run ATLAS on the same files and obtain identical counts.
+4. **Tamper-Evident Excel Audit Stamps:** Each prevalence cell in `actuarial_parameter_matrix.xlsx` carries an `ATLAS VERIFICATION AUDIT STAMP` comment, and Tab 2 verifies that the workbook still agrees with the manifest before download.
 
 ![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](figures/atlas_audit_bridge.png)
 *SOFTWARE_TEST illustration of the audit trail on a built-in sample; mechanics only.*
-
-Attaching this proof sheet to a grant report protects the agency and builds long-term funder trust.
 
 ---
 
 ## 10. Evaluation Report Pre-Flight Checklist
 
-Before submitting an evaluation report, grant renewal, or board update, verify that each section satisfies these standards:
+Before submitting an evaluation report, grant renewal, or board brief, confirm each item:
 
-- [ ] **Dual Grounding:** Does every major qualitative claim pair a concrete statistic (count and percentage) with an illustrative quote?
-- [ ] **Denominator Clarity:** Are sample sizes and measurement units stated explicitly (e.g., *"29 of 45 individual interview transcripts (64.4%)"*, distinguishing matching dialogue turns from document prevalence)?
-- [ ] **Inductive & Deductive Balance:** Does the report capture both planned contract targets and unexpected community findings?
-- [ ] **Operational Action:** Does each identified barrier connect to a clear next step or program change?
-- [ ] **Source Receipts:** Are all quoted excerpts traceable to specific transcript line numbers?
-- [ ] **Confidentiality:** Are individual names and personal details removed from public deliverables?
-- [ ] **Audit Attachment:** Is the ATLAS proof sheet included in the report appendix?
+- [ ] **Dual Grounding:** Does every major qualitative claim pair an exact count and denominator with a verified verbatim quote?
+- [ ] **Denominator Honesty:** Are individual counts (`N` transcripts/respondents) kept strictly separate from focus-group counts (`g of G` groups), with survey error bars omitted on small focus-group pilots?
+- [ ] **Verbatim Integrity:** Did you filter by `Quotable Verbatim Only` (or export `verbatim_quotes_inventory.csv`) so no note-taker paraphrase is presented inside quotation marks?
+- [ ] **False-Alarm Review:** Did you review **False-Alarm Spot-Check** and tighten any short-stem collisions or negated hits?
+- [ ] **Inductive & Deductive Balance:** Did you run TF-IDF + NMF topic discovery to check for unexpected community themes missing from your initial checklist?
+- [ ] **Confidentiality & Archiving:** Are personal identifiers removed from public deliverables, and are your final `.yaml` codebook and `provenance_manifest.json` archived together?
 
 ---
 
-## Appendix: How to Develop an Evaluation Codebook
+## Appendix: Developing and Refining a YAML Codebook
 
-A **codebook** is the master checklist for an evaluation project. It tells ATLAS exactly what words to count, which topics belong together, and what to ignore.
+A **codebook** is the explicit rule set telling ATLAS which words belong to each domain, whether short stems require whole-word boundaries (`match_mode: exact`), and which phrases should require context or be excluded.
 
-Developing a codebook does not require computer programming. You can start from discovered topics inside ATLAS (Option A) or write one step by step (Option B).
+### Option A: Customize Inside ATLAS (No YAML Editor Required)
 
-### Option A: Start from Discovered Topics in ATLAS
+1. Load your files and pick a starter pack (such as `gbi_focus_group_starter.yaml`), optionally stacking additional starter packs via **Stack Additional Starter Codebooks (optional)**.
+2. Run **💡 Unsupervised Topic Discovery (Medoids)** with **TF-IDF + NMF** and click **`➕ Add Theme to Active Codebook`** on any local theme your starter pack missed.
+3. Open **🔎 False-Alarm Spot-Check** and click **`🛡️ Exclude Selected Words from Domain`** or **`🎯 Switch Domain to Exact Whole-Word Matching`** on any noisy domain.
+4. Click **`📥 Download Active Codebook (.yaml)`** in the sidebar or Tab 2 to archive your finished rules.
 
-1. **Load Your Data:** In the sidebar choose **Corpus Dataset → Upload Custom Files** and add CSV, Excel or transcript files. For tables, check that the **Text column** selector shows the free-text column.
-2. **Run Discovery:** Open **Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)** and choose the number of topics.
-3. **Download the Draft:** Click **📥 Download Discovered Codebook (.yaml)**.
-4. **Name Your Categories:** In a text editor, change each `name:` to a clear program title (for example, `Transportation Barriers`).
-5. **Prune General Words:** Delete entries from `roots_en` that are not specific to that goal, and add context fences.
-6. **Load and Score:** Choose **Active YAML Codebook → Upload Custom Codebook (.yaml)** and upload the edited file. Every response is scored immediately.
+### Option B: Author a Custom YAML Codebook Step-by-Step
 
-### Option B: Build a Custom Codebook Step-by-Step
-
-Here is a 5-step process to build a reliable codebook:
-
-### Step 1: Start with Grant Goals and Community Notes
-A sound codebook connects grant requirements with authentic community language.
-* **Review Contract Deliverables:** List the 3 to 5 core outcomes required by funders (such as job placement, food security, or clinic visits).
-* **Scan Initial Transcripts:** Read 5 sample interview or survey notes to note the everyday words community members actually use. For example, people might say *"ran out of food"* instead of *"food insecure"*.
-
-### Step 2: Define Each Topic Clearly
-Every topic needs a plain definition so team members agree on what belongs in that category.
-* **Topic Name:** Transit Barriers
-* **Definition:** Any mention where travel problems caused a client to miss, arrive late, or struggle to reach an appointment.
-* **What Counts:** Bus delays, broken cars, high fares, long walks.
-* **What Does Not Count:** General discussions about road construction unrelated to appointment attendance.
-
-### Step 3: Build the Word List (Inclusions and Exclusions)
-A strong codebook uses two types of word rules:
-1. **Inclusion Words (Words that count):** Words that signal the topic.
-   * *Example for Transit:* `bus`, `transit`, `train`, `ride`, `car trouble`, `fare`, `late`
-2. **Exclusion Rules (Words that do not count):** Words that prevent false matches.
-   * *Context rule:* The word *"ride"* might appear in a conversation about an amusement park. A context fence (`required_context` or `context_fences`, with `context_window: 10`) makes *"ride"* count only within 10 words of terms like *"doctor"*, *"clinic"*, or *"job"*.
-   * *Exclusion rule:* An exclusion fence (`exclude_fences`, optional `exclude_window`) vetoes a match, for example *"childcare"* followed by *"not a problem"*.
-
-### Step 4: Pilot Test on Five Transcripts
-Before running ATLAS on the full dataset, test the codebook on five sample files:
-1. Run ATLAS using the initial keyword list.
-2. Review the resulting quotes in the Evidence Table.
-3. Check for two common issues:
-   * **Missed Matches:** Did a client describe a barrier using words not yet on the list? (If so, add those words).
-   * **False Matches:** Did ATLAS count a quote that does not fit the goal? (If so, add an exclusion rule).
-
-### Step 5: Save as a Plain Text File (YAML Format)
-ATLAS reads codebooks saved as plain-text YAML files (`.yaml` or `.yml`). It accepts two equivalent layouts:
-1. **Practitioner Format (shown below):** Uses `topics`, with `keywords`, `context_window` (maximum token distance), and `required_context` (context fences).
-2. **Researcher Format:** Uses `domains`, with `roots_en`, `roots_es`, `context_fences`, `context_window`, `exclude_fences`, and `exclude_window`.
-
-The local engine (`atlas_engine.py`) normalizes both layouts into the same rules. Words match at the start of a word, ignoring capital letters and accents. A `context_window` only applies when context words are listed.
-
-Below is a complete, copy-pasteable example of an evaluation codebook for a family support program:
+1. **Start from grant goals and real transcripts:** List the 4 to 8 core outcomes you must track, then scan 5 sample transcripts or focus-group notes to capture the everyday phrases participants actually use (for example, *"ran out of groceries"* alongside *"food insecure"*).
+2. **Write a plain definition for each domain:** Spell out what counts and what does not count so every team member interprets the rule identically.
+3. **Add roots, matching mode, and fences:** Use `match_mode: exact` on short words (`car`, `bus`, `pay`, `fee`) or add `exclude_fences` (with `exclude_window: 0`) so prefix stems never collide with unrelated words (`card`, `career`, `busy`). Add `context_fences` with `context_window` when a broad word like `ride` or `delay` only counts near `clinic`, `bus`, or `intake`.
+4. **Pilot and tighten:** Run your draft on sample files, inspect **False-Alarm Spot-Check**, and revise before running the full dataset.
+5. **Save as UTF-8 YAML (`.yaml`):** ATLAS accepts both the Practitioner layout (`topics` with `label`, `keywords`, `required_context`, `context_window`) and the Researcher layout (`domains` with `roots_en`, `roots_es`, `match_mode`, `context_fences`, `exclude_fences`, `exclude_window`).
 
 ```yaml
-# Family Support Program Evaluation Codebook
+# Family Support Program Evaluation Codebook (Practitioner Layout)
 program_name: "Community Health and Navigation"
-version: "1.0"
+version: "1.2"
 
 topics:
   transit_access:
     label: "Transportation Barriers"
     description: "Difficulties traveling to appointments or work"
+    match_mode: exact
     keywords:
       - "bus"
       - "transit"
@@ -379,6 +289,10 @@ topics:
       - "listened"
       - "helped me"
       - "clear answers"
+    exclude_fences:
+      - "patients"
+      - "patient portal"
+    exclude_window: 0
     context_window: 6
     required_context:
       - "clinic"
@@ -388,45 +302,23 @@ topics:
       - "appointment"
 ```
 
-### Where to Find Pre-Built Topic Libraries
+### Public Topic Libraries and Shipped ATLAS Starter Packs
 
-Staff do not need to create topic lists from scratch. Several free, public libraries offer proven categories, clear definitions, and word ideas:
+You rarely need to write domain definitions from scratch. Public standards provide vetted definitions you can pair with everyday participant phrasing:
 
-1. **The 2-1-1 Community Needs Directory ([211taxonomy.org](https://211taxonomy.org)):**
-   * *What it is:* The national standard used by community help hotlines across North America.
-   * *What to borrow:* Clear names and definitions for over 10,000 community needs, such as rent help, food pantries, bus passes, and utility bills.
+1. **The 2-1-1 Community Needs Directory ([211taxonomy.org](https://211taxonomy.org)):** Standardized definitions for over 10,000 community needs (rent assistance, food pantries, bus passes, utility relief).
+2. **The PRAPARE® Community Clinic Tool ([prapare.org](https://prapare.org)):** Vetted social-determinants categories for housing stress, food security, transit barriers, and clinic access.
+3. **The IRIS+ Impact Catalog ([iris.thegiin.org](https://iris.thegiin.org)):** Structured social-outcome definitions covering youth programs, schooling, health access, and family nutrition.
+4. **The O*NET Job Skills System ([onetonline.org](https://www.onetonline.org)):** U.S. Department of Labor vocabulary for job training, workplace tasks, and career mobility barriers.
+5. **ATLAS Starter Packs (shipped inside `config/`):**
+   * `gbi_focus_group_starter.yaml`: 8 pre-fenced GBI and cash-assistance focus-group domains (housing, groceries, debt/bills, employment/education, transportation, caregiving, stress/autonomy, and program paperwork).
+   * `sdoh_basic_needs.yaml`: Housing, food, transportation, and utility barriers with short-stem exclusion fences.
+   * `intake_and_enrollment.yaml`: Paperwork delays, wait times, language access, and staff navigation rapport.
+   * `workforce_and_mobility.yaml`: Benefit cliffs, wage progression, job training, and workplace scheduling.
+   * `youth_and_family.yaml`: School attendance, family support, childcare, and youth engagement.
+   * `pfl_case_study_codebook.yaml` and `labor_market_codebook.yaml`: Paid family leave and labor-market research packs.
 
-2. **The PRAPARE® Community Clinic Tool ([prapare.org](https://prapare.org)):**
-   * *What it is:* A top tool used by health clinics nationwide to track social needs.
-   * *What to borrow:* Proven topics for housing stress, food needs, transit hurdles, and clinic paperwork.
-
-3. **The IRIS+ Impact Catalog ([iris.thegiin.org](https://iris.thegiin.org)):**
-   * *What it is:* A large library of social goals managed by the Global Impact Investing Network.
-   * *What to borrow:* Goal lists for youth programs, schooling, health access, and family nutrition.
-
-4. **The O*NET Job Skills System ([onetonline.org](https://www.onetonline.org)):**
-   * *What it is:* A public tool from the U.S. Department of Labor.
-   * *What to borrow:* Clear word lists for job training, work tasks, and workplace hurdles.
-
-5. **ATLAS Starter Packs (In the Open-Source Repository):**
-   * Pre-made codebook files live in the ATLAS `config/` folder:
-     * `sdoh_basic_needs.yaml`: Covers housing, transit, food, and utilities.
-     * `intake_and_enrollment.yaml`: Covers paperwork delays, wait times, and sign-up rules.
-     * `workforce_and_mobility.yaml`: Covers benefit cliffs, career goals, and job shifts.
-     * `youth_and_family.yaml`: Covers school attendance, family talks, and staff support.
-
-#### How to Use a Public Library in 3 Steps:
-1. **Pick the Topic:** Find the matching topic in the public library, like PRAPARE's *Transportation Access*.
-2. **Copy the Definition:** Paste the public text into the codebook `description` line so all staff agree on what it means.
-3. **Add Spoken Words:** Add the everyday words people use in interviews (`bus`, `route 4`, `flat tire`, `late`) and set your context rules.
-
-### Codebook Quality Checklist
-Before running a final evaluation, confirm:
-- [ ] Are topics limited to 3 to 5 clear domains?
-- [ ] Does each topic have a plain-English definition?
-- [ ] Are keywords drawn from real participant language rather than academic jargon?
-- [ ] Were rules tested on at least five sample transcripts?
-- [ ] Did another team member review the definitions for clarity?
+*(Read any ATLAS guide formatted right inside **Tab 3: Reference Guides**, or download formatted Word `.docx` copies from the sidebar.)*
 
 ---
 

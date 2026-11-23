@@ -61,14 +61,20 @@ Installing dependencies needs a network connection; analysis does not.
 ![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](docs/figures/atlas_dashboard_ui_walkthrough.png)
 
 **Sidebar**
-* **Corpus Dataset:** three built-in `SOFTWARE_TEST` samples (bilingual interview `.txt` + Zoom `.vtt`;
-  community survey `.csv`; Teams `.docx`) or **Upload Custom Files**. For uploaded `.csv` / `.xlsx`
-  tables the free-text column is detected automatically (columns named `id` or ending in `_id` are never
-  chosen) and can be changed; optional respondent-id and speaker columns, facilitator names and
-  interviewer prompt patterns are also available.
-* **Active YAML Codebook:** every `.yaml` file in `config/`, an uploaded codebook, or a codebook applied
-  from topic discovery during the session.
-* A `SOFTWARE_TEST FIXTURE ACTIVE` notice is shown whenever a built-in sample is loaded.
+* **Corpus Dataset:** **Upload Custom Files** (default) or four built-in sample corpora (multi-group
+  focus-group notes `.docx`; bilingual interview `.txt` + Zoom `.vtt`; community survey `.csv`;
+  Teams `.docx`). For uploaded `.csv` / `.xlsx` tables the free-text column is detected automatically
+  (columns named `id` or ending in `_id` are never chosen) and can be changed; optional respondent-id
+  and speaker columns are shown for tables, and optional facilitator names / prompt regexes sit inside
+  a collapsed **Advanced transcript filters** expander for free-form transcripts (hidden on 3-column
+  focus-group notes).
+* **Active YAML Codebook & Stacking:** every `.yaml` file in `config/` (defaulting to
+  `gbi_focus_group_starter.yaml`), optional **Stack Additional Starter Codebooks**, any session
+  discovered/customized codebook, or **Upload Custom Codebook (.yaml)**.
+* **▶ Run Analysis:** click once after selecting files and codebooks to run coding, discovery, and
+  export generation (changes in the sidebar wait cleanly until you click **▶ Run Analysis**).
+* **Reference Guides:** formatted Word (`.docx`) downloads in the sidebar plus an in-app formatted
+  reader in **Tab 3: Reference Guides**.
 
 **Tab 1: Standalone Thematic Discovery & Qualitative Coding**
 * KPI cards: **Analytical Units (N)**, **Participant Turns**, **Active Domains**, **Matched Turn Mentions**.
