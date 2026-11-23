@@ -174,11 +174,11 @@ source files; compare `source_sha256` with the files on disk for that.
   files plus `config/`, `data/samples/` and `docs/` inside the ATLAS folder, and renders no remote images,
   fonts or scripts. `scripts/smoke_test.py` runs the unit tests, pipeline and app checks under an offline
   guard that blocks and logs any socket use; a logged call fails the run.
-* **What Streamlit does.** The workbench is a local Streamlit web server. The desktop launchers start it
-  with `--browser.gatherUsageStats=false` so Streamlit's usage statistics are off. They do not set
-  `--server.address`, so Streamlit also listens on the computer's network interfaces and other machines
-  on the same network could open the page; add `--server.address=localhost` (as in Option B) on shared
-  networks. The offline guard is a test harness and is not active during a normal launch.
+* **What Streamlit does.** The workbench is a local Streamlit web server. Both desktop launchers
+  (`run.command` and `run.bat`) start it with `--server.address=localhost` and
+  `--browser.gatherUsageStats=false`, so Streamlit binds strictly to your machine's loopback interface
+  (unreachable from other devices on a shared Wi-Fi or office network) and keeps usage statistics off.
+  The offline guard is a test harness and is not active during a normal launch.
 * **What ATLAS cannot control.** Operating-system services, backup or sync software, and the browser
   itself are outside ATLAS; keep sensitive transcripts in folders that are not synced to cloud storage.
 

@@ -446,6 +446,15 @@ class GuidesV12AlignmentTests(unittest.TestCase):
         for req in ("Group Mode", "Focus Groups (G)", "Distinct Participant Voices", "coded_evidence_inventory.csv",
                     "Quotable Verbatim Only", "TF-IDF + NMF", "False-Alarm Spot-Check", "▶ Run Analysis"):
             self.assertIn(req, readme, f"README.md missing v1.2 feature {req!r}")
+        self.assertNotIn("They do not set `--server.address`", readme)
+
+    def test_desktop_launchers_bind_strictly_to_localhost(self):
+        run_cmd = (REPO_ROOT / "run.command").read_text(encoding="utf-8")
+        run_bat = (REPO_ROOT / "run.bat").read_text(encoding="utf-8")
+        self.assertIn('--server.address="localhost"', run_cmd)
+        self.assertIn("--browser.gatherUsageStats=false", run_cmd)
+        self.assertIn("--server.address=localhost", run_bat)
+        self.assertIn("--browser.gatherUsageStats=false", run_bat)
 
 
 if __name__ == "__main__":

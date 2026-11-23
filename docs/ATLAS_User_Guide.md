@@ -46,7 +46,7 @@ You do not need to install packages manually or configure Python paths. Each des
 * **macOS / Linux:** Double-click `run.command` (or run `bash run.command` in Terminal).
 * **Windows:** Double-click `run.bat`.
 * **Verify setup without launching the browser:** Run `./run.command --check-only` or `run.bat --check-only` (or set `ATLAS_NO_LAUNCH=1`) to provision and verify `.venv`, then exit cleanly.
-* **Bind strictly to this machine on a shared network:** The desktop launchers disable Streamlit usage statistics (`--browser.gatherUsageStats=false`) but leave Streamlit listening on local network interfaces so you can preview on another device if desired. On an untrusted or shared Wi-Fi network, launch from the command line with `--server.address=localhost`:
+* **Localhost-only by default:** Both desktop launchers pass `--server.address=localhost` and `--browser.gatherUsageStats=false`, so Streamlit binds strictly to your machine's loopback interface (unreachable from other devices on a shared Wi-Fi or office network) and disables usage statistics. If you launch from the command line manually, keep both flags:
   `.venv/bin/streamlit run app.py --server.address=localhost --browser.gatherUsageStats=false`.
 
 ---

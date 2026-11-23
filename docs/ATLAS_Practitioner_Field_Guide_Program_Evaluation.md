@@ -123,7 +123,7 @@ Before pulling direct quotations for slides or leadership briefs, open the Evide
 
 ## 5. How ATLAS Protects Confidentiality and Auditability
 
-Many commercial qualitative tools upload transcripts to external cloud servers, which can conflict with participant consent agreements or agency data policies. **ATLAS executes locally on your workstation.** Input files remain on your disk during parsing, discovery, coding, and export without being transmitted to external APIs (subject to your local computer's security). On a shared network, launch ATLAS with `--server.address=localhost` so other devices cannot view the local web page (see [Privacy and network use](../README.md#privacy-and-network-use)).
+Many commercial qualitative tools upload transcripts to external cloud servers, which can conflict with participant consent agreements or agency data policies. **ATLAS executes locally on your workstation.** Input files remain on your disk during parsing, discovery, coding, and export without being transmitted to external APIs (subject to your local computer's security). Both desktop launchers (`run.bat` and `run.command`) pass `--server.address=localhost` by default so other devices on a shared network cannot view the local web page (see [Privacy and network use](../README.md#privacy-and-network-use)).
 
 Keeping core measurement deterministic rather than relying on a generative language model provides three practical advantages for program evaluation:
 
