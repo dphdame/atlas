@@ -536,6 +536,7 @@ class AtlasEngine:
         tabular_options: Optional[Dict[str, Any]] = None,
         include_evidence_types: Optional[Sequence[str]] = None,
         notes_unit_level: str = "group",
+        group_by_source: bool = False,
     ) -> Dict[str, Any]:
         """
         Parse transcript and tabular files and generate verified frequency matrices.
@@ -545,7 +546,8 @@ class AtlasEngine:
         different folders never collide. tabular_options (text_col, id_col,
         speaker_col, allow_duplicate_ids) apply to .csv/.xlsx inputs.
         include_evidence_types and notes_unit_level are passed to the parser and only
-        affect structured focus-group notes (.docx).
+        affect structured focus-group notes (.docx). group_by_source is passed to
+        process_turns: every input file is one analytical unit (Group mode).
 
         Besides the process_turns keys, the result holds document_structures
         ({source_id: "transcript" | "tabular" | "focus_group_notes"}), notes_metadata
@@ -590,7 +592,7 @@ class AtlasEngine:
             if parser.last_document_structure == "focus_group_notes":
                 theme_turns.extend(themes_parser.parse_file(file_path, root_dir=root_dir))
 
-        results = self.process_turns(all_turns, file_hashes)
+        results = self.process_turns(all_turns, file_hashes, group_by_source=group_by_source)
         results["document_structures"] = document_structures
         results["notes_metadata"] = dict(parser.last_document_metadata)
         results["note_taker_themes_df"] = pd.DataFrame(theme_turns)
@@ -598,15 +600,22 @@ class AtlasEngine:
 
     process_transcripts = process_corpus
 
-    def process_turns(self, turns: List[Dict[str, Any]], file_hashes: Dict[str, str]) -> Dict[str, Any]:
+    def process_turns(self, turns: List[Dict[str, Any]], file_hashes: Dict[str, str],
+                      group_by_source: bool = False) -> Dict[str, Any]:
         """
         Tag pre-parsed turns (e.g. from Streamlit uploads) against the compiled rules.
 
         file_hashes maps each turn's source_id to the SHA-256 of its source file.
         Prevalence denominators count distinct participant unit_ids (one per
-        transcript, one per tabular respondent row).
+        transcript, one per tabular respondent row). With group_by_source every
+        input file is one unit instead (unit_id = source_id, total_documents = number
+        of files); speakers are kept, so voices can still be counted per file.
         """
         file_hashes = dict(file_hashes)
+        if group_by_source:
+            turns = [
+                {**t, "unit_id": t.get("source_id") or t.get("document_name")} for t in turns
+            ]
         participant_turns = [t for t in turns if not t.get("is_facilitator", False)]
 
         tagged_records = []
@@ -662,7 +671,7 @@ class AtlasEngine:
             record["matched_domains"] = matched_domains
             tagged_records.append(record)
 
-        all_unit_ids = self._analytical_units(turns, file_hashes)
+        all_unit_ids = set(file_hashes) if group_by_source else self._analytical_units(turns, file_hashes)
         total_docs = len(all_unit_ids)
 
         frequency_rows = []

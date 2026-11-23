@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - lxml ships with python-docx
         pass
 
 from atlas_discover import discover_topics, topics_to_codebook_dict
-from atlas_engine import AtlasEngine
+from atlas_engine import AtlasEngine, has_non_verbatim_evidence, verbatim_only as verbatim_rows
 from universal_transcript_parser import (
     TABULAR_EXTENSIONS,
     TRANSCRIPT_EXTENSIONS,
@@ -507,6 +507,16 @@ def group_matrix_chart(matrix_df):
     return (tiles + text).resolve_scale(color="independent")
 
 
+def light_chart_surface(chart):
+    """Coordinated light chart surface so marks and labels keep their contrast on any app theme."""
+    return (chart.configure(background="#FFFFFF")
+            .configure_view(fill="#FFFFFF", stroke="#64748B")
+            .configure_axis(labelColor="#1E293B", titleColor="#0F172A", domainColor="#64748B",
+                            tickColor="#64748B", gridColor="#E2E8F0")
+            .configure_title(color="#0F172A")
+            .configure_legend(labelColor="#1E293B", titleColor="#0F172A"))
+
+
 def evidence_badge_html(evidence_type):
     """High-contrast badge naming a quote's evidence type (escaped, never Markdown)."""
     fg, bg, label = EVIDENCE_BADGE_STYLES.get(str(evidence_type), EVIDENCE_BADGE_FALLBACK)
@@ -546,7 +556,8 @@ def detect_structured_notes(name, payload):
 
 
 @st.cache_data(show_spinner=False)
-def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns, notes_evidence=None):
+def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns, notes_evidence=None,
+                   group_by_source=False):
     """
     Run UniversalTranscriptParser -> AtlasEngine on byte copies of the inputs.
     notes_evidence (Group mode) is the tuple of notes evidence types to code;
@@ -584,6 +595,7 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
             tabular_options=dict(tabular_items) if tabular_items else None,
             include_evidence_types=list(notes_evidence) if notes_evidence else None,
             notes_unit_level="group",
+            group_by_source=group_by_source,
         )
 
         export_dir = Path(tmp) / "export"
@@ -873,6 +885,7 @@ try:
             tuple(facilitator_names),
             tuple(prompt_patterns),
             notes_evidence,
+            group_mode,
         )
 except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
     st.error(f"ATLAS could not analyse this corpus with this codebook: {exc}")
@@ -934,9 +947,12 @@ with tab_thematic:
         k4.metric("Matched Turn Mentions", matched_mentions,
                   help="Participant turns matched to a domain, summed over domains.")
 
+    # Mixed evidence (paraphrases/observations) is shown unless "Quotable Verbatim Only" is checked.
+    mixed_view = bool(group_mode and has_non_verbatim_evidence(quotes)
+                      and not st.session_state.get("verbatim_only_filter", False))
     qtab_freq, qtab_quotes, qtab_topics = st.tabs([
         "📈 Thematic Prevalence & Distribution",
-        "💬 Verbatim Quote & Provenance Browser",
+        "💬 Coded Evidence & Provenance Browser" if mixed_view else "💬 Verbatim Quote & Provenance Browser",
         "💡 Unsupervised Topic Discovery (Medoids)",
     ])
 
@@ -977,7 +993,7 @@ with tab_thematic:
                            max(160, 42 * len(freq)), "Bar labels show matching participant turns per domain.")]
             for panel_chart, freq_summary, panel_height, panel_note in panels:
                 st.altair_chart(
-                    panel_chart.properties(height=panel_height, description=freq_summary),
+                    light_chart_surface(panel_chart.properties(height=panel_height, description=freq_summary)),
                     **stretch_kwargs(st.altair_chart),
                 )
                 st.html(chart_summary_html(freq_summary))
@@ -1020,7 +1036,10 @@ with tab_thematic:
                     )
 
     with qtab_quotes:
-        st.markdown("#### Verbatim evidence with line-level provenance")
+        if mixed_view:
+            st.markdown("#### Coded evidence with source provenance")
+        else:
+            st.markdown("#### Verbatim evidence with line-level provenance")
         if quotes.empty:
             st.info("No participant turn matched a domain of the active codebook in this corpus.")
         elif group_mode:
@@ -1028,13 +1047,14 @@ with tab_thematic:
                 lambda sid: group_labels.get(sid, os.path.basename(sid))))
             questions = sorted(q for q in labelled["question_id"].astype(str).unique() if q)
             f1, f2, f3 = st.columns([2, 1, 1])
-            search = f1.text_input("Search verbatim text", "")
+            search = f1.text_input("Search coded entries" if mixed_view else "Search verbatim text", "")
             domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(labelled["domain_name"].astype(str).unique())])
             speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(labelled["speaker"].astype(str).unique())])
             g1, g2, g3 = st.columns([2, 1, 1])
             verbatim_only = g1.checkbox(
-                "Quotable Verbatim Only", value=False,
-                help="Show only entries from the Notable Quotes column (verbatim participant words).",
+                "Quotable Verbatim Only", value=False, key="verbatim_only_filter",
+                help="Show only verbatim words: notable quotes from notes and transcript or survey turns. "
+                     "Paraphrased key points and observations are hidden.",
             )
             group_filter = g2.selectbox("Filter by group", ["All groups", *sorted(labelled["group_label"].unique())])
             question_filter = "All questions"
@@ -1042,7 +1062,7 @@ with tab_thematic:
                 question_filter = g3.selectbox("Filter by question", ["All questions", *questions])
             shown = labelled
             if verbatim_only:
-                shown = shown[shown["evidence_type"].astype(str) == VERBATIM_EVIDENCE]
+                shown = verbatim_rows(shown)
             if domain_filter != "All domains":
                 shown = shown[shown["domain_name"].astype(str) == domain_filter]
             if speaker_filter != "All speakers":
@@ -1053,7 +1073,11 @@ with tab_thematic:
                 shown = shown[shown["question_id"].astype(str) == question_filter]
             if search.strip():
                 shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
-            st.markdown(f"**{len(shown)} of {len(quotes)} matched entries shown**")
+            if mixed_view:
+                st.markdown(f"**{len(shown)} of {len(quotes)} coded entries shown (includes paraphrases/"
+                            f"observations; check 'Quotable Verbatim Only' for direct quotes)**")
+            else:
+                st.markdown(f"**{len(shown)} of {len(quotes)} matched entries shown**")
             if shown.empty:
                 st.info("No verbatim quote matches the current filters." if verbatim_only
                         else "No quote matches these filters.")
@@ -1068,7 +1092,8 @@ with tab_thematic:
                         "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
                         "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
                         "match_char_end": "Match end", "match_text": "Matched span",
-                        "text": "Verbatim entry", "source_sha256": "Source SHA-256",
+                        "text": "Coded entry (see Evidence Type)" if mixed_view else "Verbatim quote",
+                        "source_sha256": "Source SHA-256",
                     },
                 )
                 for _, q in shown.head(25).iterrows():
@@ -1297,7 +1322,7 @@ with tab_econometric:
                 "matching_turns": "Matching turns",
             }
         st.altair_chart(
-            tab2_chart.properties(height=max(160, 42 * len(freq)), description=ci_summary),
+            light_chart_surface(tab2_chart.properties(height=max(160, 42 * len(freq)), description=ci_summary)),
             **stretch_kwargs(st.altair_chart),
         )
         st.html(chart_summary_html(ci_summary))
