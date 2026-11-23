@@ -10,12 +10,12 @@
 ATLAS (Automated Text-to-Ledger Actuarial Synthesis) turns interview transcripts, focus-group
 recordings exported as text, and open-ended survey tables into counts that can be checked line by line:
 
-* **Parse** `.docx`, `.vtt`, `.srt`, `.txt`, `.md` transcripts and `.csv` / `.xlsx` response tables into
-  speaker-attributed turns (`universal_transcript_parser.py`).
-* **Discover** emergent topics with LDA and show each topic's TF-IDF medoid, a real participant turn
-  (`atlas_discover.py`).
-* **Code** every participant turn against a YAML codebook with root terms, context fences and exclusion
-  fences, and report prevalence over analytical units (`atlas_engine.py`).
+* **Parse** `.docx` (including 3-column focus-group notes tables), `.vtt`, `.srt`, `.txt`, `.md`
+  transcripts and `.csv` / `.xlsx` response tables into speaker-attributed turns (`universal_transcript_parser.py`).
+* **Discover** emergent topics with TF-IDF + NMF (default) or LDA and show each topic's TF-IDF medoid, a real
+  participant turn (`atlas_discover.py`).
+* **Code** every participant turn against a YAML codebook with root terms (prefix or exact-word `match_mode`),
+  context fences and exclusion fences, and report prevalence over individual units or focus groups (`atlas_engine.py`).
 * **Export** an `.xlsx` parameter matrix whose prevalence cells carry an `ATLAS VERIFICATION AUDIT STAMP`
   comment, a `provenance_manifest.json`, and a verbatim quote inventory, then re-verify the workbook
   against the manifest (`AtlasEngine.verify_workbook_integrity`).
@@ -185,6 +185,8 @@ ok, problems = AtlasEngine.verify_workbook_integrity(
 
 ## Documentation
 
+* [GBI Analyst Quick-Start Guide](docs/ATLAS_GBI_Analyst_Quick_Start.md): 1-page offline workflow
+  for coding multi-group focus-group `.docx` notes in Group Mode.
 * [User Guide](docs/ATLAS_User_Guide.md): installing, loading data, reading every screen, exports.
 * [Methodology & Reference Manual](docs/ATLAS_Methodology_and_Reference_Manual.md): matching rules,
   units, discovery, provenance and a full `SOFTWARE_TEST` walkthrough.
