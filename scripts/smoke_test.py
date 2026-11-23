@@ -1069,7 +1069,7 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         return values
 
     def caption_codebook(page) -> str:
-        for caption in page.locator('[data-testid="stCaptionContainer"]').all_inner_texts():
+        for caption in page.locator('[data-testid="stCaptionContainer"], [data-testid="stText"]').all_inner_texts():
             found = re.search(r"Codebook: (\S+\.ya?ml)", caption)
             if found:
                 return found.group(1)
