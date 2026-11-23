@@ -568,7 +568,7 @@ def detect_structured_notes(name, payload):
     if os.path.splitext(str(name))[1].lower() != ".docx":
         return False
     with tempfile.TemporaryDirectory(prefix="atlas_detect_") as tmp:
-        path = Path(tmp) / safe_upload_name(name, set())
+        path = Path(tmp) / "probe.docx"
         path.write_bytes(payload)
         try:
             return UniversalTranscriptParser.detect_docx_structure(str(path)) == "structured_notes"

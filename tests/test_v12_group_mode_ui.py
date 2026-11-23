@@ -79,12 +79,13 @@ THEMES_EXPANDER = "Note-Taker Themes Summary (Reference Only — Not Counted in 
 NON_VOICES = {"", "Unknown", "NoteTaker_Themes"}
 
 # Adversarial labels Streamlit's Markdown / shortcode plugins would rewrite.
-ADVERSARIAL_DOMAIN = "Forms <b>bold</b> [link](https://example.invalid/a) :smile: *emph* $x$ & co"
+ADVERSARIAL_DOMAIN = "Forms <b>bold</b> <i>ital</i> [link](https://example.invalid/a) :smile: *emph* $x$ & co"
 ADVERSARIAL_CODEBOOK = yaml.safe_dump({
     "project": "SOFTWARE_TEST Adversarial Group Labels",
     "domains": [{"id": "adv_forms", "name": ADVERSARIAL_DOMAIN, "roots_en": ["paperwork", "forms"]}],
 }, allow_unicode=True, sort_keys=False).encode("utf-8")
-ADVERSARIAL_GROUP_FILE = "software_test_*grp*_[a]_<i>.docx"
+# Valid across Windows NTFS, macOS APFS, and Linux ext4 while retaining Markdown/HTML characters.
+ADVERSARIAL_GROUP_FILE = "software_test__grp__[a]_(b)_$x$_~s~_&_'q'.docx"
 
 UPLOAD_TXT_A = b"[SOFTWARE_TEST]\nP1: The paperwork took two visits.\nP2: My car broke down on the way.\n"
 UPLOAD_TXT_B = b"[SOFTWARE_TEST]\nP1: I filled the forms at home.\n"
