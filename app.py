@@ -947,9 +947,10 @@ with tab_thematic:
         k4.metric("Matched Turn Mentions", matched_mentions,
                   help="Participant turns matched to a domain, summed over domains.")
 
-    # Mixed evidence (paraphrases/observations) is shown unless "Quotable Verbatim Only" is checked.
-    mixed_view = bool(group_mode and has_non_verbatim_evidence(quotes)
-                      and not st.session_state.get("verbatim_only_filter", False))
+    # Mixed evidence (paraphrases/observations) is shown in either mode unless
+    # Group mode's "Quotable Verbatim Only" filter is checked.
+    mixed_view = bool(has_non_verbatim_evidence(quotes)
+                      and not (group_mode and st.session_state.get("verbatim_only_filter", False)))
     qtab_freq, qtab_quotes, qtab_topics = st.tabs([
         "📈 Thematic Prevalence & Distribution",
         "💬 Coded Evidence & Provenance Browser" if mixed_view else "💬 Verbatim Quote & Provenance Browser",
@@ -1111,7 +1112,7 @@ with tab_thematic:
                     )
         else:
             f1, f2, f3 = st.columns([2, 1, 1])
-            search = f1.text_input("Search verbatim text", "")
+            search = f1.text_input("Search coded entries" if mixed_view else "Search verbatim text", "")
             domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(quotes["domain_name"].astype(str).unique())])
             speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(quotes["speaker"].astype(str).unique())])
             shown = quotes
@@ -1121,9 +1122,12 @@ with tab_thematic:
                 shown = shown[shown["speaker"].astype(str) == speaker_filter]
             if search.strip():
                 shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
-            st.markdown(f"**{len(shown)} of {len(quotes)} matched quotes shown**")
+            if mixed_view:
+                st.markdown(f"**{len(shown)} of {len(quotes)} coded entries shown (includes paraphrases/observations)**")
+            else:
+                st.markdown(f"**{len(shown)} of {len(quotes)} matched quotes shown**")
             if shown.empty:
-                st.info("No quote matches these filters.")
+                st.info("No entry matches these filters." if mixed_view else "No quote matches these filters.")
             else:
                 st.dataframe(
                     shown[[*(["evidence_type"] if notes_present else []), "domain_name", "speaker", "source_id",
@@ -1135,7 +1139,7 @@ with tab_thematic:
                         "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
                         "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
                         "match_char_end": "Match end", "match_text": "Matched span",
-                        "text": "Coded entry (see evidence type)" if notes_present else "Verbatim turn",
+                        "text": "Coded entry (see Evidence Type)" if mixed_view else "Verbatim turn",
                         "source_sha256": "Source SHA-256",
                     },
                 )

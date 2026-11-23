@@ -710,11 +710,20 @@ class GroupModeAppTests(unittest.TestCase):
         self.assertNotIn('"rule"', json.dumps(chart_specs(at)))
         self.assertTrue([i.value for i in at.info if "structured focus-group notes" in i.value
                          and "hidden" in i.value])
-        # Individual-mode quote browser still labels paraphrases.
+        # Individual-mode quote browser still labels paraphrases and avoids verbatim wording.
         evidence = next(f for f in frames(at) if "match_text" in f.columns)
         self.assertIn("evidence_type", evidence.columns)
         cards = [m.value for m in at.markdown if '<div class="quote-box">' in m.value]
         self.assertTrue(any("Paraphrase (Key Point)" in c for c in cards))
+        tab_labels = [t.label for t in at.tabs]
+        self.assertTrue(any("Coded Evidence & Provenance Browser" in lbl for lbl in tab_labels), tab_labels)
+        self.assertFalse(any("Verbatim Quote & Provenance Browser" in lbl for lbl in tab_labels), tab_labels)
+        md_values = [m.value for m in at.markdown]
+        self.assertTrue(any("Coded evidence with source provenance" in m for m in md_values))
+        self.assertFalse(any("Verbatim evidence with line-level provenance" in m for m in md_values))
+        self.assertFalse(any("matched quotes shown" in m for m in md_values))
+        self.assertTrue(has_widget(at, "text_input", "Search coded entries"))
+        self.assertFalse(has_widget(at, "text_input", "Search verbatim text"))
         at.run()
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL,
                          "a rerun on the same corpus keeps the manual choice")
@@ -753,6 +762,13 @@ class IndividualModeAppTests(unittest.TestCase):
         self.assertFalse([i.value for i in at.info if "Group mode" in i.value])
         self.assertFalse([i.value for i in at.info if "structured focus-group notes" in i.value])
         self.assertFalse(any(list(f.columns) == GROUP_TABLE_COLUMNS for f in frames(at)))
+        self.assertTrue(any("Verbatim Quote & Provenance Browser" in t.label for t in at.tabs))
+        self.assertTrue(any("Verbatim evidence with line-level provenance" in m.value for m in at.markdown))
+        # A verbatim-only Individual corpus with matches keeps verbatim search/count wording.
+        at_docx = choose_corpus(boot(), "Teams")
+        assert_clean(self, at_docx)
+        self.assertTrue(has_widget(at_docx, "text_input", "Search verbatim text"))
+        self.assertTrue(any("matched quotes shown" in m.value for m in at_docx.markdown))
         self.assertTrue([c.value for c in at.caption if "real participant turn" in c.value])
         topics = next(f for f in frames(at) if "medoid_text" in f.columns)
         self.assertNotIn("medoid_evidence_type", topics.columns)
