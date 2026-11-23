@@ -1118,6 +1118,29 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         check(label, seen == want, f"{seen!r} != {want!r}")
         return seen
 
+    def select_option(page, combobox_name: str, option_name) -> None:
+        """Open a Streamlit selectbox and click an option, retrying if an async rerun detaches the popover."""
+        deadline = time.monotonic() + UI_WAIT_SECONDS
+        last_exc = None
+        while time.monotonic() < deadline:
+            try:
+                page.locator('[data-testid="stStatusWidget"]').wait_for(state="hidden", timeout=5000)
+            except PlaywrightError:
+                pass
+            try:
+                box = page.get_by_role("combobox", name=combobox_name)
+                box.scroll_into_view_if_needed(timeout=5000)
+                box.click(timeout=5000)
+                opt = page.get_by_role("option", name=option_name)
+                opt.wait_for(state="visible", timeout=5000)
+                opt.scroll_into_view_if_needed(timeout=5000)
+                opt.click(timeout=5000)
+                return
+            except PlaywrightError as exc:
+                last_exc = exc
+                page.wait_for_timeout(300)
+        raise last_exc
+
     def download(page, button: re.Pattern, target: Path) -> Path:
         with page.expect_download() as info:
             page.get_by_role("button", name=button).click()
@@ -1153,8 +1176,7 @@ def browser_check(url: str, scratch: Path) -> list[str]:
                   repr(boot_kpis))
 
             # 2. Upload a custom transcript; KPIs and the domain table recompute in the live DOM.
-            page.get_by_role("combobox", name="Corpus Dataset").click()
-            page.get_by_role("option", name=UPLOAD_OPTION).click()
+            select_option(page, "Corpus Dataset", UPLOAD_OPTION)
             page.locator("input[type='file']").first.set_input_files(str(upload))
             page.get_by_text(f"Corpus: {BROWSER_UPLOAD_NAME}").wait_for(timeout=UI_WAIT_SECONDS * 1000)
             codebook = caption_codebook(page)
@@ -1181,8 +1203,7 @@ def browser_check(url: str, scratch: Path) -> list[str]:
 
             # 4. A custom codebook whose domain names are Markdown and Streamlit shortcodes: both
             #    st.html chart summaries show them verbatim.
-            page.get_by_role("combobox", name="Active YAML Codebook").click()
-            page.get_by_role("option", name=CODEBOOK_UPLOAD_OPTION).click()
+            select_option(page, "Active YAML Codebook", CODEBOOK_UPLOAD_OPTION)
             page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION).locator(
                 "input[type='file']").set_input_files(str(markdown_codebook))
             for tab in ("Tab 1", "Tab 2"):
