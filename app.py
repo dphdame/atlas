@@ -40,7 +40,16 @@ except ImportError:  # pragma: no cover - lxml ships with python-docx
         pass
 
 from atlas_discover import discover_topics, topics_to_codebook_dict
-from atlas_engine import AtlasEngine, has_non_verbatim_evidence, verbatim_only as verbatim_rows
+from atlas_engine import (
+    AtlasEngine,
+    append_topic_to_codebook,
+    audit_false_alarm_risks,
+    has_non_verbatim_evidence,
+    merge_codebook_dicts,
+    summarize_false_alarm_risks,
+    tighten_codebook_domain,
+    verbatim_only as verbatim_rows,
+)
 from universal_transcript_parser import (
     TABULAR_EXTENSIONS,
     TRANSCRIPT_EXTENSIONS,
@@ -177,6 +186,12 @@ st.markdown(
 .quote-box {{ background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4px solid {TEAL};
   padding: 1rem 1.25rem; border-radius: 6px; margin-bottom: 0.9rem; }}
 .topic-box {{ border-left-color: {NAVY}; }}
+.risk-high-box {{ border-left-color: #B91C1C; }}
+.risk-medium-box {{ border-left-color: #92400E; }}
+.risk-badge {{ display: inline-block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
+  padding: 0.12rem 0.45rem; border-radius: 3px; color: #FFFFFF; margin-right: 0.45rem; }}
+.risk-badge-high {{ background: #B91C1C; }}
+.risk-badge-medium {{ background: #92400E; }}
 .quote-meta {{ font-size: 0.85rem; font-weight: 700; color: {TEAL}; margin-bottom: 0.35rem; }}
 .topic-box .quote-meta {{ color: {NAVY}; }}
 .quote-text {{ font-size: 1rem; color: #0F172A; line-height: 1.6; margin-bottom: 0.5rem; white-space: pre-wrap; }}
@@ -620,6 +635,7 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
     results["exports"] = exports
     results["integrity_ok"] = bool(integrity_ok)
     results["integrity_problems"] = list(integrity_problems)
+    results["false_alarm_audit_df"] = audit_false_alarm_risks(results["quotes_df"], engine.domains)
     return results
 
 
@@ -656,10 +672,64 @@ def highlighted_quote(text, start, end):
 def apply_discovered_codebook(label, yaml_bytes):
     st.session_state.discovered_codebooks[label] = yaml_bytes
     st.session_state.codebook_choice = label
+    st.session_state.stacked_codebooks = []
+
+
+def add_theme_to_active_codebook(current_bytes, topic, custom_name, match_mode):
+    current_dict = yaml.safe_load(current_bytes) or {}
+    updated_dict = append_topic_to_codebook(
+        current_dict,
+        topic,
+        domain_name=str(custom_name or "").strip() or None,
+        match_mode=match_mode,
+    )
+    new_domain = updated_dict["domains"][-1]
+    updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
+    base = f"Custom: +{new_domain['name']} ({len(updated_dict['domains'])} domains)"
+    label, idx = base, 2
+    while label in st.session_state.discovered_codebooks:
+        label = f"{base} #{idx}"
+        idx += 1
+    st.session_state.discovered_codebooks[label] = updated_bytes
+    st.session_state.codebook_choice = label
+    st.session_state.stacked_codebooks = []
+    st.session_state.add_topic_name = ""
+
+
+def apply_tightened_codebook(current_bytes, domain_id, domain_name, exclude_words, set_exact_mode):
+    words = [str(w).strip() for w in (exclude_words or []) if str(w).strip()]
+    if not words and not set_exact_mode:
+        return
+    current_dict = yaml.safe_load(current_bytes) or {}
+    updated_dict = tighten_codebook_domain(
+        current_dict,
+        domain_id,
+        add_exclude_terms=words,
+        set_exact_mode=bool(set_exact_mode),
+    )
+    updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
+    action = "exact" if set_exact_mode and not words else "fenced"
+    base = f"Custom: {domain_name} ({action}, {len(updated_dict['domains'])} domains)"
+    label, idx = base, 2
+    while label in st.session_state.discovered_codebooks:
+        label = f"{base} #{idx}"
+        idx += 1
+    st.session_state.discovered_codebooks[label] = updated_bytes
+    st.session_state.codebook_choice = label
+    st.session_state.stacked_codebooks = []
+
+
+def risk_badge_html(risk_level):
+    level = str(risk_level or "")
+    cls = "risk-badge-high" if level == "High" else "risk-badge-medium"
+    label = "HIGH RISK" if level == "High" else "MEDIUM RISK"
+    return f'<span class="risk-badge {cls}">{label}</span>'
 
 
 if "discovered_codebooks" not in st.session_state:
     st.session_state.discovered_codebooks = {}
+if "stacked_codebooks" not in st.session_state:
+    st.session_state.stacked_codebooks = []
 
 
 # ------------------------------------------------------------------------------
@@ -802,6 +872,17 @@ with st.sidebar:
     if codebook_choice == CODEBOOK_UPLOAD:
         uploaded_codebook = st.file_uploader("Upload Custom Codebook (.yaml)", type=["yaml", "yml"])
 
+    extra_choices = [cb for cb in config_codebooks if cb != codebook_choice]
+    st.session_state.stacked_codebooks = [
+        cb for cb in st.session_state.get("stacked_codebooks", []) if cb in extra_choices
+    ]
+    extra_codebooks = st.multiselect(
+        "Stack Additional Starter Codebooks (optional)",
+        extra_choices,
+        key="stacked_codebooks",
+        help="Combine domains from additional starter codebooks with the active codebook without editing YAML by hand.",
+    )
+
     st.markdown("---")
     st.markdown("### Reference Guides")
     for label, filename in REFERENCE_GUIDES:
@@ -865,11 +946,48 @@ if codebook_choice == CODEBOOK_UPLOAD:
     if uploaded_codebook is None:
         st.info("Upload a YAML codebook in the sidebar, or choose one from the list.")
         st.stop()
-    codebook_bytes = uploaded_codebook.getvalue()
+    primary_codebook_bytes = uploaded_codebook.getvalue()
+    primary_codebook_label = uploaded_codebook.name
 elif codebook_choice in st.session_state.discovered_codebooks:
-    codebook_bytes = st.session_state.discovered_codebooks[codebook_choice]
+    primary_codebook_bytes = st.session_state.discovered_codebooks[codebook_choice]
+    primary_codebook_label = codebook_choice
 else:
-    codebook_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
+    primary_codebook_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
+    primary_codebook_label = codebook_choice
+
+if extra_codebooks:
+    try:
+        primary_dict = yaml.safe_load(primary_codebook_bytes)
+        if not isinstance(primary_dict, dict):
+            raise ValueError(f"Primary codebook {primary_codebook_label!r} must be a YAML mapping.")
+        to_merge = [(primary_codebook_label, primary_dict)]
+        for extra_name in extra_codebooks:
+            extra_dict = yaml.safe_load((CONFIG_DIR / extra_name).read_bytes())
+            if not isinstance(extra_dict, dict):
+                raise ValueError(f"Stacked codebook {extra_name!r} must be a YAML mapping.")
+            to_merge.append((extra_name, extra_dict))
+        merged_dict = merge_codebook_dicts(to_merge)
+        codebook_bytes = yaml.safe_dump(merged_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
+    except (*UPLOAD_READ_ERRORS, yaml.YAMLError) as exc:
+        st.error(f"ATLAS could not combine the selected codebooks: {exc}")
+        st.stop()
+    active_codebook_label = " + ".join([primary_codebook_label, *extra_codebooks])
+else:
+    codebook_bytes = primary_codebook_bytes
+    active_codebook_label = primary_codebook_label
+
+is_custom_or_stacked = bool(extra_codebooks or codebook_choice in st.session_state.discovered_codebooks)
+if is_custom_or_stacked:
+    with st.sidebar:
+        st.download_button(
+            "📥 Download Active Codebook (.yaml)",
+            data=codebook_bytes,
+            file_name="atlas_active_codebook.yaml",
+            mime="application/x-yaml",
+            key="download_active_codebook_sidebar",
+            help="Save a copy of the exact stacked or customized YAML codebook alongside your export files.",
+            **stretch_kwargs(st.download_button),
+        )
 
 bad_patterns = []
 for pattern in prompt_patterns:
@@ -933,7 +1051,7 @@ tab_thematic, tab_econometric = st.tabs([
 # ==============================================================================
 with tab_thematic:
     st.markdown("### Qualitative Thematic Workbench")
-    st.caption(f"Corpus: {corpus_label} · Codebook: {codebook_choice} · Project: {results['project_name']}")
+    st.caption(f"Corpus: {corpus_label} · Codebook: {active_codebook_label} · Project: {results['project_name']}")
 
     k1, k2, k3, k4 = st.columns(4)
     if group_mode:
@@ -956,10 +1074,11 @@ with tab_thematic:
     # Group mode's "Quotable Verbatim Only" filter is checked.
     mixed_view = bool(has_non_verbatim_evidence(quotes)
                       and not (group_mode and st.session_state.get("verbatim_only_filter", False)))
-    qtab_freq, qtab_quotes, qtab_topics = st.tabs([
+    qtab_freq, qtab_quotes, qtab_topics, qtab_spotcheck = st.tabs([
         "📈 Thematic Prevalence & Distribution",
         "💬 Coded Evidence & Provenance Browser" if mixed_view else "💬 Verbatim Quote & Provenance Browser",
         "💡 Unsupervised Topic Discovery (Medoids)",
+        "🔎 False-Alarm Spot-Check",
     ])
 
     with qtab_freq:
@@ -1249,6 +1368,163 @@ with tab_thematic:
                 help="Adds this draft to the codebook list and re-codes the corpus with it.",
             )
 
+            st.markdown("---")
+            st.markdown("##### Add a discovered theme to your active codebook")
+            st.caption(
+                "Keeps all domains in your active codebook and appends one discovered topic as a new "
+                "domain—no YAML editing required."
+            )
+            topic_choices = {
+                f"Topic {t['topic_id']}: {t['label']} ({t['turn_count']} turns)": t for t in topics
+            }
+            if st.session_state.get("add_topic_select") not in topic_choices:
+                st.session_state.pop("add_topic_select", None)
+            a1, a2 = st.columns([2, 2])
+            picked_topic_label = a1.selectbox("Topic to add", list(topic_choices), key="add_topic_select")
+            picked_topic = topic_choices[picked_topic_label]
+            custom_theme_name = a2.text_input(
+                "New domain name (optional)",
+                placeholder=str(picked_topic["label"]),
+                key="add_topic_name",
+                help="Leave blank to use the topic's top terms as the domain name.",
+            )
+            exact_mode_add = st.checkbox(
+                "Use exact whole-word matching for added theme (recommended)",
+                value=True,
+                key="add_topic_exact",
+                help="Prevents short discovered words (such as 'car' or 'fee') from matching unrelated longer words.",
+            )
+            st.button(
+                "➕ Add Theme to Active Codebook",
+                on_click=add_theme_to_active_codebook,
+                args=(codebook_bytes, picked_topic, custom_theme_name, "exact" if exact_mode_add else "prefix"),
+                key="add_topic_to_active_btn",
+                **stretch_kwargs(st.button),
+                help="Appends this topic to the active codebook, immediately re-codes the corpus, and lets you download the updated YAML.",
+            )
+
+    with qtab_spotcheck:
+        st.markdown("#### False-alarm spot-check")
+        st.caption(
+            "Flags coded matches that commonly create false alarms: short or non-inflectional prefix extensions "
+            "(for example, 'car' inside 'card' or 'career'), nearby negation cues ('not', 'never', 'didn\\'t'), "
+            "and short unfenced prefix roots."
+        )
+        audit_df = results["false_alarm_audit_df"]
+        if quotes.empty:
+            st.info("No coded matches to spot-check in the current corpus.")
+        elif audit_df.empty:
+            st.success("No high- or medium-risk false-alarm patterns detected across all current matches.")
+        else:
+            n_flagged = len(audit_df)
+            n_high = int((audit_df["risk_level"] == "High").sum())
+            n_med = int((audit_df["risk_level"] == "Medium").sum())
+            st.markdown(
+                f"**{n_flagged} of {len(quotes)} coded matches flagged for review** · "
+                f"High risk: **{n_high}** · Medium risk: **{n_med}**"
+            )
+            summary_df = summarize_false_alarm_risks(audit_df)
+            st.dataframe(summary_df, **stretch_kwargs(st.dataframe), hide_index=True)
+            st.download_button(
+                "📥 Download Spot-Check Report (.csv)",
+                data=audit_df.to_csv(index=False).encode("utf-8"),
+                file_name="atlas_false_alarm_spot_check.csv",
+                mime="text/csv",
+                key="download_spotcheck_csv",
+                **stretch_kwargs(st.download_button),
+            )
+
+            st.markdown("---")
+            st.markdown("##### Quick-fix a flagged domain in your active codebook")
+            st.caption(
+                "Tighten a noisy domain right here without editing YAML. Download the updated codebook from "
+                "the sidebar or Tab 2 when finished."
+            )
+            flagged_domains = (
+                audit_df[["domain_id", "domain_name"]]
+                .drop_duplicates()
+                .sort_values(["domain_name", "domain_id"])
+            )
+            domain_choice_map = {
+                f"{r['domain_name']} ({r['domain_id']})": (str(r["domain_id"]), str(r["domain_name"]))
+                for _, r in flagged_domains.iterrows()
+            }
+            if st.session_state.get("spotcheck_fix_domain") not in domain_choice_map:
+                st.session_state.pop("spotcheck_fix_domain", None)
+            sc1, sc2 = st.columns([2, 2])
+            picked_fix_label = sc1.selectbox("Domain to tighten", list(domain_choice_map), key="spotcheck_fix_domain")
+            fix_domain_id, fix_domain_name = domain_choice_map[picked_fix_label]
+            dom_audit = audit_df[audit_df["domain_id"].astype(str) == fix_domain_id]
+            ext_words = sorted({
+                w.strip().lower()
+                for cell in dom_audit["extension_words"]
+                for w in str(cell).split(",")
+                if w.strip()
+            })
+            selected_exclude_words = []
+            if ext_words:
+                ext_sig = hashlib.sha256(",".join(ext_words).encode("utf-8")).hexdigest()[:8]
+                selected_exclude_words = sc2.multiselect(
+                    "False-alarm words to exclude (0-token fence)",
+                    ext_words,
+                    default=ext_words,
+                    key=f"spotcheck_excl_{fix_domain_id}_{ext_sig}",
+                    help="Adds these words to exclude_fences so they stop matching this domain.",
+                )
+            b1, b2 = st.columns(2)
+            b1.button(
+                "🛡️ Exclude Selected Words from Domain",
+                on_click=apply_tightened_codebook,
+                args=(codebook_bytes, fix_domain_id, fix_domain_name, selected_exclude_words, False),
+                disabled=not selected_exclude_words,
+                key="spotcheck_exclude_btn",
+                **stretch_kwargs(st.button),
+                help="Adds the selected false-alarm words to exclude_fences and immediately re-codes.",
+            )
+            b2.button(
+                "🎯 Switch Domain to Exact Whole-Word Matching",
+                on_click=apply_tightened_codebook,
+                args=(codebook_bytes, fix_domain_id, fix_domain_name, [], True),
+                key="spotcheck_exact_btn",
+                **stretch_kwargs(st.button),
+                help="Switches this domain to match_mode: exact so short stems only match whole words.",
+            )
+
+            st.markdown("---")
+            st.markdown("##### Flagged matches in context")
+            sc_dom_options = ["All domains", *sorted(audit_df["domain_name"].astype(str).unique())]
+            if st.session_state.get("spotcheck_dom_filter") not in sc_dom_options:
+                st.session_state.pop("spotcheck_dom_filter", None)
+            rf1, rf2 = st.columns(2)
+            risk_filter = rf1.selectbox("Filter by risk", ["All risk levels", "High", "Medium"], key="spotcheck_risk_filter")
+            dom_filter_sc = rf2.selectbox(
+                "Filter flagged domain",
+                sc_dom_options,
+                key="spotcheck_dom_filter",
+            )
+            shown_audit = audit_df
+            if risk_filter != "All risk levels":
+                shown_audit = shown_audit[shown_audit["risk_level"] == risk_filter]
+            if dom_filter_sc != "All domains":
+                shown_audit = shown_audit[shown_audit["domain_name"].astype(str) == dom_filter_sc]
+            st.caption(f"Showing {min(len(shown_audit), 25)} of {len(shown_audit)} flagged matches.")
+            for _, row in shown_audit.head(25).iterrows():
+                box_cls = "risk-high-box" if row["risk_level"] == "High" else "risk-medium-box"
+                ev_badge = evidence_badge_html(row["evidence_type"]) if notes_present else ""
+                st.markdown(
+                    f'<div class="quote-box {box_cls}">'
+                    f'<div class="quote-meta">{risk_badge_html(row["risk_level"])}{ev_badge}'
+                    f'{esc(row["domain_name"])} · {esc(row["speaker"])} · '
+                    f'matched <code>{esc(row["matched_span"])}</code> inside <code>{esc(row["full_word"])}</code></div>'
+                    f'<div style="font-size:0.88rem;color:#334155;margin-bottom:0.35rem;">'
+                    f'<strong>Why flagged:</strong> {esc(row["flag_reason"])}</div>'
+                    f'<div class="quote-text">{highlighted_quote(row["text"], row["match_char_start"], row["match_char_end"])}</div>'
+                    f'<div class="quote-provenance">SOURCE {esc(row["source_id"])} · LINE {esc(row["line_number"])} · '
+                    f'FIX: {esc(row["suggested_fix"])}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
 
 # ==============================================================================
 # TAB 2: ECONOMETRIC & ACTUARIAL LEDGER EXPORT
@@ -1378,6 +1654,16 @@ with tab_econometric:
             file_name=CODED_EVIDENCE_CSV, mime="text/csv", **stretch_kwargs(st.download_button),
             help="Every coded entry with its evidence_type: verbatim quotes, paraphrased key points and "
                  "note-taker observations. Paraphrases and observations are not participant quotations.",
+        )
+    if is_custom_or_stacked:
+        st.download_button(
+            "📥 atlas_active_codebook.yaml (stacked / customized rules)",
+            data=codebook_bytes,
+            file_name="atlas_active_codebook.yaml",
+            mime="application/x-yaml",
+            key="download_active_codebook_tab2",
+            **stretch_kwargs(st.download_button),
+            help="Archive this exact YAML codebook alongside your export folder so coding rules stay reproducible.",
         )
     with st.expander("Source files and SHA-256 digests"):
         st.dataframe(

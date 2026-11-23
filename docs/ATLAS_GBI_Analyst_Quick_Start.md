@@ -24,13 +24,16 @@
 
 ---
 
-## 3. Pick a Codebook and Spot Missed Themes (10-Minute Workflow)
+## 3. Pick a Codebook, Add Local Themes, and Spot-Check False Alarms (10-Minute Workflow)
 
 1. Select **`gbi_focus_group_starter.yaml`** in **Active YAML Codebook** to start with 8 pre-fenced GBI domains (Housing, Food/Groceries, Debt/Bills, Employment/Education, Transportation, Family/Caregiving, Stress/Autonomy, and Program Enrollment/Paperwork).
+   - **Need extra domains without editing YAML?** Use **Stack Additional Starter Codebooks (optional)** in the sidebar (for example, stack `sdoh_basic_needs.yaml` or `workforce_and_mobility.yaml` onto the GBI starter) to combine them cleanly in one click.
 2. Open **Unsupervised Topic Discovery (Medoids)** and leave **Discovery method** on **`TF-IDF + NMF`** (faster, deterministic, and sharper non-overlapping keywords; classic **LDA** is also available).
    - Scan the top terms and example medoid entries to spot any local themes your starter codebook does not yet cover (for example, program-specific debit cards, childcare vouchers, or local licensing rules).
-   - Download the discovered `.yaml` draft or add those terms to a copy of the starter `.yaml` stored in your private study folder.
-3. **Keep false alarms low:** When editing your custom `.yaml`, add `exclude_fences` (with `exclude_window: 0`) for any short prefix word (such as `car` excluding `card`, `career`, `care`, `cargo`), or set `match_mode: exact` on a domain or codebook for strict whole-word matching.
+   - Select that topic under **Add a discovered theme to your active codebook**, type an optional plain-English domain name, leave exact whole-word matching checked, and click **`➕ Add Theme to Active Codebook`**. ATLAS appends the new theme onto your active codebook and re-codes immediately.
+3. **Run the 2-minute False-Alarm Spot-Check:** Open the **`🔎 False-Alarm Spot-Check`** tab to see any borderline matches flagged automatically—prefix extensions (such as `car` firing inside `card` or `career`), nearby negation words (`not`, `never`, `didn't`), and short unfenced stems.
+   - Right inside that tab, you can click **`🛡️ Exclude Selected Words from Domain`** or **`🎯 Switch Domain to Exact Whole-Word Matching`** to tighten any noisy domain without hand-editing YAML, or download `atlas_false_alarm_spot_check.csv` for team review.
+4. Whenever you stack codebooks, add a discovered theme, or tighten a rule, click **`📥 Download Active Codebook (.yaml)`** (in the sidebar or Tab 2) and save it beside your export files so your final coding rules stay archived.
 
 ---
 
