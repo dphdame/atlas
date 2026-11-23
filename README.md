@@ -10,12 +10,12 @@
 ATLAS (Automated Text-to-Ledger Actuarial Synthesis) turns interview transcripts, focus-group
 recordings exported as text, and open-ended survey tables into counts that can be checked line by line:
 
-* **Parse** `.docx`, `.vtt`, `.srt`, `.txt`, `.md` transcripts and `.csv` / `.xlsx` response tables into
-  speaker-attributed turns (`universal_transcript_parser.py`).
-* **Discover** emergent topics with LDA and show each topic's TF-IDF medoid, a real participant turn
-  (`atlas_discover.py`).
-* **Code** every participant turn against a YAML codebook with root terms, context fences and exclusion
-  fences, and report prevalence over analytical units (`atlas_engine.py`).
+* **Parse** `.docx` (including 3-column focus-group notes tables), `.vtt`, `.srt`, `.txt`, `.md`
+  transcripts and `.csv` / `.xlsx` response tables into speaker-attributed turns (`universal_transcript_parser.py`).
+* **Discover** emergent topics with TF-IDF + NMF (default) or LDA and show each topic's TF-IDF medoid, a real
+  participant turn or coded notes entry (`atlas_discover.py`).
+* **Code** every participant turn against a YAML codebook with root terms (prefix or exact-word `match_mode`),
+  context fences and exclusion fences, and report prevalence over individual units or focus groups (`atlas_engine.py`).
 * **Export** an `.xlsx` parameter matrix whose prevalence cells carry an `ATLAS VERIFICATION AUDIT STAMP`
   comment, a `provenance_manifest.json`, and a verbatim quote inventory, then re-verify the workbook
   against the manifest (`AtlasEngine.verify_workbook_integrity`).
@@ -61,27 +61,50 @@ Installing dependencies needs a network connection; analysis does not.
 ![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](docs/figures/atlas_dashboard_ui_walkthrough.png)
 
 **Sidebar**
-* **Corpus Dataset:** three built-in `SOFTWARE_TEST` samples (bilingual interview `.txt` + Zoom `.vtt`;
-  community survey `.csv`; Teams `.docx`) or **Upload Custom Files**. For uploaded `.csv` / `.xlsx`
-  tables the free-text column is detected automatically (columns named `id` or ending in `_id` are never
-  chosen) and can be changed; optional respondent-id and speaker columns, facilitator names and
-  interviewer prompt patterns are also available.
-* **Active YAML Codebook:** every `.yaml` file in `config/`, an uploaded codebook, or a codebook applied
-  from topic discovery during the session.
-* A `SOFTWARE_TEST FIXTURE ACTIVE` notice is shown whenever a built-in sample is loaded.
+* **Corpus Dataset:** **Upload Custom Files** (default) or four built-in sample corpora (multi-group
+  focus-group notes `.docx`; bilingual interview `.txt` + Zoom `.vtt`; community survey `.csv`;
+  Teams `.docx`). For uploaded `.csv` / `.xlsx` tables the free-text column is detected automatically
+  (columns named `id` or ending in `_id` are never chosen) and can be changed; optional respondent-id
+  and speaker columns are shown for tables. Optional facilitator names and prompt regexes sit inside a
+  collapsed **Advanced transcript filters (optional)** expander for free-form or mixed uploads and stay
+  hidden when every uploaded file is a 3-column focus-group notes `.docx` in Group Mode.
+* **Data Type:** **Individual transcripts / survey responses** or **Group / summarized notes** (`1 file = 1 group`,
+  auto-selected whenever an uploaded `.docx` contains a 3-column focus-group notes table, with an optional
+  **Include Note-Taker Observations** toggle unchecked by default).
+* **Active YAML Codebook & Stacking:** every `.yaml` file in `config/` (defaulting to
+  `gbi_focus_group_starter.yaml`), optional **Stack Additional Starter Codebooks**, any session
+  discovered/customized codebook, or **Upload Custom Codebook (.yaml)**.
+* **▶ Run Analysis:** click once after selecting files and codebooks to run coding, discovery, and
+  export generation (sidebar edits wait cleanly until you click **▶ Run Analysis**).
+* **Reference Guides:** formatted Word (`.docx`) downloads in the sidebar plus an in-app formatted
+  reader in **Tab 3: Reference Guides**.
 
 **Tab 1: Standalone Thematic Discovery & Qualitative Coding**
-* KPI cards: **Analytical Units (N)**, **Participant Turns**, **Active Domains**, **Matched Turn Mentions**.
-* Prevalence chart and accessible table; a quote browser (search, domain and speaker filters) showing
-  each verbatim turn with its matched span, `source_id`, `unit_id`, line, `match_char_start`–`match_char_end`
-  and `source_sha256`; topic discovery with a topic-count slider, verbatim medoids, a
-  **Download Discovered Codebook (.yaml)** button and an **Apply Discovered Codebook to Engine** button.
+* **KPI cards** adapt to **Data Type**: in **Individual Mode**, **Analytical Units (N)**, **Participant Turns**,
+  **Active Domains**, and **Matched Turn Mentions**; in **Group Mode**, **Focus Groups (G)**, **Distinct
+  Participant Voices**, **Coded Notes Entries**, and **Active Domains**.
+* **Prevalence & Distribution:** domain prevalence bar chart and accessible table in Individual Mode; integer
+  **Groups Reporting (`g of G`)** bar chart, **Group × Theme** participant-voice matrix, and a reference-only
+  **Note-Taker Themes Summary** expander in Group Mode.
+* **Evidence & Provenance Browser:** search and filter matches with highlighted spans, `source_id`, `unit_id`,
+  line, `match_char_start`–`match_char_end`, and `source_sha256`. When paraphrased key points or observations
+  are present, entries carry explicit evidence-type badges and Group Mode adds a **Quotable Verbatim Only**
+  checkbox so paraphrases are never misquoted.
+* **Topic Discovery:** offline **TF-IDF + NMF** (default) or **LDA** with a topic-count slider, representative
+  medoids (tagged with `evidence_type` for structured notes), **Download Discovered Codebook (.yaml)**,
+  **Apply Discovered Codebook to Engine**, and one-click **➕ Add Theme to Active Codebook** (exact whole-word
+  matching by default).
+* **False-Alarm Spot-Check:** flags prefix extensions, nearby negations, and short unfenced stems, exports
+  `atlas_false_alarm_spot_check.csv`, and offers one-click exclusion fences or exact whole-word tightening.
 
 **Tab 2: Econometric & Actuarial Ledger Export**
-* Parameter matrix with N (analytical units), units reporting, prevalence, `p`, binomial
-  SE = √(p(1 − p)/N) and a normal-approximation 95% interval.
+* In **Individual Mode** (ordinary transcripts and surveys), reports per-domain units reporting, N, prevalence,
+  `p`, binomial SE = √(p(1 − p)/N), and a normal-approximation 95% interval. In **Group Mode** (and whenever
+  structured focus-group notes are loaded), displays an explicit statistical guardrail banner, hides Binomial SE
+  and 95% intervals, and reports integer **Groups Reporting (`g of G`)** and distinct participant voices.
 * Downloads produced by `AtlasEngine.export_results`: `actuarial_parameter_matrix.xlsx`,
-  `provenance_manifest.json`, `verbatim_quotes_inventory.csv`, plus the workbook integrity result.
+  `provenance_manifest.json`, `verbatim_quotes_inventory.csv`, plus `coded_evidence_inventory.csv` (for
+  structured notes), `atlas_active_codebook.yaml` (when stacked or customized), and the workbook integrity result.
 
 ### SOFTWARE_TEST walkthrough: survey sample × `pfl_case_study_codebook.yaml`
 
@@ -151,11 +174,11 @@ source files; compare `source_sha256` with the files on disk for that.
   files plus `config/`, `data/samples/` and `docs/` inside the ATLAS folder, and renders no remote images,
   fonts or scripts. `scripts/smoke_test.py` runs the unit tests, pipeline and app checks under an offline
   guard that blocks and logs any socket use; a logged call fails the run.
-* **What Streamlit does.** The workbench is a local Streamlit web server. The desktop launchers start it
-  with `--browser.gatherUsageStats=false` so Streamlit's usage statistics are off. They do not set
-  `--server.address`, so Streamlit also listens on the computer's network interfaces and other machines
-  on the same network could open the page; add `--server.address=localhost` (as in Option B) on shared
-  networks. The offline guard is a test harness and is not active during a normal launch.
+* **What Streamlit does.** The workbench is a local Streamlit web server. Both desktop launchers
+  (`run.command` and `run.bat`) start it with `--server.address=localhost` and
+  `--browser.gatherUsageStats=false`, so Streamlit binds strictly to your machine's loopback interface
+  (unreachable from other devices on a shared Wi-Fi or office network) and keeps usage statistics off.
+  The offline guard is a test harness and is not active during a normal launch.
 * **What ATLAS cannot control.** Operating-system services, backup or sync software, and the browser
   itself are outside ATLAS; keep sensitive transcripts in folders that are not synced to cloud storage.
 
@@ -185,6 +208,8 @@ ok, problems = AtlasEngine.verify_workbook_integrity(
 
 ## Documentation
 
+* [GBI Analyst Quick-Start Guide](docs/ATLAS_GBI_Analyst_Quick_Start.md): 1-page offline workflow
+  for coding multi-group focus-group `.docx` notes in Group Mode.
 * [User Guide](docs/ATLAS_User_Guide.md): installing, loading data, reading every screen, exports.
 * [Methodology & Reference Manual](docs/ATLAS_Methodology_and_Reference_Manual.md): matching rules,
   units, discovery, provenance and a full `SOFTWARE_TEST` walkthrough.

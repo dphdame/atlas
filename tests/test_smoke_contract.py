@@ -235,10 +235,11 @@ class SmokeContractTests(unittest.TestCase):
         else:
             self.assertEqual(argv, ["bash", "run.command", "--check-only"])
 
-    def test_codebook_audit_compiles_all_six(self):
+    def test_codebook_audit_compiles_all_seven(self):
         compiled = self.smoke.codebook_audit(REPO / "config")
         expected = sorted(p.name for p in (REPO / "config").glob("*.yaml"))
-        self.assertEqual(len(expected), 6)
+        self.assertEqual(len(expected), 7)
+        self.assertIn("gbi_focus_group_starter.yaml", expected)
         self.assertEqual(sorted(compiled), expected)
         for name, n_rules in compiled.items():
             self.assertGreater(n_rules, 0, name)
@@ -498,6 +499,8 @@ class UploadNameCollisionTests(unittest.TestCase):
             ("A.txt", UPLOAD_MATCHING, "text/plain"),
             ("a.txt", UPLOAD_NON_MATCHING, "text/plain"),
         ])
+        at.run()
+        next(b for b in at.button if b.label == "▶ Run Analysis").click()
         at.run()
         # Control: the matching payload alone is coded, so a zero below can only mean it was lost.
         from atlas_engine import AtlasEngine
@@ -814,6 +817,8 @@ class ADAAccessibilityTests(unittest.TestCase):
         box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
         box.select(next(o for o in box.options if "Survey" in o))
         at.run()
+        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        at.run()
         self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
         charts = at.get("vega_lite_chart")
         self.assertEqual(len(charts), 2)
@@ -1018,6 +1023,8 @@ class ADAAccessibilityTests(unittest.TestCase):
             [("software_test_markdown_domain.txt", UPLOAD_MATCHING, "text/plain")])
         next(u for u in at.file_uploader if u.label.startswith("Upload Custom Codebook")).set_value(
             ("software_test_markdown_domain.yaml", MARKDOWN_DOMAIN_CODEBOOK, "application/x-yaml"))
+        at.run()
+        next(b for b in at.button if b.label == "▶ Run Analysis").click()
         at.run()
         self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
         self.assertEqual(len(at.error), 0, [e.value for e in at.error])

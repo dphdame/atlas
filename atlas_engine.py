@@ -37,7 +37,37 @@ QUOTE_COLUMNS = [
     "domain_id", "domain_name", "document_name", "source_id", "unit_id", "turn_id", "line_number",
     "timestamp", "speaker", "text", "char_start", "char_end", "match_char_start", "match_char_end",
     "match_text", "source_sha256",
+    # v1.2 notes provenance, appended after the v1.1 columns ("" when a turn lacks them).
+    "evidence_type", "question_id", "group_id", "participant_id",
 ]
+NOTES_PROVENANCE_COLUMNS = ("evidence_type", "question_id", "group_id", "participant_id")
+NOTES_THEMES_EVIDENCE_TYPE = "themes_summary"
+# Evidence holding the speaker's own words: notes "Notable Quotes" cells, transcript or
+# survey turns, and legacy turns without an evidence type. Paraphrased key points and
+# note-taker observations are coded evidence but never verbatim quotations.
+VERBATIM_EVIDENCE_TYPES = ("notable_quote_verbatim", "verbatim_turn", "")
+NOTES_EVIDENCE_LABELS = {
+    "notable_quote_verbatim": "Verbatim Quote (notes)",
+    "key_point_paraphrase": "Paraphrase (Key Point, not verbatim)",
+    "observation": "Note-Taker Observation (not verbatim)",
+    "verbatim_turn": "Verbatim Turn (transcript / survey)",
+    "": "Verbatim Turn (transcript / survey)",
+}
+CODED_EVIDENCE_EXPORT = "coded_evidence_inventory"
+
+
+def has_non_verbatim_evidence(quotes_df: pd.DataFrame) -> bool:
+    """Whether any coded row is a paraphrase or observation rather than verbatim words."""
+    if quotes_df is None or len(quotes_df) == 0 or "evidence_type" not in quotes_df.columns:
+        return False
+    return bool((~quotes_df["evidence_type"].astype(str).isin(VERBATIM_EVIDENCE_TYPES)).any())
+
+
+def verbatim_only(quotes_df: pd.DataFrame) -> pd.DataFrame:
+    """The rows of quotes_df that are verbatim words (see VERBATIM_EVIDENCE_TYPES)."""
+    if "evidence_type" not in quotes_df.columns:
+        return quotes_df
+    return quotes_df[quotes_df["evidence_type"].astype(str).isin(VERBATIM_EVIDENCE_TYPES)].reset_index(drop=True)
 _TOKEN = re.compile(r"\w+")
 
 
@@ -125,17 +155,31 @@ def _parse_window(value: Any, label: str, rule_id: str) -> Optional[int]:
     return window
 
 
-def _normalize_rule(item: Dict[str, Any], default_id: str) -> Dict[str, Any]:
+MATCH_MODES = ("prefix", "exact")
+
+
+def _parse_match_mode(raw: Any, default: str, context: str) -> str:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    mode = str(raw).strip().lower()
+    if mode not in MATCH_MODES:
+        raise ValueError(f"Invalid match_mode {raw!r} in {context}; expected one of {MATCH_MODES}")
+    return mode
+
+
+def _normalize_rule(item: Dict[str, Any], default_id: str, default_match_mode: str = "prefix") -> Dict[str, Any]:
     if not isinstance(item, dict):
         raise ValueError(f"Codebook rule {default_id!r} must be a mapping, got {type(item).__name__}")
     rule_id = str(_first_present(item, ("id",), default_id))
-    roots_en = _term_list(item.get("roots_en")) + _term_list(item.get("keywords"))
+    roots_en = _term_list(item.get("roots_en")) + _term_list(item.get("roots")) + _term_list(item.get("keywords"))
+    match_mode = _parse_match_mode(item.get("match_mode"), default_match_mode, f"rule {rule_id!r}")
     return {
         "id": rule_id,
         "name": str(_first_present(item, ("name", "label"), rule_id)),
         "description": str(_first_present(item, ("description", "definition"), "")),
         "roots_en": _term_list(roots_en),
         "roots_es": _term_list(item.get("roots_es")),
+        "match_mode": match_mode,
         "context_fences": _term_list(_first_present(item, ("context_fences", "required_context"), [])),
         "context_window": _first_present(item, ("context_window", "co_occurrence_window")),
         "exclude_fences": _term_list(_first_present(item, ("exclude_fences", "negative_fences", "exclude_terms"), [])),
@@ -149,6 +193,12 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
     'domains' (researcher), 'topics' as a dict or list (practitioner), or
     'themes' followed by 'frictions' (benchmarking).
     """
+    meta = codebook.get("meta") if isinstance(codebook.get("meta"), dict) else {}
+    default_match_mode = _parse_match_mode(
+        _first_present(codebook, ("match_mode",), meta.get("match_mode")),
+        "prefix",
+        "codebook",
+    )
     items: List[Tuple[Any, str]] = []
     if codebook.get("domains") is not None:
         items = [(d, f"domain_{i}") for i, d in enumerate(codebook["domains"] or [], 1)]
@@ -172,7 +222,7 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
                 raise ValueError(f"Codebook section {section!r} must be a list")
             items.extend((d, f"{section}_{i}") for i, d in enumerate(section_items, 1))
 
-    rules = [_normalize_rule(item, default_id) for item, default_id in items]
+    rules = [_normalize_rule(item, default_id, default_match_mode) for item, default_id in items]
     seen = set()
     for rule in rules:
         if rule["id"] in seen:
@@ -181,18 +231,31 @@ def normalize_codebook_rules(codebook: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rules
 
 
-def _compile_terms(terms: Sequence[str]) -> Optional["re.Pattern[str]"]:
-    """Word-boundary-anchored stem alternation over folded terms, longest first."""
+def _term_pattern_str(term: str, match_mode: str = "prefix") -> str:
+    prefix = r"\b" if re.match(r"\w", term[0]) else r"(?<!\w)"
+    if match_mode == "exact":
+        suffix = r"\b" if re.match(r"\w", term[-1]) else r"(?!\w)"
+    else:
+        suffix = ""
+    return prefix + re.escape(term) + suffix
+
+
+def _compile_terms(terms: Sequence[str], match_mode: str = "prefix") -> Optional["re.Pattern[str]"]:
+    """Word-boundary-anchored stem (or exact-word) alternation over folded terms, longest first."""
     folded = sorted({fold_accents(t) for t in terms if fold_accents(t)}, key=lambda t: (-len(t), t))
     if not folded:
         return None
-    return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in folded) + r")", re.IGNORECASE)
+    if match_mode == "prefix":
+        return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in folded) + r")", re.IGNORECASE)
+    return re.compile("(?:" + "|".join(_term_pattern_str(t, "exact") for t in folded) + ")", re.IGNORECASE)
 
 
-def _compile_term_patterns(terms: Sequence[str]) -> List["re.Pattern[str]"]:
-    """One word-boundary-anchored stem pattern per distinct folded term, longest first."""
+def _compile_term_patterns(terms: Sequence[str], match_mode: str = "prefix") -> List["re.Pattern[str]"]:
+    """One word-boundary-anchored stem (or exact-word) pattern per distinct folded term, longest first."""
     folded = sorted({fold_accents(t) for t in terms if fold_accents(t)}, key=lambda t: (-len(t), t))
-    return [re.compile(r"\b" + re.escape(t), re.IGNORECASE) for t in folded]
+    if match_mode == "prefix":
+        return [re.compile(r"\b" + re.escape(t), re.IGNORECASE) for t in folded]
+    return [re.compile(_term_pattern_str(t, "exact"), re.IGNORECASE) for t in folded]
 
 
 def _find_overlapping_spans(patterns: Sequence["re.Pattern[str]"], text: str) -> List[Tuple[int, int]]:
@@ -411,12 +474,14 @@ class AtlasEngine:
         for domain in self.domains:
             rule_id = domain["id"]
             roots = domain.get("roots_en", []) + domain.get("roots_es", [])
+            match_mode = domain.get("match_mode", "prefix")
             self.compiled_rules.append({
                 "id": rule_id,
                 "name": domain["name"],
                 "description": domain.get("description", ""),
-                "root_regex": _compile_terms(roots),
-                "root_patterns": _compile_term_patterns(roots),
+                "match_mode": match_mode,
+                "root_regex": _compile_terms(roots, match_mode),
+                "root_patterns": _compile_term_patterns(roots, match_mode),
                 "fence_regex": _compile_terms(domain.get("context_fences", [])),
                 "fence_patterns": _compile_term_patterns(domain.get("context_fences", [])),
                 "context_window": _parse_window(domain.get("context_window"), "context_window", rule_id),
@@ -504,6 +569,9 @@ class AtlasEngine:
         interviewer_prompt_patterns: Optional[List[str]] = None,
         root_dir: Optional[str] = None,
         tabular_options: Optional[Dict[str, Any]] = None,
+        include_evidence_types: Optional[Sequence[str]] = None,
+        notes_unit_level: str = "group",
+        group_by_source: bool = False,
     ) -> Dict[str, Any]:
         """
         Parse transcript and tabular files and generate verified frequency matrices.
@@ -512,14 +580,30 @@ class AtlasEngine:
         given, otherwise the canonical absolute path, so files sharing a basename in
         different folders never collide. tabular_options (text_col, id_col,
         speaker_col, allow_duplicate_ids) apply to .csv/.xlsx inputs.
+        include_evidence_types and notes_unit_level are passed to the parser and only
+        affect structured focus-group notes (.docx). group_by_source is passed to
+        process_turns: every input file is one analytical unit (Group mode).
+
+        Besides the process_turns keys, the result holds document_structures
+        ({source_id: "transcript" | "tabular" | "focus_group_notes"}), notes_metadata
+        (the parser's per-file notes metadata) and note_taker_themes_df: every
+        note-taker "Themes" row of the notes files, read by a separate parse so it is
+        reference only and never enters the coded turns, frequencies or quotes.
         """
         parser = UniversalTranscriptParser(
             facilitator_names=facilitator_names,
             interviewer_prompt_patterns=interviewer_prompt_patterns,
             root_dir=root_dir,
+            include_evidence_types=include_evidence_types,
+            notes_unit_level=notes_unit_level,
+        )
+        themes_parser = UniversalTranscriptParser(
+            root_dir=root_dir, include_evidence_types=(NOTES_THEMES_EVIDENCE_TYPE,),
         )
         all_turns: List[Dict[str, Any]] = []
+        theme_turns: List[Dict[str, Any]] = []
         file_hashes: Dict[str, str] = {}
+        document_structures: Dict[str, str] = {}
         seen_paths = set()
 
         for file_path in transcript_files:
@@ -538,21 +622,35 @@ class AtlasEngine:
             if source_id in file_hashes:
                 raise ValueError(f"Two inputs resolve to the same source_id {source_id!r}")
             file_hashes[source_id] = _sha256_file(file_path)
+            document_structures[source_id] = parser.last_document_structure
             all_turns.extend(turns)
+            if parser.last_document_structure == "focus_group_notes":
+                theme_turns.extend(themes_parser.parse_file(file_path, root_dir=root_dir))
 
-        return self.process_turns(all_turns, file_hashes)
+        results = self.process_turns(all_turns, file_hashes, group_by_source=group_by_source)
+        results["document_structures"] = document_structures
+        results["notes_metadata"] = dict(parser.last_document_metadata)
+        results["note_taker_themes_df"] = pd.DataFrame(theme_turns)
+        return results
 
     process_transcripts = process_corpus
 
-    def process_turns(self, turns: List[Dict[str, Any]], file_hashes: Dict[str, str]) -> Dict[str, Any]:
+    def process_turns(self, turns: List[Dict[str, Any]], file_hashes: Dict[str, str],
+                      group_by_source: bool = False) -> Dict[str, Any]:
         """
         Tag pre-parsed turns (e.g. from Streamlit uploads) against the compiled rules.
 
         file_hashes maps each turn's source_id to the SHA-256 of its source file.
         Prevalence denominators count distinct participant unit_ids (one per
-        transcript, one per tabular respondent row).
+        transcript, one per tabular respondent row). With group_by_source every
+        input file is one unit instead (unit_id = source_id, total_documents = number
+        of files); speakers are kept, so voices can still be counted per file.
         """
         file_hashes = dict(file_hashes)
+        if group_by_source:
+            turns = [
+                {**t, "unit_id": t.get("source_id") or t.get("document_name")} for t in turns
+            ]
         participant_turns = [t for t in turns if not t.get("is_facilitator", False)]
 
         tagged_records = []
@@ -601,13 +699,14 @@ class AtlasEngine:
                     "match_char_end": match_end,
                     "match_text": text[match_start:match_end],
                     "source_sha256": file_hashes[source_id],
+                    **{col: str(turn.get(col) or "") for col in NOTES_PROVENANCE_COLUMNS},
                 })
 
             record = dict(turn)
             record["matched_domains"] = matched_domains
             tagged_records.append(record)
 
-        all_unit_ids = self._analytical_units(turns, file_hashes)
+        all_unit_ids = set(file_hashes) if group_by_source else self._analytical_units(turns, file_hashes)
         total_docs = len(all_unit_ids)
 
         frequency_rows = []
@@ -701,12 +800,31 @@ class AtlasEngine:
         """
         Export verified matrices to open standard formats (CSV, Parquet, Excel)
         plus provenance_manifest.json.
+
+        verbatim_quotes_inventory.csv / .parquet hold verbatim words only. When the
+        coded evidence also holds paraphrased key points or note-taker observations
+        (structured focus-group notes), every coded row, labelled by evidence_type,
+        is also written to coded_evidence_inventory.csv / .parquet; otherwise the
+        outputs are exactly the v1.1 set, and any coded_evidence_inventory files an
+        earlier export left in output_dir are removed.
         """
         os.makedirs(output_dir, exist_ok=True)
 
+        quotes = results["quotes_df"]
         results["frequencies_df"].to_csv(os.path.join(output_dir, "thematic_frequencies.csv"), index=False)
-        results["quotes_df"].to_csv(os.path.join(output_dir, "verbatim_quotes_inventory.csv"), index=False)
-        results["quotes_df"].to_parquet(os.path.join(output_dir, "verbatim_quotes_inventory.parquet"), index=False)
+        verbatim = verbatim_only(quotes)
+        verbatim.to_csv(os.path.join(output_dir, "verbatim_quotes_inventory.csv"), index=False)
+        verbatim.to_parquet(os.path.join(output_dir, "verbatim_quotes_inventory.parquet"), index=False)
+        coded_paths = [os.path.join(output_dir, f"{CODED_EVIDENCE_EXPORT}{ext}") for ext in (".csv", ".parquet")]
+        if has_non_verbatim_evidence(quotes):
+            quotes.to_csv(coded_paths[0], index=False)
+            quotes.to_parquet(coded_paths[1], index=False)
+        else:
+            # A reused output directory must not keep a coded-evidence inventory from an
+            # earlier corpus; only these ATLAS-named files are removed.
+            for path in coded_paths:
+                if os.path.isfile(path):
+                    os.remove(path)
 
         manifest = self.build_manifest(results)
         self._export_excel(results, manifest, os.path.join(output_dir, "actuarial_parameter_matrix.xlsx"))
@@ -767,9 +885,15 @@ class AtlasEngine:
         for idx, width in enumerate(col_widths, 1):
             ws_summary.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = width
 
-        ws_quotes = wb.create_sheet(title="Verbatim Quotes & Provenance")
+        # Mixed evidence (paraphrases / observations) gets an evidence-labelled sheet so no
+        # summary is presented as a participant's verbatim statement.
+        mixed = has_non_verbatim_evidence(results["quotes_df"])
+        ws_quotes = wb.create_sheet(title="Coded Evidence & Provenance" if mixed else "Verbatim Quotes & Provenance")
         q_headers = ["Domain ID", "Source ID", "Unit ID", "Line", "Timestamp", "Speaker", "Match Start",
-                     "Match End", "Verbatim Statement", "Source File SHA-256"]
+                     "Match End", "Coded Entry Text (see Evidence Type)" if mixed else "Verbatim Statement",
+                     "Source File SHA-256"]
+        if mixed:
+            q_headers += ["Evidence Type", "Question"]
         for col_idx, h in enumerate(q_headers, 1):
             cell = ws_quotes.cell(row=1, column=col_idx, value=h)
             cell.fill = NAVY_FILL
@@ -784,6 +908,9 @@ class AtlasEngine:
                 str(r["timestamp"]), r["speaker"], int(r["match_char_start"]), int(r["match_char_end"]),
                 r["text"], r["source_sha256"],
             ]
+            if mixed:
+                evidence = str(r.get("evidence_type") or "")
+                values += [NOTES_EVIDENCE_LABELS.get(evidence, evidence), str(r.get("question_id") or "")]
             for col_idx, value in enumerate(values, 1):
                 cell = ws_quotes.cell(row=r_num, column=col_idx, value=value)
                 cell.font = FONT_BOLD if col_idx == 1 else FONT_BODY
@@ -883,3 +1010,550 @@ class AtlasEngine:
                 reasons.append(f"{label}: prevalence audit comment does not match the recomputed audit stamp")
 
         return (not reasons), reasons
+
+
+# ----------------------------------------------------------------------
+# Analyst codebook helpers (stacking, appending discovered topics,
+# false-alarm spot-check audit, and safe rule tightening)
+# ----------------------------------------------------------------------
+FALSE_ALARM_COLUMNS = [
+    "risk_level", "domain_id", "domain_name", "matched_span", "full_word",
+    "extension_words", "flag_codes", "flag_reason", "suggested_fix", "speaker", "source_id",
+    "line_number", "evidence_type", "match_char_start", "match_char_end", "text",
+]
+FALSE_ALARM_SUMMARY_COLUMNS = [
+    "Risk", "Domain", "Matched Span", "Full Word", "Flagged Matches", "Why Flagged", "Suggested Fix",
+]
+_AUDIT_TOKEN = re.compile(r"[A-Za-z0-9_]+(?:['\u2019][A-Za-z0-9_]+)?")
+_SIMPLE_LONG_INFLECTIONS = frozenset({"s", "es", "ed", "d", "ing", "er", "ers", "ly"})
+_NEGATION_CUES = frozenset({
+    "no", "not", "never", "neither", "nor", "none", "nothing", "nowhere", "without",
+    "hardly", "barely", "cannot", "cant", "can't", "dont", "don't", "didnt", "didn't",
+    "doesnt", "doesn't", "isnt", "isn't", "arent", "aren't", "wasnt", "wasn't",
+    "werent", "weren't", "wont", "won't", "wouldnt", "wouldn't", "couldnt", "couldn't",
+    "havent", "haven't", "hasnt", "hasn't", "hadnt", "hadn't",
+    "ningun", "ninguna", "nunca", "tampoco", "sin",
+})
+
+
+def _slugify_id(text: str) -> str:
+    folded = fold_accents(str(text or "")).lower()
+    return re.sub(r"[^a-z0-9]+", "_", folded).strip("_")
+
+
+def _codebook_project_name(codebook: Dict[str, Any], default: str = "Qualitative Policy Study") -> str:
+    meta = codebook.get("meta") if isinstance(codebook.get("meta"), dict) else {}
+    return str(
+        codebook.get("project")
+        or codebook.get("program_name")
+        or meta.get("project")
+        or default
+    )
+
+
+def _serialize_normalized_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    rule_id = str(rule["id"])
+    ctx_window = _parse_window(rule.get("context_window"), "context_window", rule_id)
+    excl_window = _parse_window(rule.get("exclude_window"), "exclude_window", rule_id)
+    out: Dict[str, Any] = {
+        "id": rule_id,
+        "name": str(rule["name"]),
+        "description": str(rule.get("description", "")),
+        "match_mode": _parse_match_mode(rule.get("match_mode"), "prefix", f"rule {rule_id!r}"),
+        "roots_en": list(rule.get("roots_en", [])),
+        "roots_es": list(rule.get("roots_es", [])),
+        "context_fences": list(rule.get("context_fences", [])),
+        "exclude_fences": list(rule.get("exclude_fences", [])),
+    }
+    if ctx_window is not None:
+        out["context_window"] = ctx_window
+    if excl_window is not None:
+        out["exclude_window"] = excl_window
+    return out
+
+
+def merge_codebook_dicts(
+    codebooks: Sequence[Tuple[str, Dict[str, Any]]],
+    project_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Combine one or more ATLAS codebooks (in any supported YAML schema) into a
+    single unified 'domains' codebook dict that compiles in AtlasEngine.
+
+    Preserves each rule's own match_mode, roots, fences, and windows, and
+    deterministically disambiguates colliding domain IDs or display names.
+    """
+    entries = list(codebooks or [])
+    if not entries:
+        raise ValueError("At least one codebook is required to merge.")
+
+    merged_domains: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    seen_names: set = set()
+    labels: List[str] = []
+
+    for idx, entry in enumerate(entries, 1):
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            raise ValueError(f"Codebook entry {idx} must be a (label, dict) pair.")
+        label, cb_dict = str(entry[0]), entry[1]
+        if not isinstance(cb_dict, dict):
+            raise ValueError(f"Codebook {label!r} must be a YAML mapping, got {type(cb_dict).__name__}")
+        labels.append(label)
+        slug = _slugify_id(Path(label).stem) or f"cb_{idx}"
+
+        for rule in normalize_codebook_rules(cb_dict):
+            ser = _serialize_normalized_rule(rule)
+            raw_id = ser["id"]
+            if raw_id in seen_ids:
+                candidate = f"{slug}__{raw_id}"
+                suffix = 2
+                while candidate in seen_ids:
+                    candidate = f"{slug}__{raw_id}_{suffix}"
+                    suffix += 1
+                ser["id"] = candidate
+            seen_ids.add(ser["id"])
+
+            raw_name = ser["name"]
+            if raw_name.strip().lower() in seen_names:
+                candidate_name = f"{raw_name} ({label})"
+                suffix = 2
+                while candidate_name.strip().lower() in seen_names:
+                    candidate_name = f"{raw_name} ({label} #{suffix})"
+                    suffix += 1
+                ser["name"] = candidate_name
+            seen_names.add(ser["name"].strip().lower())
+            merged_domains.append(ser)
+
+    if project_name and str(project_name).strip():
+        resolved_project = str(project_name).strip()
+    elif len(entries) == 1:
+        resolved_project = _codebook_project_name(entries[0][1])
+    else:
+        resolved_project = f"Combined Codebook ({len(entries)} packs, {len(merged_domains)} domains)"
+
+    return {
+        "project": resolved_project,
+        "version": "1.0",
+        "domains": merged_domains,
+    }
+
+
+def append_topic_to_codebook(
+    codebook_dict: Dict[str, Any],
+    topic: Dict[str, Any],
+    *,
+    domain_name: Optional[str] = None,
+    domain_id: Optional[str] = None,
+    match_mode: str = "exact",
+    terms: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Append one discovered topic as a new domain on top of an existing codebook,
+    preserving all existing domains and defaulting the added domain to exact
+    whole-word matching so short discovered terms do not trigger prefix collisions.
+    """
+    if not isinstance(codebook_dict, dict):
+        raise ValueError(f"codebook_dict must be a mapping, got {type(codebook_dict).__name__}")
+    if not isinstance(topic, dict):
+        raise ValueError(f"topic must be a mapping, got {type(topic).__name__}")
+    resolved_mode = _parse_match_mode(match_mode, "exact", "append_topic_to_codebook")
+
+    raw_terms = terms if terms is not None else topic.get("top_terms", [])
+    cleaned_terms: List[str] = []
+    seen_terms: set = set()
+    for term in _term_list(raw_terms):
+        key = fold_accents(term).lower()
+        if key and key not in seen_terms:
+            seen_terms.add(key)
+            cleaned_terms.append(term)
+    if not cleaned_terms:
+        raise ValueError("Cannot add a discovered theme with no non-empty terms.")
+
+    existing = [_serialize_normalized_rule(r) for r in normalize_codebook_rules(codebook_dict)]
+    seen_ids = {r["id"] for r in existing}
+    seen_names = {r["name"].strip().lower() for r in existing}
+
+    topic_label = str(topic.get("label") or "").strip()
+    topic_num = topic.get("topic_id", len(existing) + 1)
+    base_name = str(domain_name or "").strip() or f"Discovered: {topic_label or f'Topic {topic_num}'}"
+    resolved_name = base_name
+    name_idx = 2
+    while resolved_name.strip().lower() in seen_names:
+        resolved_name = f"{base_name} ({name_idx})"
+        name_idx += 1
+
+    if domain_id is not None and str(domain_id).strip():
+        base_id = _slugify_id(domain_id)
+        if not base_id:
+            raise ValueError(f"domain_id {domain_id!r} must contain at least one ASCII letter or digit.")
+    else:
+        slug = _slugify_id(resolved_name)
+        base_id = f"discovered_{slug}" if slug else f"discovered_topic_{topic_num}"
+    resolved_id = base_id
+    id_idx = 2
+    while resolved_id in seen_ids:
+        resolved_id = f"{base_id}_{id_idx}"
+        id_idx += 1
+
+    existing.append({
+        "id": resolved_id,
+        "name": resolved_name,
+        "description": (
+            f"Added from offline topic discovery ({resolved_mode} matching); "
+            "review and refine fences as needed."
+        ),
+        "match_mode": resolved_mode,
+        "roots_en": cleaned_terms,
+        "roots_es": [],
+        "context_fences": [],
+        "exclude_fences": [],
+    })
+
+    return {
+        "project": _codebook_project_name(codebook_dict),
+        "version": str(codebook_dict.get("version") or "1.0"),
+        "domains": existing,
+    }
+
+
+def tighten_codebook_domain(
+    codebook_dict: Dict[str, Any],
+    domain_id: str,
+    *,
+    add_exclude_terms: Sequence[str] = (),
+    set_exact_mode: bool = False,
+) -> Dict[str, Any]:
+    """
+    Tighten a single domain in a codebook by adding exclusion terms and/or
+    switching it to exact whole-word matching. Preserves existing nonzero
+    exclude_window settings; defaults to exclude_window=0 only when adding the
+    domain's first exclusion terms so word-level exclusions do not suppress real
+    mentions elsewhere in the same turn.
+    """
+    if not isinstance(codebook_dict, dict):
+        raise ValueError(f"codebook_dict must be a mapping, got {type(codebook_dict).__name__}")
+    extra_excludes = _term_list(add_exclude_terms)
+    if not extra_excludes and not set_exact_mode:
+        raise ValueError("Provide at least one exclusion term or set_exact_mode=True.")
+
+    rules = [_serialize_normalized_rule(r) for r in normalize_codebook_rules(codebook_dict)]
+    target = next((r for r in rules if r["id"] == str(domain_id)), None)
+    if target is None:
+        raise ValueError(f"Domain id {domain_id!r} not found in codebook.")
+
+    if set_exact_mode:
+        target["match_mode"] = "exact"
+    if extra_excludes:
+        had_excludes = bool(target["exclude_fences"])
+        existing_lower = {fold_accents(t).lower() for t in target["exclude_fences"]}
+        for term in extra_excludes:
+            key = fold_accents(term).lower()
+            if key and key not in existing_lower:
+                existing_lower.add(key)
+                target["exclude_fences"].append(term)
+        if not had_excludes and "exclude_window" not in target:
+            target["exclude_window"] = 0
+
+    return {
+        "project": _codebook_project_name(codebook_dict),
+        "version": str(codebook_dict.get("version") or "1.0"),
+        "domains": rules,
+    }
+
+
+def _is_word_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_" or unicodedata.category(ch) == "Mn"
+
+
+def _is_benign_inflection(folded_span: str, tail: str, short_root_max_len: int) -> bool:
+    if not tail:
+        return True
+    if len(folded_span) <= short_root_max_len:
+        if tail == "s":
+            return True
+        if tail == "es" and folded_span.endswith(("s", "x", "z", "ch", "sh")):
+            return True
+        return False
+    return tail in _SIMPLE_LONG_INFLECTIONS
+
+
+def _compile_audit_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    rule_id = str(rule.get("id", ""))
+    match_mode = _parse_match_mode(rule.get("match_mode"), "prefix", f"rule {rule_id!r}")
+    if "root_patterns" in rule:
+        root_patterns = list(rule.get("root_patterns") or [])
+        fence_patterns = list(rule.get("fence_patterns") or [])
+        exclude_patterns = list(rule.get("exclude_patterns") or [])
+    else:
+        roots = list(rule.get("roots_en") or []) + list(rule.get("roots_es") or [])
+        root_patterns = _compile_term_patterns(roots, match_mode)
+        fence_patterns = _compile_term_patterns(rule.get("context_fences") or [])
+        exclude_patterns = _compile_term_patterns(rule.get("exclude_fences") or [])
+    return {
+        "id": rule_id,
+        "match_mode": match_mode,
+        "root_patterns": root_patterns,
+        "fence_patterns": fence_patterns,
+        "context_window": _parse_window(rule.get("context_window"), "context_window", rule_id),
+        "exclude_patterns": exclude_patterns,
+        "exclude_window": _parse_window(rule.get("exclude_window"), "exclude_window", rule_id),
+        "has_context": bool(fence_patterns or rule.get("context_fences") or rule.get("fence_regex")),
+        "has_exclude": bool(exclude_patterns or rule.get("exclude_fences") or rule.get("exclude_regex")),
+    }
+
+
+def _qualifying_non_overlapping_spans(
+    compiled_rule: Dict[str, Any],
+    text: str,
+    folded_text: str,
+    idx_map: Sequence[int],
+) -> List[Tuple[int, int]]:
+    if not compiled_rule["root_patterns"]:
+        return []
+    roots = _find_overlapping_spans(compiled_rule["root_patterns"], folded_text)
+    if not roots:
+        return []
+    has_fences, fence_window = bool(compiled_rule["fence_patterns"]), compiled_rule["context_window"]
+    fences = _find_overlapping_spans(compiled_rule["fence_patterns"], folded_text)
+    if has_fences and not fences:
+        return []
+    excl_window = compiled_rule["exclude_window"]
+    excludes = _find_overlapping_spans(compiled_rule["exclude_patterns"], folded_text)
+    if excludes and excl_window is None:
+        return []
+
+    token_starts = [m.start() for m in _TOKEN.finditer(folded_text)]
+    fence_toks = [AtlasEngine._token_interval(token_starts, s, e) for s, e in fences]
+    excl_toks = [AtlasEngine._token_interval(token_starts, s, e) for s, e in excludes]
+
+    qualifying: List[Tuple[int, int]] = []
+    for r_start, r_end in roots:
+        r_tok = AtlasEngine._token_interval(token_starts, r_start, r_end)
+        if has_fences and fence_window is not None:
+            if not any(AtlasEngine._interval_gap(r_tok, f_tok) <= fence_window for f_tok in fence_toks):
+                continue
+        if excl_window is not None and any(AtlasEngine._interval_gap(r_tok, x_tok) <= excl_window for x_tok in excl_toks):
+            continue
+        qualifying.append((r_start, r_end))
+
+    non_overlapping: List[Tuple[int, int]] = []
+    covered_to = -1
+    for f_s, f_e in qualifying:
+        if f_s >= covered_to:
+            non_overlapping.append(folded_span_to_original(text, idx_map, f_s, f_e))
+            covered_to = f_e
+    return non_overlapping
+
+
+def audit_false_alarm_risks(
+    quotes_df: pd.DataFrame,
+    rules: Sequence[Dict[str, Any]],
+    *,
+    short_root_max_len: int = 4,
+    negation_window: int = 5,
+) -> pd.DataFrame:
+    """
+    Inspect matched quotes against active codebook rules (1 audit row per flagged
+    match row, so len(audit_df) <= len(quotes_df)) and flag common false-alarm patterns:
+      1. prefix_extension (High): any qualifying span in the turn is only the prefix
+         of a different longer word (e.g. 'car' inside 'card' or 'career'), excluding
+         simple plurals and routine inflections on 5+ character stems.
+      2. negation_nearby (Medium): a negation cue ('not', 'never', 'didn't', 'no',
+         'without', ...) appears within +/- negation_window tokens of a qualifying span.
+      3. short_unfenced_root (Medium): a single-word <=4-character stem matched
+         under prefix mode in a rule with neither context_fences nor exclude_fences.
+    """
+    if quotes_df is None or len(quotes_df) == 0:
+        return pd.DataFrame(columns=FALSE_ALARM_COLUMNS)
+
+    compiled_by_id = {
+        str(r["id"]): _compile_audit_rule(r)
+        for r in (rules or [])
+        if isinstance(r, dict) and "id" in r
+    }
+    flagged_rows: List[Dict[str, Any]] = []
+
+    for _, row in quotes_df.iterrows():
+        text = str(row.get("text", ""))
+        domain_id = str(row.get("domain_id", ""))
+        domain_name = str(row.get("domain_name", domain_id))
+        try:
+            row_start = max(0, min(len(text), int(row.get("match_char_start", 0))))
+            row_end = max(row_start, min(len(text), int(row.get("match_char_end", row_start))))
+        except (TypeError, ValueError):
+            row_start, row_end = 0, 0
+
+        folded_text, idx_map = fold_accents_with_map(text)
+        compiled_rule = compiled_by_id.get(domain_id)
+        spans = (
+            _qualifying_non_overlapping_spans(compiled_rule, text, folded_text, idx_map)
+            if compiled_rule is not None
+            else []
+        )
+        if not spans:
+            spans = [(row_start, row_end)]
+
+        ext_entries: List[Tuple[int, int, str, str]] = []
+        ext_words_ordered: List[str] = []
+        ext_words_seen: set = set()
+        short_span_entry: Optional[Tuple[int, int, str, str]] = None
+        nearest_neg: Optional[Tuple[int, str, int, int, str, str]] = None
+
+        toks = list(_AUDIT_TOKEN.finditer(folded_text))
+        rule_mode = compiled_rule["match_mode"] if compiled_rule else "prefix"
+        has_context = compiled_rule["has_context"] if compiled_rule else False
+        has_exclude = compiled_rule["has_exclude"] if compiled_rule else False
+
+        for s, e in spans:
+            matched_span = text[s:e] if e > s else str(row.get("match_text", ""))
+            w_start, w_end = s, e
+            while w_start > 0 and _is_word_char(text[w_start - 1]):
+                w_start -= 1
+            while w_end < len(text) and _is_word_char(text[w_end]):
+                w_end += 1
+            full_word = text[w_start:w_end] if w_end > w_start else matched_span
+            folded_span = fold_accents(matched_span).lower()
+            tail = fold_accents(text[e:w_end]).lower() if w_end > e else ""
+            head_ext = w_start < s
+
+            if (w_end > e and not _is_benign_inflection(folded_span, tail, short_root_max_len)) or head_ext:
+                ext_entries.append((s, e, matched_span, full_word))
+                w_key = full_word.strip().lower()
+                if w_key and w_key not in ext_words_seen:
+                    ext_words_seen.add(w_key)
+                    ext_words_ordered.append(full_word.strip())
+
+            if (
+                short_span_entry is None
+                and rule_mode == "prefix"
+                and not has_context
+                and not has_exclude
+                and 0 < len(folded_span) <= short_root_max_len
+                and " " not in folded_span
+            ):
+                short_span_entry = (s, e, matched_span, full_word)
+
+            if toks:
+                f_start = bisect.bisect_left(idx_map, s)
+                f_end = bisect.bisect_left(idx_map, e)
+                overlap = [
+                    i for i, m in enumerate(toks)
+                    if m.end() > f_start and m.start() < max(f_end, f_start + 1)
+                ]
+                if overlap:
+                    first_t, last_t = overlap[0], overlap[-1]
+                    lo = max(0, first_t - negation_window)
+                    hi = min(len(toks), last_t + 1 + negation_window)
+                    for i in range(lo, hi):
+                        if first_t <= i <= last_t:
+                            continue
+                        if toks[i].group(0).replace("\u2019", "'").lower() in _NEGATION_CUES:
+                            dist = min(abs(i - first_t), abs(i - last_t))
+                            if nearest_neg is None or dist < nearest_neg[0]:
+                                nearest_neg = (dist, toks[i].group(0), s, e, matched_span, full_word)
+
+        codes: List[str] = []
+        reasons: List[str] = []
+        fixes: List[str] = []
+
+        if ext_entries:
+            codes.append("prefix_extension")
+            quoted_words = ", ".join(f"'{w}'" for w in ext_words_ordered)
+            reasons.append(f"Prefix extension ('{ext_entries[0][2]}' inside {quoted_words})")
+            excl_hint = ", ".join(f"'{w.lower()}'" for w in ext_words_ordered)
+            excl_win = compiled_rule["exclude_window"] if compiled_rule else None
+            if (not has_exclude and excl_win is None) or excl_win == 0:
+                fixes.append(
+                    f"Add {excl_hint} to exclude_fences (window 0) or switch domain to match_mode: exact"
+                )
+            elif excl_win is not None:
+                fixes.append(
+                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
+                    f"(preserves {excl_win}-token window)"
+                )
+            else:
+                fixes.append(
+                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
+                    "(preserves turn-level window)"
+                )
+        if nearest_neg is not None:
+            codes.append("negation_nearby")
+            reasons.append(f"Nearby negation ('{nearest_neg[1]}')")
+            fixes.append("Check meaning in context; add a negation phrase to exclude_fences if this should not count")
+        if short_span_entry is not None:
+            codes.append("short_unfenced_root")
+            reasons.append(f"Short unfenced prefix root ('{short_span_entry[2]}')")
+            if "prefix_extension" not in codes:
+                fixes.append("Add exclude_fences or switch domain to match_mode: exact to prevent prefix drift")
+
+        if not codes:
+            continue
+
+        if ext_entries:
+            focus_s, focus_e, focus_span, focus_word = ext_entries[0]
+        elif nearest_neg is not None:
+            _, _, focus_s, focus_e, focus_span, focus_word = nearest_neg
+        else:
+            focus_s, focus_e, focus_span, focus_word = short_span_entry
+
+        risk_level = "High" if "prefix_extension" in codes else "Medium"
+        flagged_rows.append({
+            "risk_level": risk_level,
+            "domain_id": domain_id,
+            "domain_name": domain_name,
+            "matched_span": focus_span,
+            "full_word": focus_word,
+            "extension_words": ", ".join(w.lower() for w in ext_words_ordered),
+            "flag_codes": ",".join(codes),
+            "flag_reason": "; ".join(reasons),
+            "suggested_fix": "; ".join(fixes),
+            "speaker": str(row.get("speaker", "")),
+            "source_id": str(row.get("source_id", "")),
+            "line_number": row.get("line_number", ""),
+            "evidence_type": str(row.get("evidence_type", "")),
+            "match_char_start": focus_s,
+            "match_char_end": focus_e,
+            "text": text,
+        })
+
+    if not flagged_rows:
+        return pd.DataFrame(columns=FALSE_ALARM_COLUMNS)
+
+    df = pd.DataFrame(flagged_rows, columns=FALSE_ALARM_COLUMNS)
+    df["_risk_ord"] = df["risk_level"].map({"High": 0, "Medium": 1}).fillna(2)
+    df = df.sort_values(
+        ["_risk_ord", "domain_name", "source_id", "line_number", "match_char_start"],
+        kind="mergesort",
+    ).drop(columns=["_risk_ord"]).reset_index(drop=True)
+    return df
+
+
+def summarize_false_alarm_risks(audit_df: pd.DataFrame) -> pd.DataFrame:
+    """Group individual false-alarm flags by pattern for fast analyst review."""
+    if audit_df is None or len(audit_df) == 0:
+        return pd.DataFrame(columns=FALSE_ALARM_SUMMARY_COLUMNS)
+
+    grouped = (
+        audit_df.groupby(
+            ["risk_level", "domain_name", "matched_span", "full_word", "flag_reason", "suggested_fix"],
+            dropna=False,
+            as_index=False,
+        )
+        .size()
+        .rename(columns={
+            "risk_level": "Risk",
+            "domain_name": "Domain",
+            "matched_span": "Matched Span",
+            "full_word": "Full Word",
+            "size": "Flagged Matches",
+            "flag_reason": "Why Flagged",
+            "suggested_fix": "Suggested Fix",
+        })
+    )
+    grouped["_risk_ord"] = grouped["Risk"].map({"High": 0, "Medium": 1}).fillna(2)
+    grouped = grouped.sort_values(
+        ["_risk_ord", "Flagged Matches", "Domain", "Full Word"],
+        ascending=[True, False, True, True],
+        kind="mergesort",
+    ).drop(columns=["_risk_ord"]).reset_index(drop=True)
+    return grouped[FALSE_ALARM_SUMMARY_COLUMNS]

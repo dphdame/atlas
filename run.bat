@@ -95,7 +95,7 @@ if "%CHECK_ONLY%"=="1" goto check_only_done
 echo --^> Launching ATLAS Desktop Interface in your browser...
 echo --^> Close this command prompt window to stop the application.
 echo ==================================================================
-"%VENV_PY%" -m streamlit run app.py --server.headless=false --browser.serverAddress=localhost --browser.gatherUsageStats=false
+"%VENV_PY%" -m streamlit run app.py --server.headless=false --server.address=localhost --browser.serverAddress=localhost --browser.gatherUsageStats=false
 set "RC=%ERRORLEVEL%"
 pause
 exit /b %RC%

@@ -1,0 +1,174 @@
+# ATLAS Starter Codebook: Guaranteed Basic Income & Cash-Assistance Focus Groups
+# Generic, public-safe starter domains for coding focus-group notes about recurring
+# cash assistance. Roots are word-start prefixes ("evict" also matches "eviction").
+# Exclusion fences with exclude_window: 0 drop only a root occurrence that shares a
+# token with the fence ("car" inside "card", "bill" inside "billion"); the rest of
+# the turn is still coded. Adapt roots and fences to each study before use.
+project: "Guaranteed Basic Income Focus Groups (Starter Codebook)"
+version: "1.0"
+
+domains:
+  - id: "housing_rent_stability"
+    name: "Housing & Rent Stability"
+    description: "Paying rent, keeping housing, deposits, moves, eviction risk and landlord relations"
+    roots_en:
+      - "rent"
+      - "housing"
+      - "landlord"
+      - "evict"
+      - "mortgage"
+      - "security deposit"
+      - "apartment"
+      - "homeless"
+      - "utilities"
+    exclude_fences:
+      - "parent"
+      - "parents"
+      - "current"
+      - "currently"
+      - "different"
+    exclude_window: 0
+
+  - id: "food_groceries_basic_needs"
+    name: "Food, Groceries & Basic Needs"
+    description: "Buying groceries and meals, food pantries, diapers, clothing and household essentials"
+    roots_en:
+      - "food"
+      - "grocer"
+      - "meal"
+      - "pantry"
+      - "diaper"
+      - "clothes"
+      - "clothing"
+      - "toiletries"
+      - "basic needs"
+      - "essentials"
+    exclude_fences:
+      - "foodie"
+    exclude_window: 0
+
+  - id: "debt_financial_breathing_room"
+    name: "Debt, Bills & Financial Cushion"
+    description: "Paying bills and debts, late fees, savings, emergency funds and a financial cushion"
+    roots_en:
+      - "bill"
+      - "debt"
+      - "loan"
+      - "late fee"
+      - "overdraft"
+      - "saving"
+      - "emergency fund"
+      - "cushion"
+      - "breathing room"
+      - "credit score"
+    exclude_fences:
+      - "billion"
+      - "billions"
+      - "billboard"
+      - "debtor"
+      - "debtors"
+    exclude_window: 0
+
+  - id: "employment_education_career"
+    name: "Employment, Education & Career Goals"
+    description: "Work hours, job search, training, school, certificates and longer-term career plans"
+    roots_en:
+      - "job"
+      - "employ"
+      - "career"
+      - "shift"
+      - "hours at work"
+      - "paycheck"
+      - "school"
+      - "class"
+      - "training"
+      - "certificate"
+      - "degree"
+      - "business"
+
+  - id: "transportation_mobility"
+    name: "Transportation & Mobility"
+    description: "Cars, repairs, gas, transit fares, rides and trips to offices or appointments"
+    roots_en:
+      - "car"
+      - "bus"
+      - "transit"
+      - "gas"
+      - "ride"
+      - "commute"
+      - "parking"
+      - "trip"
+      - "repair"
+    exclude_fences:
+      - "card"
+      - "cards"
+      - "career"
+      - "careers"
+      - "care"
+      - "careful"
+      - "cargo"
+      - "carbon"
+      - "business"
+      - "busy"
+      - "gasp"
+      - "triple"
+    exclude_window: 0
+
+  - id: "family_caregiving_wellbeing"
+    name: "Family, Childcare & Caregiving"
+    description: "Children, childcare costs, caring for relatives and time with family"
+    roots_en:
+      - "childcare"
+      - "child care"
+      - "daycare"
+      - "babysit"
+      - "caregiv"
+      - "child"
+      - "kid"
+      - "family"
+      - "famil"
+      - "parent"
+    exclude_fences:
+      - "kidney"
+    exclude_window: 0
+
+  - id: "stress_relief_mental_health"
+    name: "Stress Relief, Autonomy & Mental Health"
+    description: "Stress, worry, sleep, relief, frustration, dignity and the freedom to choose how to spend"
+    roots_en:
+      - "stress"
+      - "anxi"
+      - "worr"
+      - "sleep"
+      - "relief"
+      - "relieved"
+      - "peace of mind"
+      - "mental health"
+      - "frustrat"
+      - "dignity"
+      - "freedom"
+      - "autonomy"
+
+  - id: "program_enrollment_paperwork"
+    name: "Program Enrollment, Paperwork & Communication"
+    description: "Enrollment forms, proof of income, office visits, waiting for approval, callbacks and reminders"
+    roots_en:
+      - "paperwork"
+      - "form"
+      - "proof of income"
+      - "enroll"
+      - "application"
+      - "office"
+      - "approv"
+      - "callback"
+      - "call"
+      - "waiting"
+      - "checklist"
+      - "reminder"
+      - "mailbox"
+    exclude_fences:
+      - "format"
+      - "formal"
+      - "former"
+      - "formula"
+    exclude_window: 0

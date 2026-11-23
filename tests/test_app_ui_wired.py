@@ -75,6 +75,7 @@ SAMPLES_DIR = REPO_ROOT / "data" / "samples"
 
 CORPUS_LABEL = "Corpus Dataset"
 CODEBOOK_LABEL = "Active YAML Codebook"
+RUN_LABEL = "▶ Run Analysis"
 
 BILINGUAL_FILES = [
     SAMPLES_DIR / "software_test_bilingual_interview.txt",
@@ -227,6 +228,12 @@ def select(at, label, value):
     return at
 
 
+def run_analysis(at):
+    find_widget(at, "button", RUN_LABEL).click()
+    at.run()
+    return at
+
+
 def topic_count_control(at):
     for accessor in ("slider", "number_input"):
         for widget in getattr(at, accessor):
@@ -320,12 +327,19 @@ class TestCleanBootAndOfflineAssets(unittest.TestCase):
             for stale in ("No frequency data found", "No quote inventory found"):
                 self.assertNotIn(stale, str(w.value), "app still depends on absent ../ datasets")
 
-    def test_software_test_notice_when_sample_fixture_active(self):
+    def test_clean_upload_onboarding_and_no_software_test_ui_jargon(self):
+        # Owner-approved v1.2 UI contract: opens on Upload Custom Files with a manual
+        # Run Analysis button and keeps internal SOFTWARE_TEST fixture labels out of the UI.
         corpus = find_widget(self.at, "selectbox", CORPUS_LABEL)
-        self.assertIn("SOFTWARE_TEST", str(corpus.value),
-                      "default corpus must be a built-in SOFTWARE_TEST sample fixture")
-        notices = [t for t in raw_display_texts(self.at) if "SOFTWARE_TEST" in t]
-        self.assertTrue(notices, "no rendered (non-widget) element carries a SOFTWARE_TEST notice")
+        self.assertIn("Upload", str(corpus.value),
+                      "default corpus should open on Upload Custom Files")
+        self.assertEqual(find_widget(self.at, "selectbox", CODEBOOK_LABEL).value, "gbi_focus_group_starter.yaml")
+        self.assertIsNotNone(find_widget(self.at, "button", RUN_LABEL))
+        self.assertEqual(len(self.at.metric), 0, "analysis should wait until Run Analysis is clicked")
+        for opt in corpus.options:
+            self.assertNotIn("SOFTWARE_TEST", str(opt), f"internal test label leaked into dropdown: {opt!r}")
+        for t in raw_display_texts(self.at):
+            self.assertNotIn("SOFTWARE_TEST", t, f"internal test label leaked into UI: {t[:120]!r}")
 
     def test_no_external_image_urls(self):
         for node in walk(self.at._tree):
@@ -354,6 +368,7 @@ class TestDynamicCodebookSwitching(unittest.TestCase):
 
     def _run_with(self, at, codebook):
         select(at, CODEBOOK_LABEL, codebook)
+        run_analysis(at)
         assert_no_exceptions(self, at, f"codebook {codebook}")
         self.assertEqual(find_widget(at, "selectbox", CODEBOOK_LABEL).value, codebook)
         return at
@@ -425,8 +440,9 @@ class TestDynamicCorpusSwitching(unittest.TestCase):
     def _load(self, at, needle, codebook=CODEBOOK_A):
         select(at, CORPUS_LABEL, option_containing(find_widget(at, "selectbox", CORPUS_LABEL), needle))
         select(at, CODEBOOK_LABEL, codebook)
+        run_analysis(at)
         assert_no_exceptions(self, at, f"corpus {needle}")
-        self.assertIn("SOFTWARE_TEST", str(find_widget(at, "selectbox", CORPUS_LABEL).value))
+        self.assertNotIn("SOFTWARE_TEST", str(find_widget(at, "selectbox", CORPUS_LABEL).value))
         return at
 
     def test_switching_corpus_updates_counts_quotes_and_medoids(self):
@@ -443,7 +459,7 @@ class TestDynamicCorpusSwitching(unittest.TestCase):
         for topic in topics_bil:
             if topic["medoid_text"]:
                 self.assertIn(topic["medoid_text"], text_bil, f"bilingual medoid of topic {topic['topic_id']} not rendered")
-        self.assertTrue(any("SOFTWARE_TEST" in t for t in raw_display_texts(at)))
+        self.assertFalse(any("SOFTWARE_TEST FIXTURE ACTIVE" in t for t in raw_display_texts(at)))
 
         self._load(at, "Survey")
         _, res_sur = engine_results(CODEBOOK_A, SURVEY_FILES, SURVEY_OPTIONS)
@@ -524,6 +540,7 @@ class TestUploadedTableTextColumnDetection(unittest.TestCase):
         uploaders[0].set_value((UPLOAD_NAME, payload, "text/csv"))
         at.run()
         select(at, CODEBOOK_LABEL, CODEBOOK_A)
+        run_analysis(at)
         assert_no_exceptions(self, at, f"uploaded table {ctx}")
 
         for box in at.selectbox:

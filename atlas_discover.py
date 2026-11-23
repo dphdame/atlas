@@ -2,7 +2,8 @@
 ATLAS Discover
 Deterministic, fully offline Phase-1 topic discovery for qualitative corpora.
 
-Fits a bag-of-words Latent Dirichlet Allocation model (scikit-learn) over
+Fits a TF-IDF + Non-Negative Matrix Factorization (NMF, default) or classic
+bag-of-words Latent Dirichlet Allocation (LDA) model (scikit-learn) over
 participant turns, assigns each turn to its dominant topic, picks a TF-IDF
 cosine medoid turn per topic, and converts the discovered topics into an ATLAS
 YAML codebook draft that compiles directly in AtlasEngine. Stopwords are
@@ -13,12 +14,16 @@ rename and fence; they are not findings.
 """
 
 import unicodedata
+import warnings
 from typing import Any, Dict, List, Sequence, Union
 
 import numpy as np
-from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.decomposition import LatentDirichletAllocation, NMF
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+DISCOVERY_METHODS = ("nmf", "lda")
+_DENSE_NMF_CELL_LIMIT = 4_000_000
 
 EN_STOPWORDS = frozenset("""
 a about above after again against all also am an and any are aren as at be because been before being below
@@ -47,8 +52,8 @@ EN_ES_STOPWORDS = EN_STOPWORDS | ES_STOPWORDS
 _STOP_LIST = sorted(EN_ES_STOPWORDS)
 
 
-def _empty_result() -> Dict[str, Any]:
-    return {"topics": [], "n_analyzed": 0, "doc_topics": [], "assignments": []}
+def _empty_result(method: str = "nmf") -> Dict[str, Any]:
+    return {"method": method, "topics": [], "n_analyzed": 0, "doc_topics": [], "assignments": []}
 
 
 def _turn_records(turns: Sequence[Union[Dict[str, Any], str]]) -> List[Dict[str, Any]]:
@@ -82,24 +87,65 @@ def _tie_key(record: Dict[str, Any]):
     return (1, 0, str(turn_id), record["index"])
 
 
+def _fit_nmf_stable(matrix, k: int, random_state: int):
+    """Fit NMF without sparse Frobenius-norm cancellation warnings.
+
+    In scikit-learn's sparse `_beta_divergence(beta=2)`, `(||X||^2 + ||WH||^2 - 2<X,WH>)/2`
+    can round to `-1e-16` on exact-rank fits and trigger `np.sqrt(res * 2)` RuntimeWarning.
+    Dense inputs compute `squared_norm(X - W @ H) / 2` (strictly non-negative).
+    """
+    use_dense = (matrix.shape[0] * matrix.shape[1]) <= _DENSE_NMF_CELL_LIMIT
+    nmf_input = matrix.toarray() if use_dense else matrix
+    nmf_init = "nndsvda" if k <= min(nmf_input.shape[0], nmf_input.shape[1]) else "random"
+
+    def _run(init_mode: str):
+        model = NMF(n_components=k, init=init_mode, max_iter=400, random_state=random_state)
+        if use_dense:
+            doc_topic = model.fit_transform(nmf_input)
+        else:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"invalid value encountered in sqrt",
+                    category=RuntimeWarning,
+                    module=r"sklearn\.decomposition\._nmf",
+                )
+                doc_topic = model.fit_transform(nmf_input)
+        return doc_topic, model.components_
+
+    doc_topic, components = _run(nmf_init)
+    if not (np.all(np.isfinite(doc_topic)) and np.all(np.isfinite(components))):
+        doc_topic, components = _run("random")
+    return doc_topic, components
+
+
 def discover_topics(
     turns: Sequence[Union[Dict[str, Any], str]],
     n_topics: int = 5,
     n_top_words: int = 8,
     random_state: int = 42,
+    method: str = "nmf",
 ) -> Dict[str, Any]:
     """
     Discover latent topics over participant turns.
 
     turns: list of turn dicts (facilitator turns, is_facilitator=True, are dropped)
     or list of plain strings. Empty texts and texts with no tokens after stopword
-    filtering are not analyzed. The topic count is clamped to [1, n_valid_docs].
+    filtering are not analyzed. Effective topic count is clamped to the supported
+    unique-pattern and vocabulary ceiling in [1, n_valid_docs], and empty or
+    ownerless components are dropped so topics stay supported with exclusive top terms.
+    method: "nmf" (default: TF-IDF 1-2 grams with sublinear TF + NMF) or "lda"
+    (classic CountVectorizer + LatentDirichletAllocation).
 
-    Returns {"topics": [...], "n_analyzed": int, "doc_topics": [[...], ...],
+    Returns {"method": str, "topics": [...], "n_analyzed": int, "doc_topics": [[...], ...],
     "assignments": [...]}; each topic carries topic_id, label, top_terms,
     turn_count, share_pct and its TF-IDF cosine medoid turn (medoid_text,
     medoid_turn_id, medoid_speaker, medoid_unit_id, medoid_similarity).
     """
+    method_key = str(method).strip().lower()
+    if method_key not in DISCOVERY_METHODS:
+        raise ValueError(f"Unsupported discovery method {method!r}; expected one of {DISCOVERY_METHODS}")
+
     records = _turn_records(turns)
     analyzer = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST).build_analyzer()
 
@@ -112,38 +158,86 @@ def discover_topics(
             continue
         valid.append(dict(rec, normalized=normalized))
     if not valid:
-        return _empty_result()
+        return _empty_result(method_key)
 
     docs = [rec["normalized"] for rec in valid]
-    k = min(max(1, int(n_topics)), len(docs))
+    requested_k = max(1, int(n_topics))
     n_top_words = max(1, int(n_top_words))
 
-    counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
-    counts = counter.fit_transform(docs)
-    vocab = counter.get_feature_names_out()
-    if len(vocab) == 0:
-        return _empty_result()
+    if method_key == "nmf":
+        vec = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True, stop_words=_STOP_LIST, min_df=1, max_features=2000)
+        matrix = vec.fit_transform(docs)
+        vocab = vec.get_feature_names_out()
+        if len(vocab) == 0:
+            return _empty_result(method_key)
+        unique_patterns = len({
+            (tuple(matrix[i].indices), tuple(np.round(matrix[i].data, 12)))
+            for i in range(matrix.shape[0])
+        })
+        k = min(requested_k, len(docs), len(vocab), max(1, unique_patterns))
+        corpus_weights = np.asarray(matrix.sum(axis=0)).ravel()
+        if k == 1:
+            doc_topic = np.ones((len(docs), 1), dtype=float)
+            components = corpus_weights.reshape(1, -1)
+        else:
+            doc_topic, components = _fit_nmf_stable(matrix, k, random_state)
+    else:
+        counter = CountVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1, max_features=2000)
+        counts = counter.fit_transform(docs)
+        vocab = counter.get_feature_names_out()
+        if len(vocab) == 0:
+            return _empty_result(method_key)
+        unique_patterns = len({
+            (tuple(counts[i].indices), tuple(counts[i].data))
+            for i in range(counts.shape[0])
+        })
+        k = min(requested_k, len(docs), len(vocab), max(1, unique_patterns))
+        corpus_weights = np.asarray(counts.sum(axis=0)).ravel()
+        if k == 1:
+            doc_topic = np.ones((len(docs), 1), dtype=float)
+            components = corpus_weights.reshape(1, -1)
+        else:
+            lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
+            doc_topic = lda.fit_transform(counts)
+            components = lda.components_
 
-    lda = LatentDirichletAllocation(n_components=k, max_iter=25, random_state=random_state)
-    doc_topic = lda.fit_transform(counts)
-    components = lda.components_
+    # Cross-topic deduplication: each term belongs to the single component with
+    # the highest positive weight. Drop ownerless or zero-member components so
+    # degenerate corpora never emit empty or duplicate domains.
+    raw_owner = np.argmax(components, axis=0)
+    term_supported = [
+        t for t in range(k)
+        if any(raw_owner[j] == t and components[t, j] > 0 for j in range(len(vocab)))
+    ]
 
-    # Cross-topic deduplication: each term belongs to the topic where its weight is highest.
-    owner = np.argmax(components, axis=0)
-    top_terms: List[List[str]] = []
-    for t in range(k):
-        owned = [j for j in range(len(vocab)) if owner[j] == t]
-        owned.sort(key=lambda j: (-components[t, j], vocab[j]))
-        if not owned:
-            owned = sorted(range(len(vocab)), key=lambda j: (-components[t, j], vocab[j]))
-        top_terms.append([str(vocab[j]) for j in owned[:n_top_words]])
+    if not term_supported:
+        doc_topic = np.ones((len(docs), 1), dtype=float)
+        best_topic = [0] * len(docs)
+        ranked_vocab = sorted(range(len(vocab)), key=lambda j: (-float(corpus_weights[j]), str(vocab[j])))
+        top_terms: List[List[str]] = [[str(vocab[j]) for j in ranked_vocab[:n_top_words]]]
+        n_kept = 1
+    else:
+        sub_doc_topic = doc_topic[:, term_supported]
+        raw_best = [int(np.argmax(sub_doc_topic[i])) for i in range(len(docs))]
+        kept_local = sorted(set(raw_best))
+        kept = [term_supported[idx] for idx in kept_local]
+        doc_topic = doc_topic[:, kept]
+        kept_components = components[kept, :]
+        remap = {old_idx: new_idx for new_idx, old_idx in enumerate(kept_local)}
+        best_topic = [remap[idx] for idx in raw_best]
 
-    best_topic = [int(np.argmax(doc_topic[i])) for i in range(len(docs))]
+        owner = np.argmax(kept_components, axis=0)
+        top_terms = []
+        for t in range(len(kept)):
+            owned = [j for j in range(len(vocab)) if owner[j] == t and kept_components[t, j] > 0]
+            owned.sort(key=lambda j: (-float(kept_components[t, j]), str(vocab[j])))
+            top_terms.append([str(vocab[j]) for j in owned[:n_top_words]])
+        n_kept = len(kept)
 
     tfidf = TfidfVectorizer(ngram_range=(1, 2), stop_words=_STOP_LIST, min_df=1).fit_transform(docs)
 
     topics = []
-    for t in range(k):
+    for t in range(n_kept):
         members = [i for i, bt in enumerate(best_topic) if bt == t]
         topic = {
             "topic_id": t + 1,
@@ -189,6 +283,7 @@ def discover_topics(
     ]
 
     return {
+        "method": method_key,
         "topics": topics,
         "n_analyzed": len(docs),
         "doc_topics": [[float(x) for x in row] for row in doc_topic],

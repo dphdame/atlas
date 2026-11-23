@@ -112,4 +112,4 @@ echo "--> Launching ATLAS Desktop Interface in your browser..."
 echo "--> Press Ctrl+C in this terminal window to stop the application."
 echo "=================================================================="
 
-exec "$VENV_PY" -m streamlit run app.py --server.headless=false --browser.serverAddress="localhost" --browser.gatherUsageStats=false
+exec "$VENV_PY" -m streamlit run app.py --server.headless=false --server.address="localhost" --browser.serverAddress="localhost" --browser.gatherUsageStats=false
