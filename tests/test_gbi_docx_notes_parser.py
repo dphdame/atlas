@@ -1113,5 +1113,90 @@ class RepairRound3Tests(unittest.TestCase):
             self.assertIsNone(_NOTES_SUMMARY_LABEL.match(bad), bad)
 
 
+class RepairRound4Tests(unittest.TestCase):
+    """Codex review of df96ba2: themes ownership/grammar and parenthesized summary heading."""
+
+    ROLES = ("Key Points", "Notable Quotes", "Observations")
+
+    def test_themes_prose_with_explicit_participant_stays_evidence(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: How did enrollment go?")
+        table = new_notes_table(document, 3, ("Observations", "Notable Quotes", "Key Points"))
+        table.cell(1, 0).text = "Themes of frustration emerged."
+        table.cell(1, 1).text = "I had to return twice."
+        table.cell(1, 2).text = "P1: Paperwork took weeks."
+        table.cell(2, 2).text = "P2: Staff answered quickly."
+        table.cell(3, 0).text = "Themes: Paperwork delays."
+        table.cell(3, 2).text = "P1: Still waiting for approval."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "themes_owner.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+            turns = parser.parse_file(str(path), root_dir=tmp)
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(summary(turns), [
+            ("Question 1", "P1", KP, "Paperwork took weeks."),
+            ("Question 1", "P1", QUOTE, "I had to return twice."),
+            ("Question 1", "P1", OBS, "Themes of frustration emerged."),
+            ("Question 1", "P2", KP, "Staff answered quickly."),
+            ("Question 1", "P1", KP, "Still waiting for approval."),
+            ("Question 1", "P1", OBS, "Themes: Paperwork delays."),
+        ])
+        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"themes_owner.docx": sha})
+        self.assertEqual(results["total_documents"], 2)
+        self.assertEqual(set(results["tagged_turns_df"]["speaker"]), {"P1", "P2"})
+
+    def test_unlabelled_themes_prose_is_not_reclassified(self):
+        document = docx.Document()
+        document.add_paragraph("Question 1: Overall impressions?")
+        table = new_notes_table(document, 2)
+        table.cell(1, 0).text = "Themes of frustration emerged during intake."
+        table.cell(2, 0).text = "Themes / Topics / Patterns: Long wait times."
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "themes_prose.docx"
+            document.save(str(path))
+            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES)
+            turns = parser.parse_file(str(path), root_dir=tmp)
+        self.assertEqual(summary(turns), [
+            ("Question 1", "Unknown", KP, "Themes of frustration emerged during intake."),
+            ("Question 1", "NoteTaker_Themes", THEMES, "Long wait times."),
+        ])
+
+    def test_parenthesized_summary_of_session_across_column_orders(self):
+        import itertools
+        probes = 0
+        for perm in itertools.permutations(self.ROLES):
+            key_col = perm.index("Key Points")
+            for label_col in range(3):
+                for payload_col in (None, (label_col + 1) % 3, (label_col + 2) % 3):
+                    with self.subTest(perm=perm, label_col=label_col, payload_col=payload_col):
+                        probes += 1
+                        document = docx.Document()
+                        document.add_paragraph("Question 1: Start?")
+                        table = new_notes_table(document, 3, perm)
+                        table.cell(1, key_col).text = "P1: Arrived early."
+                        if payload_col is None:
+                            table.cell(2, label_col).text = "Summary of Session (1-2 Sentences): Paperwork took weeks."
+                        else:
+                            table.cell(2, label_col).text = "Summary of Session (1-2 Sentences):"
+                            table.cell(2, payload_col).text = "Paperwork took weeks."
+                        table.cell(3, key_col).text = "P2: Staff answered quickly."
+                        with tempfile.TemporaryDirectory() as tmp:
+                            path = Path(tmp) / "summary_paren.docx"
+                            document.save(str(path))
+                            parser = UniversalTranscriptParser(include_evidence_types=ALL_TYPES, notes_unit_level="participant")
+                            turns = parser.parse_file(str(path), root_dir=tmp)
+                            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+                        self.assertEqual([(t["speaker"], t["text"]) for t in turns], [
+                            ("P1", "Arrived early."),
+                            ("P2", "Staff answered quickly."),
+                        ])
+                        self.assertEqual(parser.last_document_metadata["summary_paren.docx"]["summary_of_session"],
+                                         "Paperwork took weeks.")
+                        results = AtlasEngine(str(CODEBOOK)).process_turns(turns, {"summary_paren.docx": sha})
+                        self.assertEqual(results["total_documents"], 2)
+        self.assertEqual(probes, 54)
+
+
 if __name__ == "__main__":
     unittest.main()

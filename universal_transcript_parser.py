@@ -83,7 +83,10 @@ _NOTES_COLUMN_ROLES = {
 # Rows checked for the notes header (a title or "Question N" row may sit above it).
 _NOTES_HEADER_SCAN_ROWS = 3
 _NOTES_PARTICIPANT = re.compile(r"^(P\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
-_NOTES_THEMES = re.compile(r"^\s*themes\b(?:\s*/\s*topics\b)?(?:\s*/\s*patterns\b)?\s*:?\s*", re.IGNORECASE)
+_NOTES_THEMES = re.compile(
+    r"^\s*themes(?:\s*/\s*topics)?(?:\s*/\s*patterns)?\s*(?::[ \t]*|(?=\n|$))",
+    re.IGNORECASE,
+)
 _NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
 # Structural rows embedded in a notes table: a "Question N:" heading (separator or
 # nothing after the number, so "Question 2 was confusing" stays evidence), a
@@ -108,7 +111,7 @@ _NOTES_CONSENT = re.compile(
 _NOTES_CANONICAL_KEYS = ("summary_of_session", "main_observations")
 # Strict grammar for the summary boxes: group 1 is the label, group 2 any text after the colon.
 _NOTES_SUMMARY_LABEL = re.compile(
-    r"^(summary\s+of\s+session|main\s+observations(?:\s*\([^)]*\))?(?:\s+ideas)?)\s*(?::\s*(.*)|$)",
+    r"^(summary\s+of\s+session(?:\s*\([^)]*\))?|main\s+observations(?:\s*\([^)]*\))?(?:\s+ideas)?)\s*(?::\s*(.*)|$)",
     re.IGNORECASE,
 )
 
@@ -948,19 +951,24 @@ class UniversalTranscriptParser:
             def text_at(col: int) -> str:
                 return cells[col] if col < len(cells) else ""
 
-            # The themes label sits in the Key Points column (or column 0); its text and
-            # every other new cell in row order form one themes turn. A vertically merged
-            # themes cell was emitted on its first row, so a continuation row is read as
-            # participant evidence.
-            for col in dict.fromkeys(cols["key_points"] + [0]):
-                themes = None if col in continued else _NOTES_THEMES.match(text_at(col))
-                if themes:
-                    parts = [cells[col][themes.end():]] + [
-                        c for i, c in enumerate(cells) if i != col and i not in continued]
-                    text = " ".join(p for p in (_join_lines(part) for part in parts) if p)
-                    if text:
-                        entries.append((row_block, NOTES_THEMES_SPEAKER, text, "themes_summary", question_id))
-                    return
+            # A themes row carries a genuine "Themes / Topics / Patterns:" header and no
+            # explicit "P#:" label in any new cell. Check Key Points columns first, then
+            # left to right. A vertically merged themes cell was emitted on its first row,
+            # so a continuation row is read as participant evidence.
+            has_new_participant = any(
+                pid for col, c in enumerate(cells) if c and col not in continued
+                for pid, _ in _participant_segments(c)
+            )
+            if not has_new_participant:
+                for col in dict.fromkeys(cols["key_points"] + list(range(len(cells)))):
+                    themes = None if col in continued else _NOTES_THEMES.match(text_at(col))
+                    if themes:
+                        parts = [cells[col][themes.end():]] + [
+                            c for i, c in enumerate(cells) if i != col and i not in continued]
+                        text = " ".join(p for p in (_join_lines(part) for part in parts) if p)
+                        if text:
+                            entries.append((row_block, NOTES_THEMES_SPEAKER, text, "themes_summary", question_id))
+                        return
 
             # Each contribution keeps its own "P#:" label. An unlabelled one takes the
             # row's label when the row names one participant, and is "Unknown" when the
