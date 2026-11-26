@@ -74,8 +74,7 @@ CONFIG_DIR = REPO_ROOT / "config"
 SAMPLES_DIR = REPO_ROOT / "data" / "samples"
 
 CORPUS_LABEL = "Corpus Dataset"
-CODEBOOK_LABEL = "Active YAML Codebook"
-RUN_LABEL = "▶ Run Analysis"
+RUN_LABEL = "Run Analysis"
 
 BILINGUAL_FILES = [
     SAMPLES_DIR / "software_test_bilingual_interview.txt",
@@ -87,10 +86,11 @@ SURVEY_OPTIONS = {"text_col": "response", "id_col": "respondent_id", "speaker_co
 CODEBOOK_A = "pfl_case_study_codebook.yaml"
 CODEBOOK_B = "intake_and_enrollment.yaml"
 
-KPI_UNITS = "Analytical Units (N)"
-KPI_TURNS = "Participant Turns"
-KPI_DOMAINS = "Active Domains"
-KPI_MATCHED = "Matched Turn Mentions"
+KPI_UNITS = "Analytical Units"
+KPI_TURNS = "Turns Scanned"
+KPI_ANSWERS = "Written Answers Scanned"
+KPI_THEMES = "Themes Found"
+KPI_MATCHED = "Theme Matches"
 
 # Unbacked literals from the 9ec00d24 static mock-up (n=2,500 labor-market table,
 # hardcoded KII counts and medoids). None may be rendered or documented.
@@ -237,9 +237,50 @@ def run_analysis(at):
 def topic_count_control(at):
     for accessor in ("slider", "number_input"):
         for widget in getattr(at, accessor):
-            if "topic" in str(widget.label).lower():
+            lbl = str(widget.label).lower()
+            if "cluster" in lbl or "topic" in lbl:
                 return int(widget.value)
-    raise AssertionError("No slider/number_input whose label mentions 'topic' (n_topics control) is rendered")
+    raise AssertionError("No slider/number_input whose label mentions 'cluster' or 'topic' is rendered")
+
+
+def corpus_uploader(at):
+    for u in at.file_uploader:
+        types = {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}
+        if "csv" in types and "txt" in types:
+            return u
+    raise AssertionError("No corpus file_uploader rendered")
+
+
+def codebook_uploader(at):
+    for u in at.file_uploader:
+        types = {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}
+        if "yaml" in types or "yml" in types:
+            return u
+    raise AssertionError("No custom theme YAML file_uploader rendered")
+
+
+def upload_codebook(at, codebook_name):
+    payload = (CONFIG_DIR / codebook_name).read_bytes()
+    codebook_uploader(at).set_value((codebook_name, payload, "application/x-yaml"))
+    at.run()
+    return at
+
+
+def upload_corpus_files(at, paths):
+    select(at, CORPUS_LABEL, option_containing(find_widget(at, "selectbox", CORPUS_LABEL), "Upload"))
+    items = [(p.name, p.read_bytes(), "text/csv" if p.suffix == ".csv" else "text/plain") for p in paths]
+    corpus_uploader(at).set_value(items)
+    at.run()
+    return at
+
+
+def kpi_themes_found(at):
+    for m in at.metric:
+        if str(m.label).strip() == KPI_THEMES:
+            parts = re.findall(r"\d+", str(m.value))
+            if len(parts) == 2:
+                return int(parts[0]), int(parts[1])
+    raise AssertionError(f"KPI {KPI_THEMES!r} with '<found> of <total>' not rendered")
 
 
 def kpi_value(at, label):
@@ -328,12 +369,14 @@ class TestCleanBootAndOfflineAssets(unittest.TestCase):
                 self.assertNotIn(stale, str(w.value), "app still depends on absent ../ datasets")
 
     def test_clean_upload_onboarding_and_no_software_test_ui_jargon(self):
-        # Owner-approved v1.2 UI contract: opens on Upload Custom Files with a manual
-        # Run Analysis button and keeps internal SOFTWARE_TEST fixture labels out of the UI.
+        # Owner-approved v1.2 post-walkthrough UI contract: opens on Upload Custom Files
+        # with 10 Core Evaluation Themes pre-checked, a plain-text Run Analysis button,
+        # and keeps internal SOFTWARE_TEST fixture labels out of the live UI.
         corpus = find_widget(self.at, "selectbox", CORPUS_LABEL)
         self.assertIn("Upload", str(corpus.value),
                       "default corpus should open on Upload Custom Files")
-        self.assertEqual(find_widget(self.at, "selectbox", CODEBOOK_LABEL).value, "gbi_focus_group_starter.yaml")
+        self.assertTrue(any("Core Evaluation Themes (10 of 10)" in e.label for e in self.at.expander))
+        self.assertTrue(any("Optional Add-On Themes (0 of 5)" in e.label for e in self.at.expander))
         self.assertIsNotNone(find_widget(self.at, "button", RUN_LABEL))
         self.assertEqual(len(self.at.metric), 0, "analysis should wait until Run Analysis is clicked")
         for opt in corpus.options:
@@ -366,11 +409,16 @@ class TestCleanBootAndOfflineAssets(unittest.TestCase):
 class TestDynamicCodebookSwitching(unittest.TestCase):
     """Survey corpus held fixed; pfl codebook matches one survey turn, intake none."""
 
+    def _load_survey(self, at):
+        upload_corpus_files(at, SURVEY_FILES)
+        select(at, "Respondent ID column (optional)", "respondent_id")
+        select(at, "Speaker / role column (optional)", "role")
+        return at
+
     def _run_with(self, at, codebook):
-        select(at, CODEBOOK_LABEL, codebook)
+        upload_codebook(at, codebook)
         run_analysis(at)
         assert_no_exceptions(self, at, f"codebook {codebook}")
-        self.assertEqual(find_widget(at, "selectbox", CODEBOOK_LABEL).value, codebook)
         return at
 
     def _assert_engine_rendered(self, at, codebook):
@@ -383,14 +431,15 @@ class TestDynamicCodebookSwitching(unittest.TestCase):
         self.assertIsNotNone(
             found, f"{codebook}: no rendered table lists exactly the domains {list(freq['domain_name'])} "
                    "with matching prevalence_pct and matching_turns columns")
-        self.assertEqual(kpi_value(at, KPI_DOMAINS), float(len(freq)))
+        found_count, total_count = kpi_themes_found(at)
+        self.assertEqual(total_count, len(freq))
+        self.assertEqual(found_count, int((freq["documents_reporting"] > 0).sum()))
         self.assertEqual(kpi_value(at, KPI_MATCHED), float(freq["matching_turns"].sum()))
         self.assertEqual(kpi_value(at, KPI_UNITS), float(results["total_documents"]))
         return engine, results
 
     def test_switching_codebook_changes_domains_and_metrics(self):
-        at = boot()
-        select(at, CORPUS_LABEL, option_containing(find_widget(at, "selectbox", CORPUS_LABEL), "Survey"))
+        at = self._load_survey(boot())
 
         self._run_with(at, CODEBOOK_A)
         _, res_a = self._assert_engine_rendered(at, CODEBOOK_A)
@@ -410,11 +459,10 @@ class TestDynamicCodebookSwitching(unittest.TestCase):
         for name in names_a:
             self.assertNotIn(name, text_b, f"stale domain {name!r} from {CODEBOOK_A} still rendered")
         self.assertNotEqual(kpi_value(at, KPI_MATCHED), matched_a)
-        self.assertNotEqual(kpi_value(at, KPI_DOMAINS), float(len(res_a["frequencies_df"])))
+        self.assertNotEqual(kpi_themes_found(at)[1], len(res_a["frequencies_df"]))
 
     def test_parameter_matrix_reports_live_n_and_binomial_se(self):
-        at = boot()
-        select(at, CORPUS_LABEL, option_containing(find_widget(at, "selectbox", CORPUS_LABEL), "Survey"))
+        at = self._load_survey(boot())
         self._run_with(at, CODEBOOK_A)
         _, results = engine_results(CODEBOOK_A, SURVEY_FILES, SURVEY_OPTIONS)
         freq = results["frequencies_df"]
@@ -437,18 +485,20 @@ class TestDynamicCodebookSwitching(unittest.TestCase):
 # ======================================================================
 class TestDynamicCorpusSwitching(unittest.TestCase):
 
-    def _load(self, at, needle, codebook=CODEBOOK_A):
-        select(at, CORPUS_LABEL, option_containing(find_widget(at, "selectbox", CORPUS_LABEL), needle))
-        select(at, CODEBOOK_LABEL, codebook)
+    def _load(self, at, files, codebook=CODEBOOK_A, survey=False):
+        upload_corpus_files(at, files)
+        if survey:
+            select(at, "Respondent ID column (optional)", "respondent_id")
+            select(at, "Speaker / role column (optional)", "role")
+        upload_codebook(at, codebook)
         run_analysis(at)
-        assert_no_exceptions(self, at, f"corpus {needle}")
-        self.assertNotIn("SOFTWARE_TEST", str(find_widget(at, "selectbox", CORPUS_LABEL).value))
+        assert_no_exceptions(self, at, f"corpus {[f.name for f in files]}")
         return at
 
     def test_switching_corpus_updates_counts_quotes_and_medoids(self):
         at = boot()
 
-        self._load(at, "Bilingual")
+        self._load(at, BILINGUAL_FILES)
         _, res_bil = engine_results(CODEBOOK_A, BILINGUAL_FILES)
         k_bil = topic_count_control(at)
         topics_bil = expected_topics(res_bil, k_bil)
@@ -461,13 +511,13 @@ class TestDynamicCorpusSwitching(unittest.TestCase):
                 self.assertIn(topic["medoid_text"], text_bil, f"bilingual medoid of topic {topic['topic_id']} not rendered")
         self.assertFalse(any("SOFTWARE_TEST FIXTURE ACTIVE" in t for t in raw_display_texts(at)))
 
-        self._load(at, "Survey")
+        self._load(at, SURVEY_FILES, survey=True)
         _, res_sur = engine_results(CODEBOOK_A, SURVEY_FILES, SURVEY_OPTIONS)
         k_sur = topic_count_control(at)
         topics_sur = expected_topics(res_sur, k_sur)
         text_sur = rendered_corpus(at)
         self.assertEqual(kpi_value(at, KPI_UNITS), float(res_sur["total_documents"]))
-        self.assertEqual(kpi_value(at, KPI_TURNS), float(res_sur["participant_turns_analyzed"]))
+        self.assertEqual(kpi_value(at, KPI_ANSWERS), float(res_sur["participant_turns_analyzed"]))
         self.assertNotEqual(
             (res_bil["total_documents"], res_bil["participant_turns_analyzed"]),
             (res_sur["total_documents"], res_sur["participant_turns_analyzed"]),
@@ -539,13 +589,13 @@ class TestUploadedTableTextColumnDetection(unittest.TestCase):
         self.assertTrue(uploaders, f"no file_uploader accepting .csv after choosing the upload corpus {ctx}")
         uploaders[0].set_value((UPLOAD_NAME, payload, "text/csv"))
         at.run()
-        select(at, CODEBOOK_LABEL, CODEBOOK_A)
+        upload_codebook(at, CODEBOOK_A)
         run_analysis(at)
         assert_no_exceptions(self, at, f"uploaded table {ctx}")
 
         for box in at.selectbox:
             label = str(box.label).lower()
-            if "text" in label and "column" in label:
+            if ("question column" in label or "text" in label) and "column" in label:
                 self.assertEqual(box.value, text_col, f"text-column selector defaulted to an id column {ctx}")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -557,7 +607,7 @@ class TestUploadedTableTextColumnDetection(unittest.TestCase):
         text = rendered_corpus(at)
 
         self.assertEqual(kpi_value(at, KPI_UNITS), float(results["total_documents"]), ctx)
-        self.assertEqual(kpi_value(at, KPI_TURNS), float(results["participant_turns_analyzed"]), ctx)
+        self.assertEqual(kpi_value(at, KPI_ANSWERS), float(results["participant_turns_analyzed"]), ctx)
         self.assertEqual(kpi_value(at, KPI_MATCHED), float(results["frequencies_df"]["matching_turns"].sum()), ctx)
         for _, q in results["quotes_df"].iterrows():
             self.assertIn(str(q["text"]), text, f"uploaded-table quote not rendered {ctx}")

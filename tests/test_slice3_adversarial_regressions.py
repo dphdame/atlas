@@ -37,7 +37,7 @@ from universal_transcript_parser import UniversalTranscriptParser  # noqa: E402
 
 APP_PATH = REPO_ROOT / "app.py"
 CORPUS_LABEL = "Corpus Dataset"
-KPI_LABEL = "Analytical Units (N)"
+KPI_LABEL = "Analytical Units"
 
 UNTERMINATED_CSV = b'id,response\nR1,"The bus was late.\nR2,The clinic closed.\n'
 MID_FIELD_QUOTE_CSV = b'id,response,comment\nR1,The bus was "late, clinic closed",\n'
@@ -61,9 +61,13 @@ def boot_upload(files):
     box = next(s for s in at.selectbox if s.label == CORPUS_LABEL)
     box.select(next(o for o in box.options if "Upload" in o))
     at.run()
-    at.file_uploader[0].set_value(files)
+    uploader = next(
+        u for u in at.file_uploader
+        if "csv" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}
+    )
+    uploader.set_value(files)
     at.run()
-    next(b for b in at.button if b.label == "▶ Run Analysis").click()
+    next(b for b in at.button if b.label == "Run Analysis").click()
     at.run()
     return at
 

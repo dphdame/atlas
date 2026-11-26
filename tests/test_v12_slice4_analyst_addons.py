@@ -49,7 +49,7 @@ class AddonACodebookStackingTests(unittest.TestCase):
             ("gbi_focus_group_starter.yaml", cb_gbi),
             ("sdoh_basic_needs.yaml", cb_sdoh),
         ])
-        self.assertEqual(len(merged["domains"]), 12)
+        self.assertEqual(len(merged["domains"]), 14)
         ids = [d["id"] for d in merged["domains"]]
         names = [d["name"] for d in merged["domains"]]
         self.assertEqual(len(ids), len(set(ids)), "merged domain IDs must be unique")
@@ -59,7 +59,7 @@ class AddonACodebookStackingTests(unittest.TestCase):
             merged,
             ["We fell behind on rent and needed WIC groceries."],
         )
-        self.assertEqual(len(engine.compiled_rules), 12)
+        self.assertEqual(len(engine.compiled_rules), 14)
         matched_ids = set(results["quotes_df"]["domain_id"])
         self.assertIn("housing_rent_stability", matched_ids)
         self.assertIn("food_insecurity", matched_ids)
@@ -121,15 +121,15 @@ class AddonBAppendDiscoveredTopicTests(unittest.TestCase):
         topic2 = {"topic_id": 2, "label": "voucher / waitlist", "top_terms": ["voucher", "waitlist"], "turn_count": 3}
 
         cb1 = atlas_engine.append_topic_to_codebook(base_cb, topic1, domain_name="Prepaid Debit Cards")
-        self.assertEqual(len(cb1["domains"]), 9)
+        self.assertEqual(len(cb1["domains"]), 11)
         added1 = cb1["domains"][-1]
         self.assertEqual(added1["name"], "Prepaid Debit Cards")
         self.assertEqual(added1["match_mode"], "exact")
         self.assertEqual(added1["roots_en"], ["prepaid", "card", "fee"])
 
-        # Appending again with same name disambiguates cleanly and accumulates to 10 domains.
+        # Appending again with same name disambiguates cleanly and accumulates to 12 domains.
         cb2 = atlas_engine.append_topic_to_codebook(cb1, topic2, domain_name="Prepaid Debit Cards")
-        self.assertEqual(len(cb2["domains"]), 10)
+        self.assertEqual(len(cb2["domains"]), 12)
         ids = [d["id"] for d in cb2["domains"]]
         names = [d["name"] for d in cb2["domains"]]
         self.assertEqual(len(ids), len(set(ids)))
@@ -261,8 +261,12 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         self.fail(f"Widget {accessor} {label!r} not found")
 
     def _run(self, at):
-        self._widget(at, "button", "▶ Run Analysis").click()
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
+
+    def _total_themes(self, at):
+        val = str(next(m.value for m in at.metric if m.label == "Themes Found"))
+        return int(val.split("of")[-1].strip())
 
     def test_sidebar_stack_and_add_theme_and_spotcheck_work_together_cleanly(self):
         at = AppTest.from_file(str(APP_PATH), default_timeout=25)
@@ -270,53 +274,43 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         self.assertFalse(list(at.exception), [e.value for e in at.exception])
         self.assertEqual(len(at.metric), 0)
 
-        # Switch to Multi-Group Focus-Group Notes sample (8 GBI starter domains) and Run Analysis.
+        # Switch to Multi-Group Focus-Group Notes sample (10 Core Evaluation Themes) and Run Analysis.
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         gbi_opt = next(o for o in corpus_box.options if "Focus-Group Notes" in str(o))
         corpus_box.set_value(gbi_opt)
         at.run()
         self._run(at)
         self.assertFalse(list(at.exception))
-        # Metric count must stay strictly 4 (smoke_test.py contract).
+        # Metric count must stay strictly 4.
         self.assertEqual(len(at.metric), 4)
-        self.assertTrue(any("False-Alarm Spot-Check" in t.label for t in at.tabs))
-        active_domains_before = int(next(m.value for m in at.metric if m.label == "Active Domains"))
-        self.assertEqual(active_domains_before, 8)
+        self.assertTrue(any("Spot-Check Matches" in t.label for t in at.tabs))
+        self.assertEqual(self._total_themes(at), 10)
 
-        # Add-on A: stack sdoh_basic_needs.yaml (+4 domains => 12 domains) and click Run Analysis.
-        stack_box = self._widget(at, "multiselect", "Stack Additional Starter Codebooks (optional)")
-        stack_box.set_value(["sdoh_basic_needs.yaml"])
+        # Add-on A: check Optional Add-On theme 'Program Enrollment & Paperwork' => 11 active themes.
+        self._widget(at, "checkbox", "Program Enrollment & Paperwork").check()
         at.run()
         self._run(at)
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.metric), 4)
-        active_domains_stacked = int(next(m.value for m in at.metric if m.label == "Active Domains"))
-        self.assertEqual(active_domains_stacked, 12)
+        self.assertEqual(self._total_themes(at), 11)
         self.assertTrue(
-            any("Download Active Codebook" in d.label for d in at.get("download_button")),
-            "Sidebar must offer download of the active stacked codebook",
+            any("Save active themes (.yaml)" in d.label for d in at.get("download_button")),
+            "Sidebar must offer download of the customized active themes",
         )
 
-        # Add-on B: append one discovered theme on top of the 12-domain stack => 13 domains (no double-stacking).
-        name_input = self._widget(at, "text_input", "New domain name (optional)")
+        # Add-on B: append one discovered cluster on top of the 11 active themes => 12 themes.
+        name_input = self._widget(at, "text_input", "New theme name (optional)")
         name_input.set_value("Local Program Cards")
-        add_btn = self._widget(at, "button", "➕ Add Theme to Active Codebook")
+        add_btn = self._widget(at, "button", "Add Theme to Active Themes")
         add_btn.click()
         at.run()
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.metric), 4)
-        active_domains_after_add = int(next(m.value for m in at.metric if m.label == "Active Domains"))
-        self.assertEqual(active_domains_after_add, 13)
-        self.assertEqual(
-            list(self._widget(at, "multiselect", "Stack Additional Starter Codebooks (optional)").value),
-            [],
-            "Stacked selection should clear once baked into the new custom codebook",
-        )
+        self.assertEqual(self._total_themes(at), 12)
 
     def test_spotcheck_ui_flags_and_tightens_domain_live(self):
         at = AppTest.from_file(str(APP_PATH), default_timeout=25)
         at.run()
-        # Switch to Upload Custom Files with a SOFTWARE_TEST file containing a clear prefix collision.
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         up_opt = next(o for o in corpus_box.options if "Upload" in str(o))
         corpus_box.set_value(up_opt)
@@ -331,9 +325,6 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         at.run()
 
         # Upload a minimal unfenced codebook with short root 'car' so Spot-Check flags 'card'/'career'.
-        cb_box = self._widget(at, "selectbox", "Active YAML Codebook")
-        cb_box.set_value("Upload Custom Codebook (.yaml)")
-        at.run()
         cb_uploader = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
         cb_yaml = yaml.safe_dump({
             "project": "SOFTWARE_TEST Unfenced",
@@ -344,10 +335,10 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         self._run(at)
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.metric), 4)
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 2)
+        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Theme Matches")), 2)
 
-        # Spot-Check UI should surface High-risk flag and offer BOTH quick-fix buttons.
-        self.assertTrue(any("High risk:" in str(m.value) for m in at.markdown))
+        # Spot-Check UI should surface Check First priority and offer BOTH quick-fix buttons.
+        self.assertTrue(any("Check First (Partial-Word Match)" in str(m.value) for m in at.markdown))
 
         # Changing uploaded text so ext_words shifts from {'card','career'} to {'cargo'} must not crash on stale widget state.
         alt_txt = (
@@ -367,31 +358,25 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         self._run(at)
         self.assertFalse(list(at.exception))
 
-        excl_btn = self._widget(at, "button", "🛡️ Exclude Selected Words from Domain")
+        excl_btn = self._widget(at, "button", "Exclude Selected Words from Theme")
         self.assertFalse(excl_btn.disabled)
         excl_btn.click()
         at.run()
         self.assertFalse(list(at.exception))
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 1)
-        # Switch back to uploaded unfenced codebook, Run Analysis, and test Exact Whole-Word Matching button.
-        cb_box = self._widget(at, "selectbox", "Active YAML Codebook")
-        cb_box.set_value("Upload Custom Codebook (.yaml)")
-        at.run()
-        cb_uploader = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
-        cb_uploader.set_value(("software_test_unfenced.yaml", cb_yaml, "application/x-yaml"))
-        at.run()
+        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Theme Matches")), 1)
+        # Re-run with original uploaded unfenced codebook and test Exact Whole-Word Matching button.
         self._run(at)
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 2)
-        exact_btn = self._widget(at, "button", "🎯 Switch Domain to Exact Whole-Word Matching")
+        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Theme Matches")), 2)
+        exact_btn = self._widget(at, "button", "Switch Theme to Exact Whole-Word Matching")
         exact_btn.click()
         at.run()
         self.assertFalse(list(at.exception))
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Matched Turn Mentions")), 1)
-        self.assertTrue(any("No high- or medium-risk false-alarm patterns" in str(s.value) for s in at.success))
+        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Theme Matches")), 1)
+        self.assertTrue(any("0 of 1 theme matches flagged for review" in str(s.value) for s in at.success))
 
     def test_quick_start_guide_documents_all_three_addons(self):
         text = QUICK_START.read_text(encoding="utf-8")
-        for required in ("Stack Additional Starter Codebooks", "Add Theme to Active Codebook", "False-Alarm Spot-Check"):
+        for required in ("Optional Add-On", "Spot-Check", "Discover"):
             self.assertIn(required, text)
 
     def test_same_update_callbacks_markdown_literal_meta_and_preserved_window_disclosure(self):
@@ -407,10 +392,6 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
             b"# SOFTWARE_TEST\nP1: My car and card sat near the bus stop.\n",
             "text/plain",
         ))
-        at.run()
-        cb_box = self._widget(at, "selectbox", "Active YAML Codebook")
-        cb_box.set_value("Upload Custom Codebook (.yaml)")
-        at.run()
         cb_uploader = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
         cb_yaml = yaml.safe_dump({
             "project": "SOFTWARE_TEST Windowed",
@@ -427,44 +408,40 @@ class AnalystAddonsUIWiringTests(unittest.TestCase):
         self._run(at)
         self.assertFalse(list(at.exception))
 
-        # P2 #3: Exclusion multiselect must advertise the actual preserved 4-token window, not "0-token fence".
-        excl_ms = next((m for m in at.multiselect if "False-alarm words to exclude" in m.label), None)
+        # Exclusion multiselect must advertise the actual preserved 4-word window.
+        excl_ms = next((m for m in at.multiselect if "Words to exclude" in m.label), None)
         self.assertIsNotNone(excl_ms)
-        self.assertIn("4-token", excl_ms.label)
-        self.assertNotIn("0-token", excl_ms.label)
+        self.assertIn("4-word", excl_ms.label)
 
-        # P2 #1 (Spot-Check): Clearing exclusions and clicking Exclude in the same update must NOT apply stale words.
+        # Clearing exclusions and clicking Exclude in the same update must NOT apply stale words.
         excl_ms.set_value([])
-        excl_btn = self._widget(at, "button", "🛡️ Exclude Selected Words from Domain")
+        excl_btn = self._widget(at, "button", "Exclude Selected Words from Theme")
         excl_btn.click()
         at.run()
         self.assertFalse(list(at.exception))
-        self.assertEqual(
-            self._widget(at, "selectbox", "Active YAML Codebook").value,
-            "Upload Custom Codebook (.yaml)",
+        self.assertIsNone(
+            at.session_state["session_override_bytes"],
             "Empty exclusion selection in the same update must be a no-op, not apply stale words",
         )
 
-        # P2 #1 (Add Theme) + P2 #2 (Literal Markdown-safe metadata):
         # Unchecking exact mode, entering Markdown image syntax as custom name, and clicking Add in one update
-        # must apply match_mode='prefix' AND never render the custom name via Markdown st.caption.
+        # must apply match_mode='prefix' AND never render the custom name via unescaped Markdown.
         img_name = "![x](https://example.invalid/pixel.png)"
         self._widget(at, "checkbox", "Use exact whole-word matching for added theme (recommended)").uncheck()
-        self._widget(at, "text_input", "New domain name (optional)").set_value(img_name)
-        self._widget(at, "button", "➕ Add Theme to Active Codebook").click()
+        self._widget(at, "text_input", "New theme name (optional)").set_value(img_name)
+        self._widget(at, "button", "Add Theme to Active Themes").click()
         at.run()
         self.assertFalse(list(at.exception))
-        active_label = self._widget(at, "selectbox", "Active YAML Codebook").value
-        active_cb = yaml.safe_load(at.session_state["discovered_codebooks"][active_label])
+        active_cb = yaml.safe_load(at.session_state["session_override_bytes"])
         self.assertEqual(active_cb["domains"][-1]["match_mode"], "prefix")
         self.assertEqual(active_cb["domains"][-1]["name"], img_name)
         self.assertFalse(
-            any(img_name in str(c.value) for c in at.caption),
-            "Custom domain name with Markdown syntax must not be interpolated into Markdown st.caption",
+            any(img_name in str(c.value) for c in (*at.caption, *at.info)),
+            "Custom domain name with Markdown syntax must not be interpolated into Markdown caption/info",
         )
         self.assertTrue(
             any(img_name in str(t.value) for t in at.text),
-            "Workbench metadata must render literally via st.text",
+            "In-app edit label must render literally via st.text",
         )
 
 

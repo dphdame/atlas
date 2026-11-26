@@ -764,17 +764,28 @@ def app_check() -> list[str]:
         return next((w for w in getattr(at, accessor) if w.label == label), None)
 
     def metrics(at) -> dict:
-        return {m.label: float(str(m.value).replace(",", "")) for m in at.metric}
+        return {m.label: str(m.value).replace(",", "").strip() for m in at.metric}
 
-    def expected(codebook: str, files, options=None) -> dict:
+    def expected(codebook: str, files, options=None, *, group_mode: bool = False) -> dict:
         res = AtlasEngine(str(config / codebook)).process_corpus(
-            [str(f) for f in files], root_dir=str(REPO), tabular_options=options)
+            [str(f) for f in files], root_dir=str(REPO), tabular_options=options, group_by_source=group_mode)
         freq = res["frequencies_df"]
+        n_found = int((freq["documents_reporting"] > 0).sum())
+        if group_mode:
+            structs = set(res.get("document_structures", {}).values())
+            scanned_lbl = "Notes Entries Scanned" if structs == {"focus_group_notes"} else "Entries Scanned"
+            return {
+                "Focus Groups": str(int(res["total_documents"])),
+                "Themes Found": f"{n_found} of {len(freq)}",
+                scanned_lbl: str(int(res["participant_turns_analyzed"])),
+                "Theme Matches": str(int(freq["matching_turns"].sum())),
+            }
+        scanned_lbl = "Written Answers Scanned" if options is not None else "Turns Scanned"
         return {
-            "Analytical Units (N)": float(res["total_documents"]),
-            "Participant Turns": float(res["participant_turns_analyzed"]),
-            "Active Domains": float(len(freq)),
-            "Matched Turn Mentions": float(freq["matching_turns"].sum()),
+            "Analytical Units": str(int(res["total_documents"])),
+            "Themes Found": f"{n_found} of {len(freq)}",
+            scanned_lbl: str(int(res["participant_turns_analyzed"])),
+            "Theme Matches": str(int(freq["matching_turns"].sum())),
         }
 
     def no_exceptions(at, context: str) -> None:
@@ -788,8 +799,23 @@ def app_check() -> list[str]:
             box.set_value(option)
             at.run()
 
+    def upload_corpus(at, file_items) -> None:
+        select(at, "Corpus Dataset", "Upload")
+        uploader = next((u for u in at.file_uploader if "csv" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}), None)
+        check("corpus file uploader rendered", uploader is not None)
+        if uploader is not None:
+            uploader.set_value(file_items)
+            at.run()
+
+    def upload_codebook(at, codebook: str) -> None:
+        cb_uploader = next((u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}), None)
+        check("custom theme YAML uploader rendered", cb_uploader is not None)
+        if cb_uploader is not None:
+            cb_uploader.set_value((codebook, (config / codebook).read_bytes(), "application/x-yaml"))
+            at.run()
+
     def run_analysis(at) -> None:
-        btn = widget(at, "button", "▶ Run Analysis")
+        btn = widget(at, "button", "Run Analysis")
         check("Run Analysis button rendered", btn is not None)
         if btn is not None:
             btn.click()
@@ -803,72 +829,78 @@ def app_check() -> list[str]:
           and any("Ready to analyze" in str(i.value) for i in at.info)
           and not any("SOFTWARE_TEST" in str(i.value) for i in at.info))
 
-    select(at, "Corpus Dataset", "Bilingual")
+    select(at, "Corpus Dataset", "Focus-Group Notes")
+    run_analysis(at)
+    no_exceptions(at, "notes sample x gbi_starter")
+    notes_files = [samples / "software_test_gbi_group_treatment.docx", samples / "software_test_gbi_group_control.docx"]
+    check("notes sample x gbi_starter: KPIs match engine",
+          metrics(at) == expected("gbi_focus_group_starter.yaml", notes_files, group_mode=True), str(metrics(at)))
+
+    bilingual = [samples / "software_test_bilingual_interview.txt", samples / "software_test_zoom_session.vtt"]
+    upload_corpus(at, [(p.name, p.read_bytes(), "text/plain") for p in bilingual])
+    upload_codebook(at, "pfl_case_study_codebook.yaml")
     run_analysis(at)
     no_exceptions(at, "bilingual x pfl")
-    bilingual = [samples / "software_test_bilingual_interview.txt", samples / "software_test_zoom_session.vtt"]
     check("bilingual x pfl: KPIs match engine",
           metrics(at) == expected("pfl_case_study_codebook.yaml", bilingual), str(metrics(at)))
 
     survey_opts = {"text_col": "response", "id_col": "respondent_id", "speaker_col": "role"}
-    select(at, "Corpus Dataset", "Survey")
+    upload_corpus(at, [("software_test_survey.csv", (samples / "software_test_survey.csv").read_bytes(), "text/csv")])
+    select(at, "Respondent ID column (optional)", "respondent_id")
+    select(at, "Speaker / role column (optional)", "role")
     for codebook in ("pfl_case_study_codebook.yaml", "intake_and_enrollment.yaml", "sdoh_basic_needs.yaml"):
-        select(at, "Active YAML Codebook", codebook)
+        upload_codebook(at, codebook)
         run_analysis(at)
         no_exceptions(at, f"survey x {codebook}")
         check(f"survey x {codebook}: KPIs match engine",
               metrics(at) == expected(codebook, [samples / "software_test_survey.csv"], survey_opts),
               str(metrics(at)))
 
-    select(at, "Corpus Dataset", "Teams")
-    select(at, "Active YAML Codebook", "intake_and_enrollment.yaml")
+    teams_doc = samples / "software_test_teams_multiline.docx"
+    upload_corpus(at, [(teams_doc.name, teams_doc.read_bytes(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")])
+    upload_codebook(at, "intake_and_enrollment.yaml")
     run_analysis(at)
     no_exceptions(at, "docx x intake")
     check("docx x intake: KPIs match engine",
-          metrics(at) == expected("intake_and_enrollment.yaml", [samples / "software_test_teams_multiline.docx"]),
+          metrics(at) == expected("intake_and_enrollment.yaml", [teams_doc]),
           str(metrics(at)))
 
-    slider = next((s for s in at.slider if "topic" in str(s.label).lower()), None)
-    check("topic-count slider rendered", slider is not None)
+    slider = next((s for s in at.slider if "cluster" in str(s.label).lower() or "topic" in str(s.label).lower()), None)
+    check("cluster-count slider rendered", slider is not None)
     if slider is not None:
         slider.set_value(2)
         at.run()
-        no_exceptions(at, "topic slider = 2")
-        apply = next((b for b in at.button if "Apply Discovered Codebook" in str(b.label)), None)
-        check("apply-discovered-codebook button rendered", apply is not None)
-        if apply is not None:
-            apply.click()
+        no_exceptions(at, "cluster slider = 2")
+        before_total = int(metrics(at).get("Themes Found", "0 of 0").split("of")[-1].strip())
+        add_btn = next((b for b in at.button if "Add Theme to Active Themes" in str(b.label)), None)
+        check("add-theme button rendered", add_btn is not None)
+        if add_btn is not None:
+            add_btn.click()
             at.run()
-            no_exceptions(at, "apply discovered codebook")
-            active = str(widget(at, "selectbox", "Active YAML Codebook").value)
-            check("discovered codebook becomes active", active.startswith("Discovered:"), active)
-            domains = metrics(at).get("Active Domains", 0.0)
-            check("discovered codebook drives the engine", 1.0 <= domains <= 2.0, str(domains))
+            no_exceptions(at, "add discovered theme")
+            after_total = int(metrics(at).get("Themes Found", "0 of 0").split("of")[-1].strip())
+            check("added theme increments active themes", after_total == before_total + 1,
+                  f"{before_total} -> {after_total}")
 
-    select(at, "Corpus Dataset", "Upload")
-    uploader = next((u for u in at.file_uploader if ".csv" in (u.allowed_type or [])), None)
-    check("file uploader accepts .csv", uploader is not None)
-    if uploader is not None:
-        uploader.set_value(("software_test_app_upload.csv", APP_UPLOAD_CSV.encode("utf-8"), "text/csv"))
-        at.run()
-        select(at, "Active YAML Codebook", "pfl_case_study_codebook.yaml")
-        run_analysis(at)
-        no_exceptions(at, "uploaded csv")
-        text_box = widget(at, "selectbox", "Text column (free-text responses)")
-        check("text column auto-detected as 'response'", text_box is not None and text_box.value == "response",
-              str(text_box.value if text_box else None))
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "software_test_app_upload.csv"
-            path.write_text(APP_UPLOAD_CSV, encoding="utf-8")
-            want = expected("pfl_case_study_codebook.yaml", [path], {"text_col": "response"})
-        check("uploaded csv: KPIs match engine", metrics(at) == want, f"{metrics(at)} != {want}")
-        frames = [f.value for f in at.dataframe if isinstance(f.value, pd.DataFrame)]
-        check("uploaded csv: matched quote rendered",
-              any("busqué otro trabajo" in str(v) for fr in frames for v in fr.astype(str).to_numpy().ravel()))
+    upload_corpus(at, [("software_test_app_upload.csv", APP_UPLOAD_CSV.encode("utf-8"), "text/csv")])
+    upload_codebook(at, "pfl_case_study_codebook.yaml")
+    run_analysis(at)
+    no_exceptions(at, "uploaded csv")
+    text_box = widget(at, "selectbox", "Open-ended question column to code")
+    check("text column auto-detected as 'response'", text_box is not None and text_box.value == "response",
+          str(text_box.value if text_box else None))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "software_test_app_upload.csv"
+        path.write_text(APP_UPLOAD_CSV, encoding="utf-8")
+        want = expected("pfl_case_study_codebook.yaml", [path], {"text_col": "response"})
+    check("uploaded csv: KPIs match engine", metrics(at) == want, f"{metrics(at)} != {want}")
+    frames = [f.value for f in at.dataframe if isinstance(f.value, pd.DataFrame)]
+    check("uploaded csv: matched quote rendered",
+          any("busqué otro trabajo" in str(v) for fr in frames for v in fr.astype(str).to_numpy().ravel()))
 
     # Uploads with no usable text column must stop with a validation error, never
     # fall back to an id column or to the parser's default "response" column.
-    # Each case: (tables, text column to force in the selector or None, selector expected?).
     rejected_uploads = {
         "id-only table": (
             [("software_test_ids_only.csv", "id,respondent_id\nA-1,R-1\nA-2,R-2\n")], None, False),
@@ -892,24 +924,24 @@ def app_check() -> list[str]:
         at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
         at.run()
         select(at, "Corpus Dataset", "Upload")
-        uploader = next((u for u in at.file_uploader if ".csv" in (u.allowed_type or [])), None)
+        uploader = next((u for u in at.file_uploader if "csv" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])}), None)
         if uploader is None:
             check(f"{case}: file uploader rendered", False)
             continue
         uploader.set_value([(name, body.encode("utf-8"), "text/csv") for name, body in tables])
         at.run()
-        text_box = widget(at, "selectbox", "Text column (free-text responses)")
+        text_box = widget(at, "selectbox", "Open-ended question column to code")
         if force_col is not None and text_box is not None:
             check(f"{case}: detection agrees on 'response' before override", text_box.value == "response",
                   str(text_box.value))
             run_analysis(at)
             check(f"{case}: agreeing tables are analysed before override",
                   len(at.error) == 0 and len(at.metric) == 4, f"{len(at.error)} errors, {len(at.metric)} metrics")
-            text_box = widget(at, "selectbox", "Text column (free-text responses)")
+            text_box = widget(at, "selectbox", "Open-ended question column to code")
             text_box.set_value(force_col)
             at.run()
             run_analysis(at)
-            text_box = widget(at, "selectbox", "Text column (free-text responses)")
+            text_box = widget(at, "selectbox", "Open-ended question column to code")
         else:
             run_analysis(at)
         no_exceptions(at, case)
@@ -943,7 +975,8 @@ MARKDOWN_DOMAINS = {
 SUMMARY_SELECTOR = '[data-testid="stHtml"] p.atlas-chart-summary'
 SUMMARY_MARKUP = 'img, [role="img"], a, b, em, strong, code, .katex, [style*="color"], script'
 MARKDOWN_CODEBOOK_NAME = "software_test_markdown_domains.yaml"
-KPI_LABELS = ("Analytical Units (N)", "Participant Turns", "Active Domains", "Matched Turn Mentions")
+KPI_LABELS = ("Analytical Units", "Themes Found", "Turns Scanned", "Theme Matches")
+GROUP_KPI_LABELS = ("Focus Groups", "Themes Found", "Notes Entries Scanned", "Theme Matches")
 AUDIT_STAMP = "ATLAS VERIFICATION AUDIT STAMP"
 UI_WAIT_SECONDS = 90
 
@@ -1023,17 +1056,30 @@ def engine_results(codebook: Path, files, root: Path, options=None) -> dict:
                                                      tabular_options=options)
 
 
-def engine_kpis(results: dict) -> dict:
+def engine_kpis(results: dict, *, group_mode: bool = False) -> dict:
     freq = results["frequencies_df"]
+    n_found = int((freq["documents_reporting"] > 0).sum())
+    if group_mode:
+        return {
+            "Focus Groups": str(int(results["total_documents"])),
+            "Themes Found": f"{n_found} of {len(freq)}",
+            "Notes Entries Scanned": str(int(results["participant_turns_analyzed"])),
+            "Theme Matches": str(int(freq["matching_turns"].sum())),
+        }
     return {
-        "Analytical Units (N)": float(results["total_documents"]),
-        "Participant Turns": float(results["participant_turns_analyzed"]),
-        "Active Domains": float(len(freq)),
-        "Matched Turn Mentions": float(freq["matching_turns"].sum()),
+        "Analytical Units": str(int(results["total_documents"])),
+        "Themes Found": f"{n_found} of {len(freq)}",
+        "Turns Scanned": str(int(results["participant_turns_analyzed"])),
+        "Theme Matches": str(int(freq["matching_turns"].sum())),
     }
 
 
 def engine_domain_counts(results: dict) -> dict:
+    freq = results["frequencies_df"]
+    return {str(r.domain_name): (int(r.documents_reporting), int(r.matching_turns)) for r in freq.itertuples()}
+
+
+def engine_domain_id_counts(results: dict) -> dict:
     freq = results["frequencies_df"]
     return {str(r.domain_id): (int(r.documents_reporting), int(r.matching_turns)) for r in freq.itertuples()}
 
@@ -1087,15 +1133,8 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         for card in page.locator('[data-testid="stMetric"]').all():
             label = card.locator('[data-testid="stMetricLabel"]').inner_text().strip()
             value = card.locator('[data-testid="stMetricValue"]').inner_text().strip()
-            values[label] = float(value.replace(",", ""))
+            values[label] = value.replace(",", "")
         return values
-
-    def caption_codebook(page) -> str:
-        for caption in page.locator('[data-testid="stCaptionContainer"], [data-testid="stText"]').all_inner_texts():
-            found = re.search(r"Codebook: (\S+\.ya?ml)", caption)
-            if found:
-                return found.group(1)
-        return ""
 
     def summary_caption(page) -> str:
         """Visible text of the st.html chart-summary paragraph in the open tab, unmodified."""
@@ -1107,21 +1146,20 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         return ""
 
     def domain_table(page) -> dict:
-        """{domain_id: (units reporting, matching turns)} from the visible thematic-prevalence grid."""
-        # Each grid paints to a canvas; its cell text lives in a visually hidden accessibility table.
+        """{theme_name: (units reporting, theme matches)} from the visible thematic-prevalence grid."""
         for frame in page.locator('[data-testid="stDataFrame"]').all():
             if not frame.is_visible() or frame.locator("table").count() == 0:
                 continue
             table = frame.locator("table").first
             headers = [h.strip() for h in table.locator("th").all_inner_texts()]
-            if not {"Domain ID", "Units reporting", "Matching turns"} <= set(headers):
+            if not {"Theme", "Units Reporting", "Theme Matches"} <= set(headers):
                 continue
             rows = {}
             for tr in table.locator("tr").all()[1:]:
                 cells = [c.strip() for c in tr.locator("td").all_inner_texts()]
                 if len(cells) == len(headers):
                     row = dict(zip(headers, cells))
-                    rows[row["Domain ID"]] = (int(row["Units reporting"]), int(row["Matching turns"]))
+                    rows[row["Theme"]] = (int(row["Units Reporting"]), int(row["Theme Matches"]))
             return rows
         return {}
 
@@ -1169,6 +1207,36 @@ def browser_check(url: str, scratch: Path) -> list[str]:
         info.value.save_as(str(target))
         return target
 
+    def upload_custom_codebook(page, path: Path) -> None:
+        """Upload a custom YAML codebook and verify the Streamlit backend committed it, retrying on async rerun races."""
+        target_text = f"Active selection: custom file ({path.name})"
+        deadline = time.monotonic() + UI_WAIT_SECONDS
+        last_exc = None
+        while time.monotonic() < deadline:
+            try:
+                page.locator('[data-testid="stStatusWidget"]').wait_for(state="hidden", timeout=5000)
+            except PlaywrightError:
+                pass
+            try:
+                summary = page.locator("summary", has_text="Upload Custom Themes (.yaml)").first
+                if not summary.evaluate("el => el.parentElement && el.parentElement.open"):
+                    summary.scroll_into_view_if_needed(timeout=5000)
+                    summary.click(timeout=5000)
+                cb_uploader = page.get_by_test_id("stFileUploader").filter(has_text="Upload Custom Theme File").first
+                file_input = cb_uploader.locator("input[type='file']").first
+                file_input.set_input_files([])
+                file_input.set_input_files(str(path))
+                page.get_by_text(target_text, exact=False).first.wait_for(state="attached", timeout=10000)
+                try:
+                    page.locator('[data-testid="stStatusWidget"]').wait_for(state="hidden", timeout=5000)
+                except PlaywrightError:
+                    pass
+                return
+            except PlaywrightError as exc:
+                last_exc = exc
+                page.wait_for_timeout(300)
+        raise last_exc
+
     def click_run(page) -> None:
         deadline = time.monotonic() + UI_WAIT_SECONDS
         last_exc = None
@@ -1203,85 +1271,90 @@ def browser_check(url: str, scratch: Path) -> list[str]:
             page.get_by_role("button", name=re.compile(r"Run Analysis")).wait_for(timeout=UI_WAIT_SECONDS * 1000)
             page.get_by_text("Ready to analyze").wait_for(timeout=UI_WAIT_SECONDS * 1000)
 
-            # 1. Boot render: clean onboarding, zero SOFTWARE_TEST jargon, then manual Run on Bilingual sample.
+            # 1. Boot render: clean onboarding, zero SOFTWARE_TEST jargon, then manual Run on Focus-Group Notes sample.
             alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
             check("boot: clean onboarding without SOFTWARE_TEST notice",
                   "Ready to analyze" in alerts and "SOFTWARE_TEST" not in alerts, alerts[:200])
-            select_option(page, "Corpus Dataset", re.compile(r"Bilingual"))
+            select_option(page, "Corpus Dataset", re.compile(r"Focus-Group Notes"))
             click_run(page)
             page.locator('[data-testid="stMetric"]').first.wait_for(timeout=UI_WAIT_SECONDS * 1000)
-            boot_codebook = caption_codebook(page)
-            check("sample run: active codebook shown", bool(boot_codebook))
             samples = REPO / "data" / "samples"
-            boot = engine_results(REPO / "config" / (boot_codebook or "missing.yaml"),
-                                  [samples / "software_test_bilingual_interview.txt",
-                                   samples / "software_test_zoom_session.vtt"], REPO)
-            boot_kpis = wait_for(page, "sample run: KPI cards match engine", kpis, engine_kpis(boot))
-            check("sample run: four KPI cards", isinstance(boot_kpis, dict) and set(boot_kpis) == set(KPI_LABELS),
+            boot = engine_results(REPO / "config" / "gbi_focus_group_starter.yaml",
+                                  [samples / "software_test_gbi_group_treatment.docx",
+                                   samples / "software_test_gbi_group_control.docx"], REPO)
+            boot_kpis = wait_for(page, "sample run: KPI cards match engine", kpis, engine_kpis(boot, group_mode=True))
+            check("sample run: four Group KPI cards", isinstance(boot_kpis, dict) and set(boot_kpis) == set(GROUP_KPI_LABELS),
                   repr(boot_kpis))
 
-            # 2. Upload a custom transcript; KPIs and the domain table recompute after clicking Run Analysis.
+            # 2. Upload a custom transcript + PFL YAML codebook; KPIs and domain table recompute after Run Analysis.
             select_option(page, "Corpus Dataset", UPLOAD_OPTION)
-            tx_uploader = page.get_by_test_id("stFileUploader").filter(has_text="Upload Transcript")
-            tx_uploader.locator("input[type='file']").set_input_files(str(upload))
+            try:
+                page.locator('[data-testid="stStatusWidget"]').wait_for(state="hidden", timeout=5000)
+            except PlaywrightError:
+                pass
+            tx_uploader = page.get_by_test_id("stFileUploader").filter(has_text="Upload Files").first
+            tx_uploader.locator("input[type='file']").first.set_input_files(str(upload))
             tx_uploader.locator('[data-testid="stFileChip"], [data-testid="stFileUploaderFile"]').first.wait_for(
                 state="attached", timeout=UI_WAIT_SECONDS * 1000
             )
+            # Wait for Streamlit backend to receive the uploaded transcript and settle the sidebar widget tree.
+            page.get_by_text("Advanced transcript filters", exact=False).first.wait_for(
+                state="attached", timeout=UI_WAIT_SECONDS * 1000
+            )
+            upload_custom_codebook(page, REPO / "config" / "pfl_case_study_codebook.yaml")
             click_run(page)
             page.get_by_text(f"Corpus: {BROWSER_UPLOAD_NAME}").wait_for(timeout=UI_WAIT_SECONDS * 1000)
-            codebook = caption_codebook(page)
             uploaded_root = scratch / "engine_root"
             (uploaded_root / "uploads").mkdir(parents=True)
             shutil.copy2(upload, uploaded_root / "uploads" / BROWSER_UPLOAD_NAME)
-            want = engine_results(REPO / "config" / (codebook or "missing.yaml"),
+            want = engine_results(REPO / "config" / "pfl_case_study_codebook.yaml",
                                   [uploaded_root / "uploads" / BROWSER_UPLOAD_NAME], uploaded_root)
             want_kpis = engine_kpis(want)
             check("upload: engine finds matches in the SOFTWARE_TEST upload",
-                  want_kpis["Matched Turn Mentions"] > 0, repr(want_kpis))
-            check("upload: expected KPIs differ from sample run", want_kpis != engine_kpis(boot))
+                  int(want_kpis["Theme Matches"]) > 0, repr(want_kpis))
+            check("upload: expected KPIs differ from sample run", want_kpis != engine_kpis(boot, group_mode=True))
             wait_for(page, "upload: KPI cards recomputed to engine values", kpis, want_kpis)
             wait_for(page, "upload: domain table recomputed to engine values", domain_table,
                      engine_domain_counts(want))
             alerts = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
             check("upload: no SOFTWARE_TEST notice in live UI", "SOFTWARE_TEST" not in alerts)
-            check("upload: workbook integrity passes in the app", "integrity check passed" in alerts, alerts[:300])
 
-            # 3. Download the engine's workbook and manifest and verify them offline.
-            page.get_by_role("tab", name=re.compile(r"Tab 2")).click()
-            xlsx = download(page, re.compile(r"actuarial_parameter_matrix\.xlsx"), scratch / "downloaded.xlsx")
-            manifest_path = download(page, re.compile(r"provenance_manifest\.json"), scratch / "downloaded.json")
+            # 3. Download the engine's workbook, manifest, and full report and verify them offline.
+            page.get_by_role("tab", name="Exports & Audit Files").click()
+            alerts_tab2 = " ".join(page.locator('[data-testid="stAlert"]').all_inner_texts())
+            check("upload: workbook integrity passes in the app", "integrity check passed" in alerts_tab2, alerts_tab2[:300])
+            xlsx = download(page, re.compile(r"Download Theme Frequencies \(\.xlsx\)"), scratch / "downloaded.xlsx")
+            manifest_path = download(page, re.compile(r"Download Provenance Manifest \(\.json\)"), scratch / "downloaded.json")
+            report_docx = download(page, re.compile(r"Download Full Report \(\.docx\)"), scratch / "report.docx")
+            check("download: full summary report .docx is a valid OOXML package",
+                  report_docx.read_bytes().startswith(b"PK\x03\x04"))
 
             # 4. A custom codebook whose domain names are Markdown and Streamlit shortcodes: both
             #    st.html chart summaries show them verbatim after clicking Run Analysis.
-            select_option(page, "Active YAML Codebook", CODEBOOK_UPLOAD_OPTION)
-            cb_uploader = page.get_by_test_id("stFileUploader").filter(has_text=CODEBOOK_UPLOAD_OPTION)
-            cb_uploader.locator("input[type='file']").set_input_files(str(markdown_codebook))
-            cb_uploader.locator('[data-testid="stFileChip"], [data-testid="stFileUploaderFile"]').first.wait_for(
-                state="attached", timeout=UI_WAIT_SECONDS * 1000
-            )
+            upload_custom_codebook(page, markdown_codebook)
             click_run(page)
-            for tab in ("Tab 1", "Tab 2"):
-                page.get_by_role("tab", name=re.compile(tab)).click()
-                wait_for(page, f"markdown domains: {tab} chart summary shows both names verbatim",
+            for tab_name in ("Themes & Quotes", "Exports & Audit Files"):
+                page.get_by_role("tab", name=tab_name).click()
+                wait_for(page, f"markdown domains: {tab_name} chart summary shows both names verbatim",
                          lambda p: all(name in summary_caption(p) for name in MARKDOWN_DOMAINS.values()), True)
                 caption = summary_caption(page)
-                check(f"markdown domains: {tab} summary has no escape backslashes", "\\" not in caption, caption)
-                check(f"markdown domains: {tab} summary has no invisible U+2060", "⁠" not in caption, caption)
+                check(f"markdown domains: {tab_name} summary has no escape backslashes", "\\" not in caption, caption)
+                check(f"markdown domains: {tab_name} summary has no invisible U+2060", "⁠" not in caption, caption)
                 markup = page.evaluate(
                     "([sel, bad]) => [...document.querySelectorAll(sel)]"
                     ".filter(c => c.innerText.startsWith('Chart summary:') && c.offsetParent !== null)"
                     ".map(c => c.querySelectorAll(bad).length)", [SUMMARY_SELECTOR, SUMMARY_MARKUP])
-                check(f"markdown domains: {tab} summary renders no image, icon, link, math, color, emphasis or script",
+                check(f"markdown domains: {tab_name} summary renders no image, icon, link, math, color, emphasis or script",
                       markup == [0], repr(markup))
             leaked = page.locator("img[src*='example.invalid'], a[href*='example.invalid']").count()
             check("markdown domains: no example.invalid image or link anywhere in the page", leaked == 0, str(leaked))
 
-            # 5. Tab 3 Reference Guides renders formatted documentation and serves valid .docx downloads offline.
-            page.get_by_role("tab", name=re.compile(r"Tab 3")).click()
+            # 5. Reference Guides renders formatted documentation and serves valid .docx downloads offline.
+            page.get_by_role("tab", name="Reference Guides").click()
             guide_docx = download(
-                page, re.compile(r"ATLAS_GBI_Analyst_Quick_Start\.docx"), scratch / "quick_start.docx"
+                page, re.compile(r"Download ATLAS_GBI_Analyst_Quick_Start\.docx"), scratch / "quick_start.docx"
             )
-            check("guides: Tab 3 Word .docx download is a valid OOXML package",
+            check("guides: Reference Guides Word .docx download is a valid OOXML package",
                   guide_docx.read_bytes().startswith(b"PK\x03\x04"))
         finally:
             browser.close()
@@ -1299,7 +1372,7 @@ def browser_check(url: str, scratch: Path) -> list[str]:
           repr(manifest.get("file_hashes")))
     check("download: manifest counts match engine", manifest.get("total_documents") == want["total_documents"]
           and {d["domain_id"]: (d["documents_reporting"], d["matching_turns"]) for d in manifest.get("domains", [])}
-          == engine_domain_counts(want))
+          == engine_domain_id_counts(want))
 
     external = [u for u in requested if not is_local_request_url(u)]
     check("browser: requests recorded", len(requested) > 0)

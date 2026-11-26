@@ -29,9 +29,17 @@ from openpyxl.utils.exceptions import InvalidFileException
 from universal_transcript_parser import TABULAR_EXTENSIONS, UniversalTranscriptParser
 
 FREQUENCY_SHEET = "Empirical Frequencies"
+FREQUENCY_COLUMNS = [
+    "domain_id", "domain_name", "documents_reporting", "total_documents",
+    "prevalence_pct", "matching_turns", "total_mentions", "reporting_statement",
+]
 FREQUENCY_HEADERS = [
     "Domain ID", "Policy Domain Name", "Reporting Documents", "Total Documents", "Prevalence Rate (%)",
     "Matching Dialogue Turns", "Plain Language Empirical Statement",
+]
+TYPO_MATCH_COLUMNS = [
+    "source_id", "unit_id", "turn_id", "line_number", "domain_id", "domain_name",
+    "matched_span", "matched_root", "match_char_start", "match_char_end", "text",
 ]
 QUOTE_COLUMNS = [
     "domain_id", "domain_name", "document_name", "source_id", "unit_id", "turn_id", "line_number",
@@ -438,6 +446,55 @@ def _sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
+def _damerau_levenshtein_1(a: str, b: str) -> bool:
+    """
+    True iff the optimal string alignment (Damerau-Levenshtein) distance between
+    lowercase strings a and b is strictly 1: one substitution, one adjacent
+    transposition, one insertion, or one deletion. Returns False when a == b.
+    """
+    if a == b:
+        return False
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diffs = [i for i in range(la) if a[i] != b[i]]
+        if len(diffs) == 1:
+            return True
+        if len(diffs) == 2:
+            i, j = diffs
+            return j == i + 1 and a[i] == b[j] and a[j] == b[i]
+        return False
+    # Ensure `short` is 1 character shorter than `long`.
+    short, long_ = (a, b) if la < lb else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(short) and j < len(long_):
+        if short[i] == long_[j]:
+            i += 1
+            j += 1
+        elif not skipped:
+            skipped = True
+            j += 1
+        else:
+            return False
+    return True
+
+
+def _compile_fuzzy_roots(terms: Sequence[str], min_len: int = 5) -> List[str]:
+    """Single-word folded lowercase roots of length >= min_len eligible for DL=1 matching."""
+    seen = set()
+    out: List[str] = []
+    for raw in terms:
+        folded = fold_accents(str(raw or "")).strip().lower()
+        if len(folded) < min_len or " " in folded or not _TOKEN.fullmatch(folded):
+            continue
+        if folded not in seen:
+            seen.add(folded)
+            out.append(folded)
+    return sorted(out)
+
+
 class AtlasEngine:
     """
     Deterministic text analysis and qualitative synthesis engine.
@@ -482,6 +539,7 @@ class AtlasEngine:
                 "match_mode": match_mode,
                 "root_regex": _compile_terms(roots, match_mode),
                 "root_patterns": _compile_term_patterns(roots, match_mode),
+                "fuzzy_roots": _compile_fuzzy_roots(roots, min_len=5),
                 "fence_regex": _compile_terms(domain.get("context_fences", [])),
                 "fence_patterns": _compile_term_patterns(domain.get("context_fences", [])),
                 "context_window": _parse_window(domain.get("context_window"), "context_window", rule_id),
@@ -559,6 +617,55 @@ class AtlasEngine:
             qualifying.append((r_start, r_end))
         return qualifying
 
+    def _match_rule_fuzzy(
+        self, rule: Dict[str, Any], folded: str, token_starts: List[int]
+    ) -> List[Tuple[int, int, str]]:
+        """
+        Bounded opt-in spelling-tolerance fallback: returns (folded_start, folded_end,
+        matched_root) for whole tokens (len >= 4) at exact Damerau-Levenshtein distance 1
+        from any single-word root of len >= 5, enforcing the exact same context_fences
+        and exclude_fences windows as _match_rule.
+        """
+        fuzzy_roots = rule.get("fuzzy_roots") or []
+        if not fuzzy_roots:
+            return []
+
+        candidates: List[Tuple[int, int, str]] = []
+        for tok_m in _TOKEN.finditer(folded):
+            tok_lower = tok_m.group(0).lower()
+            if len(tok_lower) < 4:
+                continue
+            for root in fuzzy_roots:
+                if _damerau_levenshtein_1(tok_lower, root):
+                    candidates.append((tok_m.start(), tok_m.end(), root))
+                    break
+        if not candidates:
+            return []
+
+        has_fences, fence_window = bool(rule["fence_patterns"]), rule["context_window"]
+        fences = _find_overlapping_spans(rule["fence_patterns"], folded)
+        if has_fences and not fences:
+            return []
+
+        excl_window = rule["exclude_window"]
+        excludes = _find_overlapping_spans(rule["exclude_patterns"], folded)
+        if excludes and excl_window is None:
+            return []
+
+        fence_toks = [self._token_interval(token_starts, s, e) for s, e in fences]
+        excl_toks = [self._token_interval(token_starts, s, e) for s, e in excludes]
+
+        qualifying: List[Tuple[int, int, str]] = []
+        for r_start, r_end, root in candidates:
+            r_tok = self._token_interval(token_starts, r_start, r_end)
+            if has_fences and fence_window is not None:
+                if not any(self._interval_gap(r_tok, f_tok) <= fence_window for f_tok in fence_toks):
+                    continue
+            if excl_window is not None and any(self._interval_gap(r_tok, x_tok) <= excl_window for x_tok in excl_toks):
+                continue
+            qualifying.append((r_start, r_end, root))
+        return qualifying
+
     # ------------------------------------------------------------------
     # Corpus processing
     # ------------------------------------------------------------------
@@ -572,6 +679,7 @@ class AtlasEngine:
         include_evidence_types: Optional[Sequence[str]] = None,
         notes_unit_level: str = "group",
         group_by_source: bool = False,
+        spelling_tolerance: bool = False,
     ) -> Dict[str, Any]:
         """
         Parse transcript and tabular files and generate verified frequency matrices.
@@ -579,16 +687,12 @@ class AtlasEngine:
         file_hashes is keyed by source_id: the POSIX path relative to root_dir when
         given, otherwise the canonical absolute path, so files sharing a basename in
         different folders never collide. tabular_options (text_col, id_col,
-        speaker_col, allow_duplicate_ids) apply to .csv/.xlsx inputs.
-        include_evidence_types and notes_unit_level are passed to the parser and only
-        affect structured focus-group notes (.docx). group_by_source is passed to
-        process_turns: every input file is one analytical unit (Group mode).
-
-        Besides the process_turns keys, the result holds document_structures
-        ({source_id: "transcript" | "tabular" | "focus_group_notes"}), notes_metadata
-        (the parser's per-file notes metadata) and note_taker_themes_df: every
-        note-taker "Themes" row of the notes files, read by a separate parse so it is
-        reference only and never enters the coded turns, frequencies or quotes.
+        speaker_col, allow_duplicate_ids, sheet_name, duplicate_id_policy) apply to
+        .csv/.xlsx inputs. include_evidence_types and notes_unit_level are passed to
+        the parser and only affect structured focus-group notes (.docx).
+        group_by_source is passed to process_turns: every input file is one analytical
+        unit (Group mode). spelling_tolerance enables opt-in DL=1 fallback on 5+ char
+        single-word roots (default False).
         """
         parser = UniversalTranscriptParser(
             facilitator_names=facilitator_names,
@@ -604,6 +708,7 @@ class AtlasEngine:
         theme_turns: List[Dict[str, Any]] = []
         file_hashes: Dict[str, str] = {}
         document_structures: Dict[str, str] = {}
+        tabular_stats: List[Dict[str, Any]] = []
         seen_paths = set()
 
         for file_path in transcript_files:
@@ -623,20 +728,31 @@ class AtlasEngine:
                 raise ValueError(f"Two inputs resolve to the same source_id {source_id!r}")
             file_hashes[source_id] = _sha256_file(file_path)
             document_structures[source_id] = parser.last_document_structure
+            if parser.last_tabular_stats is not None:
+                tabular_stats.append(dict(parser.last_tabular_stats))
             all_turns.extend(turns)
             if parser.last_document_structure == "focus_group_notes":
                 theme_turns.extend(themes_parser.parse_file(file_path, root_dir=root_dir))
 
-        results = self.process_turns(all_turns, file_hashes, group_by_source=group_by_source)
+        results = self.process_turns(
+            all_turns, file_hashes, group_by_source=group_by_source,
+            spelling_tolerance=spelling_tolerance,
+        )
         results["document_structures"] = document_structures
         results["notes_metadata"] = dict(parser.last_document_metadata)
         results["note_taker_themes_df"] = pd.DataFrame(theme_turns)
+        results["tabular_stats"] = tabular_stats
         return results
 
     process_transcripts = process_corpus
 
-    def process_turns(self, turns: List[Dict[str, Any]], file_hashes: Dict[str, str],
-                      group_by_source: bool = False) -> Dict[str, Any]:
+    def process_turns(
+        self,
+        turns: List[Dict[str, Any]],
+        file_hashes: Dict[str, str],
+        group_by_source: bool = False,
+        spelling_tolerance: bool = False,
+    ) -> Dict[str, Any]:
         """
         Tag pre-parsed turns (e.g. from Streamlit uploads) against the compiled rules.
 
@@ -645,6 +761,8 @@ class AtlasEngine:
         transcript, one per tabular respondent row). With group_by_source every
         input file is one unit instead (unit_id = source_id, total_documents = number
         of files); speakers are kept, so voices can still be counted per file.
+        When spelling_tolerance=True, DL=1 fallback runs only for (turn, domain) pairs
+        with zero qualifying normal spans, preserving strict normal-match precedence.
         """
         file_hashes = dict(file_hashes)
         if group_by_source:
@@ -652,9 +770,11 @@ class AtlasEngine:
                 {**t, "unit_id": t.get("source_id") or t.get("document_name")} for t in turns
             ]
         participant_turns = [t for t in turns if not t.get("is_facilitator", False)]
+        has_respondent_id = any("respondent_id" in t for t in participant_turns)
 
         tagged_records = []
         quote_inventory = []
+        typo_inventory: List[Dict[str, Any]] = []
         mention_counts = {rule["id"]: 0 for rule in self.compiled_rules}
 
         for turn in participant_turns:
@@ -670,6 +790,10 @@ class AtlasEngine:
 
             for rule in self.compiled_rules:
                 spans = self._match_rule(rule, folded, token_starts)
+                fuzzy_hits: List[Tuple[int, int, str]] = []
+                if not spans and spelling_tolerance:
+                    fuzzy_hits = self._match_rule_fuzzy(rule, folded, token_starts)
+                    spans = [(s, e) for s, e, _ in fuzzy_hits]
                 if not spans:
                     continue
                 mention_counts[rule["id"]] += self._count_mentions(spans)
@@ -681,8 +805,24 @@ class AtlasEngine:
                         f"{text[match_start:match_end]!r} does not fold to {folded[f_start:f_end]!r}"
                     )
 
+                for fs, fe, froot in fuzzy_hits:
+                    os_i, oe_i = folded_span_to_original(text, index_map, fs, fe)
+                    typo_inventory.append({
+                        "source_id": source_id,
+                        "unit_id": unit_id,
+                        "turn_id": turn.get("turn_id"),
+                        "line_number": turn.get("line_number"),
+                        "domain_id": rule["id"],
+                        "domain_name": rule["name"],
+                        "matched_span": text[os_i:oe_i],
+                        "matched_root": froot,
+                        "match_char_start": os_i,
+                        "match_char_end": oe_i,
+                        "text": text,
+                    })
+
                 matched_domains.append(rule["id"])
-                quote_inventory.append({
+                q_row = {
                     "domain_id": rule["id"],
                     "domain_name": rule["name"],
                     "document_name": turn.get("document_name", os.path.basename(str(source_id))),
@@ -700,7 +840,10 @@ class AtlasEngine:
                     "match_text": text[match_start:match_end],
                     "source_sha256": file_hashes[source_id],
                     **{col: str(turn.get(col) or "") for col in NOTES_PROVENANCE_COLUMNS},
-                })
+                }
+                if has_respondent_id:
+                    q_row["respondent_id"] = str(turn.get("respondent_id") or "")
+                quote_inventory.append(q_row)
 
             record = dict(turn)
             record["matched_domains"] = matched_domains
@@ -727,15 +870,18 @@ class AtlasEngine:
                 ),
             })
 
+        quote_cols = [*QUOTE_COLUMNS, "respondent_id"] if has_respondent_id else QUOTE_COLUMNS
         return {
             "project_name": self.project_name,
             "total_documents": total_docs,
             "total_turns_parsed": len(turns),
             "participant_turns_analyzed": len(participant_turns),
             "file_hashes": file_hashes,
-            "frequencies_df": pd.DataFrame(frequency_rows),
-            "quotes_df": pd.DataFrame(quote_inventory, columns=QUOTE_COLUMNS),
+            "frequencies_df": pd.DataFrame(frequency_rows, columns=FREQUENCY_COLUMNS),
+            "quotes_df": pd.DataFrame(quote_inventory, columns=quote_cols),
             "tagged_turns_df": pd.DataFrame(tagged_records),
+            "spelling_tolerance": bool(spelling_tolerance),
+            "typo_matches_df": pd.DataFrame(typo_inventory, columns=TYPO_MATCH_COLUMNS),
         }
 
     @staticmethod
@@ -786,7 +932,7 @@ class AtlasEngine:
                 dom["matching_turns"], dom["prevalence_pct"], file_hashes,
             )
             domains.append(dom)
-        return {
+        manifest = {
             "project_name": results["project_name"],
             "total_documents": int(results["total_documents"]),
             "total_turns_parsed": int(results["total_turns_parsed"]),
@@ -795,6 +941,23 @@ class AtlasEngine:
             "exported_at_utc": datetime.now(timezone.utc).isoformat(),
             "domains": domains,
         }
+        if results.get("spelling_tolerance"):
+            typo_df = results.get("typo_matches_df")
+            n_occ = int(len(typo_df)) if typo_df is not None else 0
+            if typo_df is not None and len(typo_df):
+                n_matches = len({
+                    (str(r["source_id"]), str(r["unit_id"]), str(r["turn_id"]), str(r["line_number"]), str(r["domain_id"]))
+                    for _, r in typo_df.iterrows()
+                })
+            else:
+                n_matches = 0
+            manifest["spelling_tolerance"] = True
+            manifest["typo_rescued_matches"] = int(n_matches)
+            manifest["typo_rescued_occurrences"] = int(n_occ)
+        tab_stats = results.get("tabular_stats")
+        if tab_stats:
+            manifest["tabular_stats"] = tab_stats
+        return manifest
 
     def export_results(self, results: Dict[str, Any], output_dir: str):
         """
@@ -887,11 +1050,19 @@ class AtlasEngine:
 
         # Mixed evidence (paraphrases / observations) gets an evidence-labelled sheet so no
         # summary is presented as a participant's verbatim statement.
-        mixed = has_non_verbatim_evidence(results["quotes_df"])
+        quotes_df = results["quotes_df"]
+        mixed = has_non_verbatim_evidence(quotes_df)
+        has_respondent_id = (
+            "respondent_id" in quotes_df.columns
+            and quotes_df["respondent_id"].astype(str).str.strip().ne("").any()
+        )
         ws_quotes = wb.create_sheet(title="Coded Evidence & Provenance" if mixed else "Verbatim Quotes & Provenance")
-        q_headers = ["Domain ID", "Source ID", "Unit ID", "Line", "Timestamp", "Speaker", "Match Start",
-                     "Match End", "Coded Entry Text (see Evidence Type)" if mixed else "Verbatim Statement",
-                     "Source File SHA-256"]
+        q_headers = ["Domain ID", "Source ID", "Unit ID"]
+        if has_respondent_id:
+            q_headers.append("Respondent ID")
+        q_headers += ["Line", "Timestamp", "Speaker", "Match Start",
+                      "Match End", "Coded Entry Text (see Evidence Type)" if mixed else "Verbatim Statement",
+                      "Source File SHA-256"]
         if mixed:
             q_headers += ["Evidence Type", "Question"]
         for col_idx, h in enumerate(q_headers, 1):
@@ -900,10 +1071,12 @@ class AtlasEngine:
             cell.font = FONT_HEADER
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        for row_idx, r in enumerate(results["quotes_df"].to_dict("records")):
+        for row_idx, r in enumerate(quotes_df.to_dict("records")):
             r_num = row_idx + 2
-            values = [
-                r["domain_id"], r["source_id"], r["unit_id"],
+            values = [r["domain_id"], r["source_id"], r["unit_id"]]
+            if has_respondent_id:
+                values.append(str(r.get("respondent_id") or ""))
+            values += [
                 int(r["line_number"]) if r["line_number"] is not None else None,
                 str(r["timestamp"]), r["speaker"], int(r["match_char_start"]), int(r["match_char_end"]),
                 r["text"], r["source_sha256"],
@@ -1018,14 +1191,15 @@ class AtlasEngine:
 # ----------------------------------------------------------------------
 FALSE_ALARM_COLUMNS = [
     "risk_level", "domain_id", "domain_name", "matched_span", "full_word",
-    "extension_words", "flag_codes", "flag_reason", "suggested_fix", "speaker", "source_id",
-    "line_number", "evidence_type", "match_char_start", "match_char_end", "text",
+    "extension_words", "spelling_words", "flag_codes", "flag_reason", "suggested_fix",
+    "speaker", "source_id", "line_number", "evidence_type",
+    "match_char_start", "match_char_end", "text",
 ]
 FALSE_ALARM_SUMMARY_COLUMNS = [
     "Risk", "Domain", "Matched Span", "Full Word", "Flagged Matches", "Why Flagged", "Suggested Fix",
 ]
 _AUDIT_TOKEN = re.compile(r"[A-Za-z0-9_]+(?:['\u2019][A-Za-z0-9_]+)?")
-_SIMPLE_LONG_INFLECTIONS = frozenset({"s", "es", "ed", "d", "ing", "er", "ers", "ly"})
+_SIMPLE_LONG_INFLECTIONS = frozenset({"s", "es", "ed", "d", "ing", "er", "ers", "ly", "ies", "y"})
 _NEGATION_CUES = frozenset({
     "no", "not", "never", "neither", "nor", "none", "nothing", "nowhere", "without",
     "hardly", "barely", "cannot", "cant", "can't", "dont", "don't", "didnt", "didn't",
@@ -1268,8 +1442,14 @@ def _is_word_char(ch: str) -> bool:
 def _is_benign_inflection(folded_span: str, tail: str, short_root_max_len: int) -> bool:
     if not tail:
         return True
-    if len(folded_span) <= short_root_max_len:
+    if len(folded_span) <= 3:
         if tail == "s":
+            return True
+        if tail == "es" and folded_span.endswith(("s", "x", "z", "ch", "sh")):
+            return True
+        return False
+    if len(folded_span) <= short_root_max_len:
+        if tail in {"s", "ed", "ing"}:
             return True
         if tail == "es" and folded_span.endswith(("s", "x", "z", "ch", "sh")):
             return True
@@ -1351,16 +1531,21 @@ def audit_false_alarm_risks(
     *,
     short_root_max_len: int = 4,
     negation_window: int = 5,
+    typo_matches_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Inspect matched quotes against active codebook rules (1 audit row per flagged
-    match row, so len(audit_df) <= len(quotes_df)) and flag common false-alarm patterns:
+    match row, strictly preserving len(audit_df) <= len(quotes_df)) and flag
+    common false-alarm patterns:
       1. prefix_extension (High): any qualifying span in the turn is only the prefix
          of a different longer word (e.g. 'car' inside 'card' or 'career'), excluding
-         simple plurals and routine inflections on 5+ character stems.
-      2. negation_nearby (Medium): a negation cue ('not', 'never', 'didn't', 'no',
+         simple plurals and routine inflections.
+      2. spelling_tolerance (High): the (entry, domain) match was rescued only via
+         bounded Damerau-Levenshtein=1 spelling tolerance (surfaces all unique typo
+         words for that entry/domain in `spelling_words` for one-click review/exclusion).
+      3. negation_nearby (Medium): a negation cue ('not', 'never', 'didn't', 'no',
          'without', ...) appears within +/- negation_window tokens of a qualifying span.
-      3. short_unfenced_root (Medium): a single-word <=4-character stem matched
+      4. short_unfenced_root (Medium): a single-word <=4-character stem matched
          under prefix mode in a rule with neither context_fences nor exclude_fences.
     """
     if quotes_df is None or len(quotes_df) == 0:
@@ -1371,6 +1556,25 @@ def audit_false_alarm_risks(
         for r in (rules or [])
         if isinstance(r, dict) and "id" in r
     }
+    typo_by_match: Dict[Tuple[str, str, str, str, str], List[Tuple[int, int, str, str]]] = {}
+    if typo_matches_df is not None and len(typo_matches_df) > 0:
+        for _, tr in typo_matches_df.iterrows():
+            key = (
+                str(tr.get("source_id", "")),
+                str(tr.get("unit_id", "")),
+                str(tr.get("turn_id", "")),
+                str(tr.get("line_number", "")),
+                str(tr.get("domain_id", "")),
+            )
+            try:
+                ts = int(tr.get("match_char_start", 0))
+                te = int(tr.get("match_char_end", ts))
+            except (TypeError, ValueError):
+                ts, te = 0, 0
+            typo_by_match.setdefault(key, []).append(
+                (ts, te, str(tr.get("matched_span", "")), str(tr.get("matched_root", "")))
+            )
+
     flagged_rows: List[Dict[str, Any]] = []
 
     for _, row in quotes_df.iterrows():
@@ -1383,21 +1587,40 @@ def audit_false_alarm_risks(
         except (TypeError, ValueError):
             row_start, row_end = 0, 0
 
+        match_key = (
+            str(row.get("source_id", "")),
+            str(row.get("unit_id", "")),
+            str(row.get("turn_id", "")),
+            str(row.get("line_number", "")),
+            domain_id,
+        )
+        typo_entries = typo_by_match.get(match_key, [])
+
         folded_text, idx_map = fold_accents_with_map(text)
         compiled_rule = compiled_by_id.get(domain_id)
         spans = (
             _qualifying_non_overlapping_spans(compiled_rule, text, folded_text, idx_map)
-            if compiled_rule is not None
+            if compiled_rule is not None and not typo_entries
             else []
         )
         if not spans:
-            spans = [(row_start, row_end)]
+            spans = [(s, e) for s, e, _, _ in typo_entries] if typo_entries else [(row_start, row_end)]
 
         ext_entries: List[Tuple[int, int, str, str]] = []
         ext_words_ordered: List[str] = []
         ext_words_seen: set = set()
+        spelling_words_ordered: List[str] = []
+        spelling_words_seen: set = set()
+        spelling_pairs: List[str] = []
         short_span_entry: Optional[Tuple[int, int, str, str]] = None
         nearest_neg: Optional[Tuple[int, str, int, int, str, str]] = None
+
+        for _, _, t_span, t_root in typo_entries:
+            w_key = t_span.strip().lower()
+            if w_key and w_key not in spelling_words_seen:
+                spelling_words_seen.add(w_key)
+                spelling_words_ordered.append(t_span.strip())
+                spelling_pairs.append(f"'{t_span.strip()}' -> '{t_root}'")
 
         toks = list(_AUDIT_TOKEN.finditer(folded_text))
         rule_mode = compiled_rule["match_mode"] if compiled_rule else "prefix"
@@ -1416,22 +1639,23 @@ def audit_false_alarm_risks(
             tail = fold_accents(text[e:w_end]).lower() if w_end > e else ""
             head_ext = w_start < s
 
-            if (w_end > e and not _is_benign_inflection(folded_span, tail, short_root_max_len)) or head_ext:
-                ext_entries.append((s, e, matched_span, full_word))
-                w_key = full_word.strip().lower()
-                if w_key and w_key not in ext_words_seen:
-                    ext_words_seen.add(w_key)
-                    ext_words_ordered.append(full_word.strip())
+            if not typo_entries:
+                if (w_end > e and not _is_benign_inflection(folded_span, tail, short_root_max_len)) or head_ext:
+                    ext_entries.append((s, e, matched_span, full_word))
+                    w_key = full_word.strip().lower()
+                    if w_key and w_key not in ext_words_seen:
+                        ext_words_seen.add(w_key)
+                        ext_words_ordered.append(full_word.strip())
 
-            if (
-                short_span_entry is None
-                and rule_mode == "prefix"
-                and not has_context
-                and not has_exclude
-                and 0 < len(folded_span) <= short_root_max_len
-                and " " not in folded_span
-            ):
-                short_span_entry = (s, e, matched_span, full_word)
+                if (
+                    short_span_entry is None
+                    and rule_mode == "prefix"
+                    and not has_context
+                    and not has_exclude
+                    and 0 < len(folded_span) <= short_root_max_len
+                    and " " not in folded_span
+                ):
+                    short_span_entry = (s, e, matched_span, full_word)
 
             if toks:
                 f_start = bisect.bisect_left(idx_map, s)
@@ -1456,47 +1680,55 @@ def audit_false_alarm_risks(
         reasons: List[str] = []
         fixes: List[str] = []
 
+        if typo_entries:
+            codes.append("spelling_tolerance")
+            reasons.append(f"Matched via spelling tolerance ({', '.join(spelling_pairs)})")
+            excl_hint = ", ".join(f"'{w.lower()}'" for w in spelling_words_ordered)
+            fixes.append(f"Confirm typo in context; exclude {excl_hint} below if this is not a real match")
         if ext_entries:
             codes.append("prefix_extension")
             quoted_words = ", ".join(f"'{w}'" for w in ext_words_ordered)
-            reasons.append(f"Prefix extension ('{ext_entries[0][2]}' inside {quoted_words})")
+            reasons.append(f"Keyword '{ext_entries[0][2]}' matched inside longer word {quoted_words}")
             excl_hint = ", ".join(f"'{w.lower()}'" for w in ext_words_ordered)
             excl_win = compiled_rule["exclude_window"] if compiled_rule else None
             if (not has_exclude and excl_win is None) or excl_win == 0:
                 fixes.append(
-                    f"Add {excl_hint} to exclude_fences (window 0) or switch domain to match_mode: exact"
+                    f"Exclude {excl_hint} below, or switch this theme to exact whole-word matching"
                 )
             elif excl_win is not None:
                 fixes.append(
-                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
-                    f"(preserves {excl_win}-token window)"
+                    f"Switch to exact whole-word matching, or exclude {excl_hint} below "
+                    f"(keeps existing {excl_win}-word exclusion window)"
                 )
             else:
                 fixes.append(
-                    f"Switch domain to match_mode: exact, or add {excl_hint} to exclude_fences "
-                    "(preserves turn-level window)"
+                    f"Switch to exact whole-word matching, or exclude {excl_hint} below "
+                    "(keeps existing entry-level exclusion window)"
                 )
         if nearest_neg is not None:
             codes.append("negation_nearby")
-            reasons.append(f"Nearby negation ('{nearest_neg[1]}')")
-            fixes.append("Check meaning in context; add a negation phrase to exclude_fences if this should not count")
+            reasons.append(f"Negation word '{nearest_neg[1]}' appeared nearby")
+            fixes.append("Read in context to confirm this still belongs in the theme")
         if short_span_entry is not None:
             codes.append("short_unfenced_root")
-            reasons.append(f"Short unfenced prefix root ('{short_span_entry[2]}')")
+            reasons.append(f"Short keyword ('{short_span_entry[2]}') matched in a theme without exclusion words")
             if "prefix_extension" not in codes:
-                fixes.append("Add exclude_fences or switch domain to match_mode: exact to prevent prefix drift")
+                fixes.append("Review in context or switch this theme to exact whole-word matching")
 
         if not codes:
             continue
 
-        if ext_entries:
+        if typo_entries:
+            focus_s, focus_e, focus_span, _ = typo_entries[0]
+            focus_word = focus_span
+        elif ext_entries:
             focus_s, focus_e, focus_span, focus_word = ext_entries[0]
         elif nearest_neg is not None:
             _, _, focus_s, focus_e, focus_span, focus_word = nearest_neg
         else:
             focus_s, focus_e, focus_span, focus_word = short_span_entry
 
-        risk_level = "High" if "prefix_extension" in codes else "Medium"
+        risk_level = "High" if ("prefix_extension" in codes or "spelling_tolerance" in codes) else "Medium"
         flagged_rows.append({
             "risk_level": risk_level,
             "domain_id": domain_id,
@@ -1504,6 +1736,7 @@ def audit_false_alarm_risks(
             "matched_span": focus_span,
             "full_word": focus_word,
             "extension_words": ", ".join(w.lower() for w in ext_words_ordered),
+            "spelling_words": ", ".join(w.lower() for w in spelling_words_ordered),
             "flag_codes": ",".join(codes),
             "flag_reason": "; ".join(reasons),
             "suggested_fix": "; ".join(fixes),

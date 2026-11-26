@@ -82,19 +82,24 @@ _NOTES_COLUMN_ROLES = {
 }
 # Rows checked for the notes header (a title or "Question N" row may sit above it).
 _NOTES_HEADER_SCAN_ROWS = 3
-_NOTES_PARTICIPANT = re.compile(r"^(P\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
+_NOTES_PARTICIPANT = re.compile(r"^(?:[-•*–—]\s*)?(P\d+)\s*:\s*(.*)$", re.IGNORECASE | re.DOTALL)
 _NOTES_THEMES = re.compile(
     r"^\s*themes(?:\s*/\s*topics)?(?:\s*/\s*patterns)?\s*(?::[ \t]*|(?=\n|$))",
     re.IGNORECASE,
 )
-_NOTES_QUESTION = re.compile(r"^question\s*(\d+)\b\s*[:.)\-]?\s*(.*)$", re.IGNORECASE | re.DOTALL)
-# Structural rows embedded in a notes table: a "Question N:" heading (separator or
-# nothing after the number, so "Question 2 was confusing" stays evidence), a
-# follow-up / probe prompt, and a consent header/statement ("Consent:", "Consent
+_NOTES_QUESTION = re.compile(
+    r"^(?:question\s*|q\s*(?=\d+\s*[:.)\-]))(\d+)\b\s*[:.)\-]?\s*(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+# Structural rows embedded in a notes table: a "Question N:" / "Q1:" heading (separator or
+# nothing after the number, so "Question 2 was confusing" or "Q1 was helpful" stays evidence),
+# a follow-up / probe / facilitator prompt, and a consent header/statement ("Consent:", "Consent
 # statement/script ...", or "Consent form:" / "Consent form reviewed/signed/...";
 # ordinary prose like "Consent form paperwork was confusing" stays evidence).
 _NOTES_EMBEDDED_QUESTION = re.compile(r"^question\s*\d+\s*(?:[:.)\-]|$)", re.IGNORECASE)
+_NOTES_EMBEDDED_Q_SHORT = re.compile(r"^q\s*\d+\s*[:.)\-]", re.IGNORECASE)
 _NOTES_PROMPT = re.compile(r"^(?:follow[\s-]*ups?|probes?)\s*:", re.IGNORECASE)
+_NOTES_FACILITATOR_PROMPT = re.compile(r"^(?:facilitator|moderator|interviewer|prompt)\s*:", re.IGNORECASE)
 _NOTES_CONSENT = re.compile(
     r"^consent(?:\s+(?:statement|script|forms?))?(?:\s*\([^)]*\))?\s*(?:$|:)|"
     r"^consent\s+(?:statement|script)\s+(?:(?:was|were)\s+)?(?:read|reviewed|given|delivered|presented|shared|recited|"
@@ -510,6 +515,7 @@ class UniversalTranscriptParser:
         self.last_excluded_turns: List[Dict[str, Any]] = []
         self.last_skipped_empty_rows = 0
         self.last_fixture_banner_lines: List[int] = []
+        self.last_tabular_stats: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Identity
@@ -528,6 +534,7 @@ class UniversalTranscriptParser:
         self.last_excluded_turns = []
         self.last_skipped_empty_rows = 0
         self.last_fixture_banner_lines = []
+        self.last_tabular_stats = None
 
     # ------------------------------------------------------------------
     # Speaker labels
@@ -539,6 +546,15 @@ class UniversalTranscriptParser:
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------
+    @staticmethod
+    def list_excel_sheets(file_path: str) -> List[str]:
+        """Return sheet names of an .xlsx workbook in sheet order."""
+        import openpyxl
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            return [str(name) for name in wb.sheetnames]
+        finally:
+            wb.close()
     @staticmethod
     def detect_docx_structure(file_path: str) -> str:
         """
@@ -916,16 +932,28 @@ class UniversalTranscriptParser:
         entries: List[Tuple[int, str, str, str, str]] = []
         mixed_label_rows: List[int] = []  # rows whose cells name different participants
         ambiguous_multilabel_rows: List[int] = []  # one cell names several; unlabelled text is "Unknown"
+        excluded_structural_rows: List[Dict[str, Any]] = []
         pending: Dict[str, Any] = {"question_id": None, "prompt": []}
         notes_tables = 0
         location = 0
 
-        def note_question(text: str) -> bool:
+        def record_excluded(loc: int, reason: str, text: str) -> None:
+            clean = _join_lines(text)
+            if clean:
+                excluded_structural_rows.append({
+                    "location": int(loc),
+                    "reason": str(reason),
+                    "text": clean,
+                })
+
+        def note_question(text: str, loc: Optional[int] = None) -> bool:
             match = _NOTES_QUESTION.match(text.strip())
             if not match:
                 return False
             pending["question_id"] = f"Question {int(match.group(1))}"
             pending["prompt"] = _box_lines(match.group(2))
+            if loc is not None:
+                record_excluded(loc, "question_heading", text)
             return True
 
         def set_metadata(label: str, value: str) -> None:
@@ -1008,49 +1036,85 @@ class UniversalTranscriptParser:
                 if text and emit:
                     entries.append((row_block, pid or row_pid, text, evidence_type, question_id))
 
-        def structural_row(cells: List[str], cont: Set[int], cols: Dict[str, List[int]],
+        def structural_row(row_block: int, cells: List[str], cont: Set[int], cols: Dict[str, List[int]],
                            question_id: str) -> Optional[str]:
             """
             The question_id after an embedded structural row, or None when the row is
-            evidence. A row with an explicit "P#:" label in any new cell is evidence. Otherwise
-            the structural label cell is found in any column (Key Points columns first, then
-            left to right) and the other new cells are its payload, so the result does not
-            depend on column order. Inherited labels from vertically merged cells never
-            exempt a genuine structural header; ordinary prose stays evidence.
+            evidence. Guardrails:
+              1. Any explicit "P#:" label in any new cell keeps the row as evidence.
+              2. Existing template structural labels ("Question N:", "Follow-up:",
+                 "Probe:", "Consent:", "Summary of Session", "Main Observations") keep
+                 split-cell payload support across any column order.
+              3. Extended shorthands ("Q1:", "Facilitator:", "Moderator:",
+                 "Interviewer:", "Prompt:") never trigger inside a Notable Quotes cell
+                 or on rows holding a non-empty Notable Quotes cell, and never trigger
+                 on quoted speech starting with quotation marks.
             """
             new_cells = [(col, c) for col, c in enumerate(cells) if c and col not in cont]
             if not new_cells:
                 return None
             if any(pid for _, c in new_cells for pid, _ in _participant_segments(c)):
                 return None
+            # For extended shorthands (Q1:, Facilitator:, Moderator:, Interviewer:, Prompt:),
+            # check participant tags and non-empty Notable Quotes across ALL row cells
+            # (including vertically merged continuation cells) while keeping existing template
+            # headers (Question N:, Consent:, Follow-up:) working across merged rows.
+            all_cells = [(col, c) for col, c in enumerate(cells) if c]
+            has_any_participant_tag = any(pid for _, c in all_cells for pid, _ in _participant_segments(c))
+            quote_cols = set(cols.get("notable_quotes", []))
+            has_notable_quote = any(col in quote_cols and c.strip() for col, c in all_cells)
             order = sorted(new_cells, key=lambda item: (item[0] not in cols["key_points"], item[0]))
             for label_col, label_text in order:
                 first_lines = _box_lines(label_text)
                 if not first_lines:
                     continue
                 head = first_lines[0]
+                if head[:1] in {'"', "'", "\u201c", "\u2018"}:
+                    continue
                 summary_label = _NOTES_SUMMARY_LABEL.match(head)
-                if not (_NOTES_EMBEDDED_QUESTION.match(head) or _NOTES_PROMPT.match(head)
-                        or _NOTES_CONSENT.match(head) or summary_label):
+                is_q_full = bool(_NOTES_EMBEDDED_QUESTION.match(head))
+                is_q_short = (
+                    (not has_any_participant_tag)
+                    and (not has_notable_quote)
+                    and (label_col not in quote_cols)
+                    and bool(_NOTES_EMBEDDED_Q_SHORT.match(head))
+                )
+                is_prompt_full = bool(_NOTES_PROMPT.match(head))
+                is_prompt_fac = (
+                    (not has_any_participant_tag)
+                    and (not has_notable_quote)
+                    and (label_col not in quote_cols)
+                    and bool(_NOTES_FACILITATOR_PROMPT.match(head))
+                )
+                is_consent = bool(_NOTES_CONSENT.match(head))
+                is_q = is_q_full or is_q_short
+                is_prompt = is_prompt_full or is_prompt_fac
+                if not (is_q or is_prompt or is_consent or summary_label):
                     continue
                 extra_lines = [ln for col, c in new_cells if col != label_col for ln in _box_lines(c)]
-                if _NOTES_EMBEDDED_QUESTION.match(head):
+                combined = "\n".join(first_lines + extra_lines)
+                if is_q:
                     match = _NOTES_QUESTION.match(label_text.strip())
                     question_id = f"Question {int(match.group(1))}"
                     questions[question_id] = "\n".join(_box_lines(match.group(2)) + extra_lines)
+                    record_excluded(row_block, "embedded_question_row", combined)
                     return question_id
-                if _NOTES_PROMPT.match(head):
+                if is_prompt:
                     if len(first_lines) == 1 and head.endswith(":") and extra_lines:
                         prompt_lines = [f"{head} {extra_lines[0]}"] + extra_lines[1:]
                     else:
                         prompt_lines = first_lines + extra_lines
                     if question_id in questions:
                         questions[question_id] = "\n".join(_box_lines(questions[question_id]) + prompt_lines)
+                    record_excluded(row_block, "prompt_row", combined)
                     return question_id
                 if summary_label:
                     rest = (summary_label.group(2) or "").strip()
                     set_metadata(summary_label.group(1),
                                  "\n".join(([rest] if rest else []) + first_lines[1:] + extra_lines))
+                    record_excluded(row_block, "summary_box", combined)
+                else:
+                    record_excluded(row_block, "consent_row", combined)
                 return question_id
             return None
 
@@ -1060,8 +1124,9 @@ class UniversalTranscriptParser:
                 text = para.strip()
                 if _is_banner(text):
                     self.last_fixture_banner_lines.append(location)
-                elif text and not note_question(text) and pending["question_id"]:
+                elif text and not note_question(text, loc=location) and pending["question_id"]:
                     pending["prompt"].extend(_box_lines(text))
+                    record_excluded(location, "question_prompt_paragraph", text)
                 continue
 
             first_block = location + 1
@@ -1073,12 +1138,19 @@ class UniversalTranscriptParser:
             found = _notes_columns(rows)
             if found is None:
                 read_metadata_table(rows)
+                box_text = " | ".join(
+                    " ".join(c for c in cells if c.strip())
+                    for cells in rows
+                    if any(c.strip() for c in cells)
+                )
+                if box_text.strip():
+                    record_excluded(first_block, "header_or_summary_table", box_text)
                 continue
 
             header_idx, cols = found
             notes_tables += 1
-            for cells in rows[:header_idx]:
-                note_question(" ".join(c for c in cells if c))
+            for h_idx, cells in enumerate(rows[:header_idx]):
+                note_question(" ".join(c for c in cells if c), loc=first_block + h_idx)
             question_id = pending["question_id"] or f"Question {notes_tables}"
             if pending["question_id"]:
                 questions[question_id] = "\n".join(pending["prompt"])
@@ -1087,7 +1159,7 @@ class UniversalTranscriptParser:
                 cells, cont = rows[r_idx], continued[r_idx]
                 if _notes_columns([cells]):
                     continue  # header repeated on a new page
-                next_question = structural_row(cells, cont, cols, question_id)
+                next_question = structural_row(first_block + r_idx, cells, cont, cols, question_id)
                 if next_question is not None:
                     question_id = next_question
                     continue
@@ -1096,6 +1168,7 @@ class UniversalTranscriptParser:
         metadata["questions"] = questions
         metadata["mixed_label_rows"] = mixed_label_rows
         metadata["ambiguous_multilabel_rows"] = ambiguous_multilabel_rows
+        metadata["excluded_structural_rows"] = excluded_structural_rows
         self.last_document_metadata[source_id] = metadata
 
         kept = [e for e in entries if e[3] in self.include_evidence_types]
@@ -1138,32 +1211,50 @@ class UniversalTranscriptParser:
         speaker_col: Optional[str] = None,
         root_dir: Optional[str] = None,
         allow_duplicate_ids: bool = False,
+        sheet_name: Any = 0,
+        duplicate_id_policy: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Parse a headered .csv or .xlsx file with one response per row.
 
         - Rows whose text_col cell is empty or whitespace-only are skipped and counted
-          in last_skipped_empty_rows.
-        - line_number is the 1-based physical line (CSV, after any leading '#' comment
-          lines) or sheet row (XLSX) where the record starts; the header is row 1.
-        - unit_id is "<source_id>::<id>" when id_col names a non-blank cell,
-          "<source_id>#row_<line_number>" when that cell is blank, and
-          "<source_id>::row_<line_number>" when no id_col is given. Explicit ids always
-          have ':' right after source_id and blank-id fallbacks have '#', so the two
-          can never collide whatever the id text ("row_3", "#row_3", ...). Duplicate unit_ids
-          raise ValueError unless allow_duplicate_ids=True.
-        - Cells are read as text without NA coercion, so answers such as "None" or
-          "N/A" are kept verbatim.
+          in last_skipped_empty_rows (and recorded in last_tabular_stats).
+        - sheet_name selects the worksheet for .xlsx inputs (default 0 = first sheet).
+        - duplicate_id_policy controls repeated id_col handling:
+            * None (default): preserves exact legacy allow_duplicate_ids behavior
+              ("combine" when allow_duplicate_ids=True, "error" when False).
+            * "error": raises ValueError on duplicate id_col values.
+            * "combine": groups repeated id_col rows under one analytical unit.
+            * "per_row": keeps every non-blank row as its own analytical unit
+              ("<source_id>::row_<line_number>") while preserving the original
+              id_col value in turn["respondent_id"].
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Tabular file not found: {file_path}")
 
+        if duplicate_id_policy is None:
+            policy = "combine" if allow_duplicate_ids else "error"
+        else:
+            policy = str(duplicate_id_policy).strip().lower()
+            if policy not in {"error", "combine", "per_row"}:
+                raise ValueError(
+                    f"Unsupported duplicate_id_policy {duplicate_id_policy!r}; expected 'error', 'combine', or 'per_row'"
+                )
+
         self._reset_call_state()
         ext = os.path.splitext(file_path)[1].lower()
+        resolved_sheet: Optional[str] = None
         if ext == ".csv":
             frame, line_numbers = self._read_csv(file_path)
         elif ext == ".xlsx":
-            frame = pd.read_excel(file_path, dtype=str, keep_default_na=False, na_filter=False)
+            sheets = self.list_excel_sheets(file_path)
+            if isinstance(sheet_name, int):
+                resolved_sheet = sheets[sheet_name] if 0 <= sheet_name < len(sheets) else str(sheet_name)
+            else:
+                resolved_sheet = str(sheet_name)
+            frame = pd.read_excel(
+                file_path, sheet_name=sheet_name, dtype=str, keep_default_na=False, na_filter=False
+            )
             line_numbers = [row_idx + 2 for row_idx in range(len(frame))]
         else:
             raise ValueError(f"Unsupported tabular extension: {ext}")
@@ -1177,6 +1268,7 @@ class UniversalTranscriptParser:
         source_id = self._source_id(file_path, root_dir)
         raw_entries: List[Tuple[int, str, str, str]] = []
         unit_ids: List[str] = []
+        respondent_ids: List[str] = []
         seen_units = set()
 
         for row_pos, row in enumerate(frame.itertuples(index=False, name=None)):
@@ -1188,13 +1280,16 @@ class UniversalTranscriptParser:
                 continue
 
             id_value = record.get(id_col) if id_col else None
-            if not id_col:
+            raw_resp_id = "" if _is_blank(id_value) else str(id_value).strip()
+            if policy == "per_row":
+                unit_id = f"{source_id}::row_{line_number}"
+            elif not id_col:
                 unit_id = f"{source_id}::row_{line_number}"
             elif _is_blank(id_value):
                 unit_id = f"{source_id}#row_{line_number}"
             else:
-                unit_id = f"{source_id}::{str(id_value).strip()}"
-            if unit_id in seen_units and not allow_duplicate_ids:
+                unit_id = f"{source_id}::{raw_resp_id}"
+            if unit_id in seen_units and policy == "error":
                 raise ValueError(
                     f"Duplicate unit id {unit_id!r} at line {line_number} of {os.path.basename(file_path)}; "
                     "pass allow_duplicate_ids=True to keep repeated ids as one unit"
@@ -1206,10 +1301,23 @@ class UniversalTranscriptParser:
 
             raw_entries.append((line_number, speaker, "", str(text_value)))
             unit_ids.append(unit_id)
+            respondent_ids.append(raw_resp_id)
 
+        self.last_tabular_stats = {
+            "source_id": source_id,
+            "total_rows": int(len(frame)),
+            "non_blank_rows": int(len(raw_entries)),
+            "skipped_blank_rows": int(self.last_skipped_empty_rows),
+            "unique_units": int(len(set(unit_ids))),
+            "sheet_name": resolved_sheet,
+            "duplicate_id_policy": policy,
+        }
         self.last_document_metadata.pop(source_id, None)
         self.last_document_structure = "tabular"
         turns = self._normalize_turns(raw_entries, file_path, source_id, unit_ids, auto_detect=False)
+        if policy == "per_row" and id_col:
+            for turn, resp_id in zip(turns, respondent_ids):
+                turn["respondent_id"] = resp_id
         return self._add_structure_keys(turns, "tabular")
 
     def _read_csv(self, file_path: str) -> Tuple[pd.DataFrame, List[int]]:

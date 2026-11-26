@@ -235,11 +235,12 @@ class SmokeContractTests(unittest.TestCase):
         else:
             self.assertEqual(argv, ["bash", "run.command", "--check-only"])
 
-    def test_codebook_audit_compiles_all_seven(self):
+    def test_codebook_audit_compiles_all_eight(self):
         compiled = self.smoke.codebook_audit(REPO / "config")
         expected = sorted(p.name for p in (REPO / "config").glob("*.yaml"))
-        self.assertEqual(len(expected), 7)
+        self.assertEqual(len(expected), 8)
         self.assertIn("gbi_focus_group_starter.yaml", expected)
+        self.assertIn("optional_delivery_addons.yaml", expected)
         self.assertEqual(sorted(compiled), expected)
         for name, n_rules in compiled.items():
             self.assertGreater(n_rules, 0, name)
@@ -493,14 +494,15 @@ class UploadNameCollisionTests(unittest.TestCase):
         box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
         box.select(next(o for o in box.options if "Upload" in o))
         at.run()
-        next(s for s in at.selectbox if s.label == "Active YAML Codebook").select(UPLOAD_CODEBOOK)
-        at.run()
-        at.file_uploader[0].set_value([
+        tx_up = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        cb_up = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        tx_up.set_value([
             ("A.txt", UPLOAD_MATCHING, "text/plain"),
             ("a.txt", UPLOAD_NON_MATCHING, "text/plain"),
         ])
+        cb_up.set_value((UPLOAD_CODEBOOK, (REPO / "config" / UPLOAD_CODEBOOK).read_bytes(), "application/x-yaml"))
         at.run()
-        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        next(b for b in at.button if b.label == "Run Analysis").click()
         at.run()
         # Control: the matching payload alone is coded, so a zero below can only mean it was lost.
         from atlas_engine import AtlasEngine
@@ -512,18 +514,18 @@ class UploadNameCollisionTests(unittest.TestCase):
         self.assertEqual(int(control["frequencies_df"]["documents_reporting"].sum()), 1)
         self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
         self.assertEqual(len(at.error), 0, [e.value for e in at.error])
-        n_units = next(m for m in at.metric if m.label == "Analytical Units (N)")
+        n_units = next(m for m in at.metric if m.label == "Analytical Units")
         self.assertEqual(int(str(n_units.value)), 2)
 
         frames = [df.value for df in at.dataframe]
-        freq = next(f for f in frames if {"domain_id", "prevalence_pct", "documents_reporting"} <= set(f.columns))
+        freq = next(f for f in frames if {"domain_name", "prevalence_pct", "documents_reporting"} <= set(f.columns))
         self.assertEqual(int(freq["documents_reporting"].sum()), 1, freq.to_string())
         self.assertAlmostEqual(float(freq["prevalence_pct"].max()), 50.0, places=1)
 
-        hashes = next(f for f in frames if list(f.columns) == ["source_id", "sha256"])
+        hashes = next(f for f in frames if list(f.columns) == ["Source File", "SHA-256"])
         self.assertEqual(len(hashes), 2, hashes.to_string())
-        self.assertEqual(set(hashes["sha256"]), {hashlib.sha256(UPLOAD_MATCHING).hexdigest(),
-                                                 hashlib.sha256(UPLOAD_NON_MATCHING).hexdigest()})
+        self.assertEqual(set(hashes["SHA-256"]), {hashlib.sha256(UPLOAD_MATCHING).hexdigest(),
+                                                  hashlib.sha256(UPLOAD_NON_MATCHING).hexdigest()})
 
 
 class StreamlitWidthCompatibilityTests(unittest.TestCase):
@@ -814,10 +816,14 @@ class ADAAccessibilityTests(unittest.TestCase):
 
         at = AppTest.from_file(str(REPO / "app.py"), default_timeout=60)
         at.run()
-        box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
-        box.select(next(o for o in box.options if "Survey" in o))
+        survey_bytes = (REPO / "data" / "samples" / "software_test_survey.csv").read_bytes()
+        tx_up = next(u for u in at.file_uploader if "csv" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        cb_up = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        tx_up.set_value([("software_test_survey.csv", survey_bytes, "text/csv")])
+        cb_up.set_value(("pfl_case_study_codebook.yaml",
+                         (REPO / "config" / "pfl_case_study_codebook.yaml").read_bytes(), "application/x-yaml"))
         at.run()
-        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        next(b for b in at.button if b.label == "Run Analysis").click()
         at.run()
         self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
         charts = at.get("vega_lite_chart")
@@ -829,7 +835,7 @@ class ADAAccessibilityTests(unittest.TestCase):
         freq = next(f for f in frames if {"domain_name", "prevalence_pct", "documents_reporting"} <= set(f.columns)
                     and "ci95_low_pct" not in f.columns)
         matrix = next(f for f in frames if "ci95_low_pct" in f.columns)
-        n_units = int(str(next(m for m in at.metric if m.label == "Analytical Units (N)").value))
+        n_units = int(str(next(m for m in at.metric if m.label == "Analytical Units").value))
         self.assertEqual(descriptions[0], self.describe(freq, n_units))
         self.assertEqual(descriptions[1], self.describe(matrix, n_units, include_ci=True))
         self.assertIn(f"(1 of {n_units} units)", descriptions[0])
@@ -962,12 +968,13 @@ class ADAAccessibilityTests(unittest.TestCase):
         self.assertNotIn("escape_markdown_text", source)
         html_calls = sorted((n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "st.html"),
                             key=lambda n: n.lineno)
-        self.assertEqual(len(html_calls), 2, "Tab 1 and Tab 2 each render one chart summary")
-        for call, arg in zip(html_calls, ("freq_summary", "ci_summary")):
+        self.assertEqual(len(html_calls), 4, "Group mode renders 2 summaries; Individual mode renders 2 summaries")
+        for call in html_calls:
             with self.subTest(line=call.lineno):
                 # Streamlit 1.40's st.html(body) has no width=; pass the body positionally only.
                 self.assertEqual(call.keywords, [])
-                self.assertEqual([ast.unparse(a) for a in call.args], [f"chart_summary_html({arg})"])
+                self.assertEqual(len(call.args), 1)
+                self.assertTrue(ast.unparse(call.args[0]).startswith("chart_summary_html("))
         for call in ast.walk(tree):
             if isinstance(call, ast.Call) and ast.unparse(call.func) in ("st.caption", "st.markdown", "st.write"):
                 self.assertNotIn("Chart summary", ast.unparse(call), f"app.py:{call.lineno}")
@@ -1017,14 +1024,12 @@ class ADAAccessibilityTests(unittest.TestCase):
         box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
         box.select(next(o for o in box.options if "Upload" in o))
         at.run()
-        next(s for s in at.selectbox if s.label == "Active YAML Codebook").select("Upload Custom Codebook (.yaml)")
+        tx_up = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        cb_up = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        tx_up.set_value([("software_test_markdown_domain.txt", UPLOAD_MATCHING, "text/plain")])
+        cb_up.set_value(("software_test_markdown_domain.yaml", MARKDOWN_DOMAIN_CODEBOOK, "application/x-yaml"))
         at.run()
-        next(u for u in at.file_uploader if u.label.startswith("Upload Transcript")).set_value(
-            [("software_test_markdown_domain.txt", UPLOAD_MATCHING, "text/plain")])
-        next(u for u in at.file_uploader if u.label.startswith("Upload Custom Codebook")).set_value(
-            ("software_test_markdown_domain.yaml", MARKDOWN_DOMAIN_CODEBOOK, "application/x-yaml"))
-        at.run()
-        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        next(b for b in at.button if b.label == "Run Analysis").click()
         at.run()
         self.assertEqual(len(at.exception), 0, [e.value for e in at.exception])
         self.assertEqual(len(at.error), 0, [e.value for e in at.error])

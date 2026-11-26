@@ -61,50 +61,22 @@ Installing dependencies needs a network connection; analysis does not.
 ![SOFTWARE_TEST walkthrough of the ATLAS workbench showing the sidebar corpus and codebook selectors, four Tab 1 KPI cards for the survey sample, the prevalence, quote and topic panels, and the Tab 2 export files](docs/figures/atlas_dashboard_ui_walkthrough.png)
 
 **Sidebar**
-* **Corpus Dataset:** **Upload Custom Files** (default) or four built-in sample corpora (multi-group
-  focus-group notes `.docx`; bilingual interview `.txt` + Zoom `.vtt`; community survey `.csv`;
-  Teams `.docx`). For uploaded `.csv` / `.xlsx` tables the free-text column is detected automatically
-  (columns named `id` or ending in `_id` are never chosen) and can be changed; optional respondent-id
-  and speaker columns are shown for tables. Optional facilitator names and prompt regexes sit inside a
-  collapsed **Advanced transcript filters (optional)** expander for free-form or mixed uploads and stay
-  hidden when every uploaded file is a 3-column focus-group notes `.docx` in Group Mode.
-* **Data Type:** **Individual transcripts / survey responses** or **Group / summarized notes** (`1 file = 1 group`,
-  auto-selected whenever an uploaded `.docx` contains a 3-column focus-group notes table, with an optional
-  **Include Note-Taker Observations** toggle unchecked by default).
-* **Active YAML Codebook & Stacking:** every `.yaml` file in `config/` (defaulting to
-  `gbi_focus_group_starter.yaml`), optional **Stack Additional Starter Codebooks**, any session
-  discovered/customized codebook, or **Upload Custom Codebook (.yaml)**.
-* **▶ Run Analysis:** click once after selecting files and codebooks to run coding, discovery, and
-  export generation (sidebar edits wait cleanly until you click **▶ Run Analysis**).
-* **Reference Guides:** formatted Word (`.docx`) downloads in the sidebar plus an in-app formatted
-  reader in **Tab 3: Reference Guides**.
+* **1. Input Data:** **Upload Custom Files** (default) or the built-in multi-group focus-group notes sample (`.docx`). For uploaded `.csv` / `.xlsx` tables, ATLAS exposes a **Choose Excel tab** selector for multi-sheet workbooks, auto-detects **Open-ended question column to code** (never choosing `id` or `*_id` columns), reports exact **`X written answers scanned (Y rows left this question blank)`**, and offers a choice for repeated Respondent IDs (`per_row` preserving `respondent_id` vs. `combine`). Optional facilitator names and prompt regexes sit inside a collapsed **Advanced transcript filters (optional)** expander and stay hidden when every uploaded file is a 3-column focus-group notes `.docx` in Group Mode.
+* **Data Type & Spelling Tolerance:** **Individual transcripts / survey responses** or **Group / summarized notes** (`1 file = 1 group`, auto-selected for 3-column focus-group notes, with optional **Include Note-Taker Observations** unchecked by default), plus opt-in **Allow minor spelling typos (useful for open-ended surveys)** (bounded Damerau-Levenshtein distance 1 on 5+ character single-word roots, off by default).
+* **2. Themes to Code:** Three collapsible drawers—**Core Evaluation Themes** (10 pre-checked GBI/social-policy outcome themes from `config/gbi_focus_group_starter.yaml`), **Optional Add-On Themes** (5 non-overlapping program delivery & policy friction themes from `config/optional_delivery_addons.yaml`), and **Upload Custom Themes (.yaml)** (Replace or Combine)—plus **Save active themes (.yaml)** whenever customized.
+* **Run Analysis:** click once after selecting files and themes to run coding, discovery, report generation, and export checks (sidebar edits wait cleanly until you click **Run Analysis**).
+* **Reference Guides:** formatted Word (`.docx`) downloads in the sidebar plus an in-app formatted reader in the **Reference Guides** tab.
 
-**Tab 1: Standalone Thematic Discovery & Qualitative Coding**
-* **KPI cards** adapt to **Data Type**: in **Individual Mode**, **Analytical Units (N)**, **Participant Turns**,
-  **Active Domains**, and **Matched Turn Mentions**; in **Group Mode**, **Focus Groups (G)**, **Distinct
-  Participant Voices**, **Coded Notes Entries**, and **Active Domains**.
-* **Prevalence & Distribution:** domain prevalence bar chart and accessible table in Individual Mode; integer
-  **Groups Reporting (`g of G`)** bar chart, **Group × Theme** participant-voice matrix, and a reference-only
-  **Note-Taker Themes Summary** expander in Group Mode.
-* **Evidence & Provenance Browser:** search and filter matches with highlighted spans, `source_id`, `unit_id`,
-  line, `match_char_start`–`match_char_end`, and `source_sha256`. When paraphrased key points or observations
-  are present, entries carry explicit evidence-type badges and Group Mode adds a **Quotable Verbatim Only**
-  checkbox so paraphrases are never misquoted.
-* **Topic Discovery:** offline **TF-IDF + NMF** (default) or **LDA** with a topic-count slider, representative
-  medoids (tagged with `evidence_type` for structured notes), **Download Discovered Codebook (.yaml)**,
-  **Apply Discovered Codebook to Engine**, and one-click **➕ Add Theme to Active Codebook** (exact whole-word
-  matching by default).
-* **False-Alarm Spot-Check:** flags prefix extensions, nearby negations, and short unfenced stems, exports
-  `atlas_false_alarm_spot_check.csv`, and offers one-click exclusion fences or exact whole-word tightening.
+**Themes & Quotes**
+* **Reconciled KPI cards** adapt to **Data Type**: in **Group Mode**, **Focus Groups**, **Themes Found**, **Notes Entries Scanned** (or **Entries Scanned** with `M matched · U none`), and **Theme Matches**; in **Individual Mode**, **Analytical Units**, **Themes Found**, **Written Answers Scanned** / **Turns Scanned**, and **Theme Matches**.
+* **Theme Summary:** in Group Mode, leads with a uniform **Group × Theme Grid** (`✓` / `—`, rightmost `Groups` column `g/G`, toggle for `Notes entries per group`, optional `Hide 0-match themes`), followed by a clearly labeled **Notes Volume** horizontal bar chart, a reconciled **Theme Summary Table** (`Verbatim Quotes + Paraphrased Key Points (+ Observations) = Theme Matches`), a direct 3-button **Download Results** bar (**Download Full Report (.docx)**, **Download Theme Frequencies (.xlsx)**, **Download Direct Quotes (.csv)**), and collapsed **Excluded Questions & Session Headers** and **Note-Taker Themes Summary** drawers.
+* **Coded Evidence:** search and filter matches by theme, speaker, group, or question with highlighted spans, source provenance, evidence-type badges, and a **Quotable Verbatim Only** checkbox so paraphrases are never misquoted.
+* **Discover Unlisted Themes:** offline **TF-IDF + NMF** (default) or **LDA** (inside collapsed **Method settings**), index-safe coverage badges (`Mostly Uncoded by Active Themes`, `Partially Uncoded`, `Mostly Covered by Active Themes`), **Most representative example**, collapsed per-cluster entry tables, and one-click **Add Theme to Active Themes** (exact whole-word matching by default).
+* **Spot-Check Matches:** flags partial-word matches, spelling-tolerance rescues, nearby negations, and short unfenced stems (clearly noting all flagged matches remain counted until excluded), exports `atlas_spot_check_report.csv`, and offers one-click **Exclude Selected Words from Theme** or **Switch Theme to Exact Whole-Word Matching**.
 
-**Tab 2: Econometric & Actuarial Ledger Export**
-* In **Individual Mode** (ordinary transcripts and surveys), reports per-domain units reporting, N, prevalence,
-  `p`, binomial SE = √(p(1 − p)/N), and a normal-approximation 95% interval. In **Group Mode** (and whenever
-  structured focus-group notes are loaded), displays an explicit statistical guardrail banner, hides Binomial SE
-  and 95% intervals, and reports integer **Groups Reporting (`g of G`)** and distinct participant voices.
-* Downloads produced by `AtlasEngine.export_results`: `actuarial_parameter_matrix.xlsx`,
-  `provenance_manifest.json`, `verbatim_quotes_inventory.csv`, plus `coded_evidence_inventory.csv` (for
-  structured notes), `atlas_active_codebook.yaml` (when stacked or customized), and the workbook integrity result.
+**Exports & Audit Files**
+* Organized into **Analyst Downloads** (`atlas_summary_report.docx`, `actuarial_parameter_matrix.xlsx`, `verbatim_quotes_inventory.csv`, and `coded_evidence_inventory.csv` for structured notes) and **Audit & Reproducibility Files** (live workbook integrity check, `provenance_manifest.json`, `atlas_active_codebook.yaml`, optional `atlas_typo_matches_inventory.csv`, and SHA-256 digests).
+* In **Individual Mode** (ordinary transcripts and surveys), reports per-theme units reporting, N, prevalence, `p`, Binomial SE = √(p(1 − p)/N), and a normal-approximation 95% confidence interval chart; in **Group Mode** (and structured focus-group notes), hides Binomial intervals behind an explicit statistical guardrail.
 
 ### SOFTWARE_TEST walkthrough: survey sample × `pfl_case_study_codebook.yaml`
 

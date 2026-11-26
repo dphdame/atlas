@@ -48,8 +48,11 @@ tambien tan tanto te tenemos tener tengo ti tiene tienen todo todos tu tú tus u
 ustedes va vamos van y ya yo
 """.split())
 
+SPEAKER_ID_STOPWORDS = frozenset(
+    [f"p{i}" for i in range(100)] + ["participant", "participants"]
+)
 EN_ES_STOPWORDS = EN_STOPWORDS | ES_STOPWORDS
-_STOP_LIST = sorted(EN_ES_STOPWORDS)
+_STOP_LIST = sorted(EN_ES_STOPWORDS | SPEAKER_ID_STOPWORDS)
 
 
 def _empty_result(method: str = "nmf") -> Dict[str, Any]:
@@ -273,6 +276,7 @@ def discover_topics(
     assignments = [
         {
             "index": rec["index"],
+            "source_id": rec["source_id"],
             "turn_id": rec["turn_id"],
             "unit_id": rec["unit_id"],
             "speaker": rec["speaker"],
@@ -289,6 +293,87 @@ def discover_topics(
         "doc_topics": [[float(x) for x in row] for row in doc_topic],
         "assignments": assignments,
     }
+
+
+def compute_topic_codebook_overlap(
+    discovery_result: Dict[str, Any],
+    turn_records: Sequence[Dict[str, Any]],
+    domain_names: Dict[str, str] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Compute deterministic codebook-coverage statistics per discovered topic.
+
+    Joins strictly one-to-one using each assignment's original input `index`
+    against `turn_records` (never `turn_id`, which restarts at 1 per file).
+    """
+    topics = list((discovery_result or {}).get("topics") or [])
+    assignments = list((discovery_result or {}).get("assignments") or [])
+    names_map = dict(domain_names or {})
+    n_turns = len(turn_records)
+
+    by_topic: Dict[int, List[int]] = {int(t["topic_id"]): [] for t in topics}
+    for assign in assignments:
+        idx = int(assign["index"])
+        if not (0 <= idx < n_turns):
+            raise ValueError(f"Discovery assignment index {idx} out of bounds for {n_turns} turn records")
+        tid = int(assign["topic_id"])
+        by_topic.setdefault(tid, []).append(idx)
+
+    total_assigned = sum(len(v) for v in by_topic.values())
+    expected_analyzed = int((discovery_result or {}).get("n_analyzed", 0))
+    if total_assigned != expected_analyzed:
+        raise ValueError(
+            f"Discovery assignment conservation failed: {total_assigned} assigned vs {expected_analyzed} analyzed"
+        )
+
+    out: Dict[int, Dict[str, Any]] = {}
+    for t in topics:
+        tid = int(t["topic_id"])
+        member_indices = by_topic.get(tid, [])
+        total = len(member_indices)
+        uncoded = 0
+        domain_counts: Dict[str, int] = {}
+        for idx in member_indices:
+            matched = list(turn_records[idx].get("matched_domains") or [])
+            if not matched:
+                uncoded += 1
+            else:
+                for did in matched:
+                    label = str(names_map.get(str(did), str(did)))
+                    domain_counts[label] = domain_counts.get(label, 0) + 1
+        covered = total - uncoded
+        uncoded_share = (uncoded / total) if total > 0 else 0.0
+        top_overlap = ""
+        if domain_counts:
+            top_overlap = sorted(domain_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+        if total == 0:
+            status = "empty"
+            label = "No entries assigned"
+        elif uncoded_share >= 0.70:
+            status = "mostly_uncoded"
+            label = f"Mostly Uncoded by Active Themes ({uncoded} of {total} uncoded)"
+        elif uncoded_share > 0.30:
+            status = "partially_uncoded"
+            suffix = f"; overlaps {top_overlap}" if top_overlap else ""
+            label = f"Partially Uncoded ({uncoded} of {total} uncoded{suffix})"
+        else:
+            status = "mostly_covered"
+            suffix = f"; mostly {top_overlap}" if top_overlap else ""
+            label = f"Mostly Covered by Active Themes ({covered} of {total} matched{suffix})"
+
+        out[tid] = {
+            "topic_id": tid,
+            "member_indices": member_indices,
+            "total_count": total,
+            "uncoded_count": uncoded,
+            "covered_count": covered,
+            "uncoded_share": round(uncoded_share, 4),
+            "top_overlap_domain": top_overlap,
+            "coverage_status": status,
+            "coverage_label": label,
+        }
+    return out
 
 
 def topics_to_codebook_dict(discovery_result: Dict[str, Any], project_name: str = "Discovered Codebook") -> Dict[str, Any]:

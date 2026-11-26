@@ -257,7 +257,7 @@ class GuideTabsAndDownloadsUITests(unittest.TestCase):
         corpus_box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
         corpus_box.set_value(next(o for o in corpus_box.options if "Focus-Group Notes" in str(o)))
         at.run()
-        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        next(b for b in at.button if b.label == "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception), [e.value for e in at.exception])
         self.assertEqual(len(at.metric), 4)
@@ -281,35 +281,35 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         self.assertEqual(len(at.metric), 0)
         self.assertTrue(any("Ready to analyze" in str(i.value) for i in at.info))
 
-        # Clicking Run with no uploaded files shows a clean error and keeps Tab 3 available.
-        self._widget(at, "button", "▶ Run Analysis").click()
+        # Clicking Run with no uploaded files shows a clean error and keeps Reference Guides available.
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.error), 1)
         self.assertEqual(len(at.metric), 0)
         self.assertTrue(any("Reference Guides" in t.label for t in at.tabs))
 
-        # Selecting Focus-Group Notes and clicking Run commits 8 starter domains.
+        # Selecting Focus-Group Notes and clicking Run commits 10 Core Evaluation Themes.
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         corpus_box.set_value(next(o for o in corpus_box.options if "Focus-Group Notes" in str(o)))
         at.run()
-        self._widget(at, "button", "▶ Run Analysis").click()
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception))
         self.assertEqual(len(at.error), 0)
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Active Domains")), 8)
+        self.assertTrue(str(next(m.value for m in at.metric if m.label == "Themes Found")).endswith("of 10"))
         self.assertEqual(len(at.warning), 0)
 
-        # Stacking an extra codebook in the sidebar without clicking Run preserves old results and shows pending warning.
-        self._widget(at, "multiselect", "Stack Additional Starter Codebooks (optional)").set_value(["sdoh_basic_needs.yaml"])
+        # Checking an Optional Add-On theme without clicking Run preserves old results and shows pending warning.
+        self._widget(at, "checkbox", "Program Enrollment & Paperwork").check()
         at.run()
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Active Domains")), 8)
-        self.assertTrue(any("▶ Run Analysis" in str(w.value) for w in at.warning))
+        self.assertTrue(str(next(m.value for m in at.metric if m.label == "Themes Found")).endswith("of 10"))
+        self.assertTrue(any("Run Analysis" in str(w.value) for w in at.warning))
 
-        # Clicking Run refreshes to 12 domains and clears the warning.
-        self._widget(at, "button", "▶ Run Analysis").click()
+        # Clicking Run refreshes to 11 themes and clears the warning.
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Active Domains")), 12)
+        self.assertTrue(str(next(m.value for m in at.metric if m.label == "Themes Found")).endswith("of 11"))
         self.assertEqual(len(at.warning), 0)
 
     def test_zero_software_test_jargon_in_ui_across_samples(self):
@@ -318,15 +318,13 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         for opt in corpus_box.options:
             self.assertNotIn("SOFTWARE_TEST", str(opt))
-        for sample_needle in ("Focus-Group Notes", "Bilingual"):
-            corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
-            corpus_box.set_value(next(o for o in corpus_box.options if sample_needle in str(o)))
-            at.run()
-            self._widget(at, "button", "▶ Run Analysis").click()
-            at.run()
-            alerts = [str(x.value) for x in (*at.info, *at.warning, *at.error, *at.success)]
-            for msg in alerts:
-                self.assertNotIn("SOFTWARE_TEST", msg)
+        corpus_box.set_value(next(o for o in corpus_box.options if "Focus-Group Notes" in str(o)))
+        at.run()
+        self._widget(at, "button", "Run Analysis").click()
+        at.run()
+        alerts = [str(x.value) for x in (*at.info, *at.warning, *at.error, *at.success)]
+        for msg in alerts:
+            self.assertNotIn("SOFTWARE_TEST", msg)
 
     def test_transcript_filters_hidden_on_3col_notes_and_available_for_freeform_upload(self):
         at = AppTest.from_file(str(APP_PATH), default_timeout=25)
@@ -355,7 +353,7 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         self.assertTrue(any("Advanced transcript filters" in e.label for e in at.expander))
         self._widget(at, "text_input", "Facilitator names (optional, comma-separated)").set_value("Moderator")
         at.run()
-        self._widget(at, "button", "▶ Run Analysis").click()
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception))
         # Moderator's prompt must NOT appear in any coded quote / evidence table.
@@ -374,21 +372,21 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         self.assertTrue(any("Advanced transcript filters" in e.label for e in at.expander))
         self._widget(at, "text_input", "Facilitator names (optional, comma-separated)").set_value("Moderator")
         at.run()
-        self._widget(at, "button", "▶ Run Analysis").click()
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
-        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Participant Turns")), 1)
+        self.assertEqual(int(next(m.value for m in at.metric if m.label == "Turns Scanned")), 1)
 
     def test_stacked_codebook_header_is_concise_and_avoids_duplicate_domain_counts(self):
         helpers = _load_app_guide_helpers()
         fmt = helpers["format_codebook_summary"]
-        self.assertEqual(fmt("gbi_focus_group_starter.yaml", (), 8), "gbi_focus_group_starter.yaml (8 domains)")
+        self.assertEqual(fmt("gbi_focus_group_starter.yaml", (), 10), "gbi_focus_group_starter.yaml (10 themes)")
         self.assertEqual(
             fmt("gbi_focus_group_starter.yaml", ("a.yaml", "b.yaml"), 14),
-            "gbi_focus_group_starter.yaml (+2 stacked · 14 domains)",
+            "gbi_focus_group_starter.yaml (+2 stacked · 14 themes)",
         )
         self.assertEqual(
-            fmt("Custom: +Local Program Cards (13 domains)", (), 13),
-            "Custom: +Local Program Cards (13 domains)",
+            fmt("Session edit: +Local Program Cards (13 themes)", (), 13),
+            "Session edit: +Local Program Cards (13 themes)",
         )
 
         at = AppTest.from_file(str(APP_PATH), default_timeout=25)
@@ -396,57 +394,62 @@ class OwnerUXSimplificationTests(unittest.TestCase):
         corpus_box = self._widget(at, "selectbox", "Corpus Dataset")
         corpus_box.set_value(next(o for o in corpus_box.options if "Focus-Group Notes" in str(o)))
         at.run()
-        stack_box = self._widget(at, "multiselect", "Stack Additional Starter Codebooks (optional)")
-        all_extras = list(stack_box.options)
-        self.assertGreaterEqual(len(all_extras), 5)
-        stack_box.set_value(all_extras)
+        # Select all 5 Optional Add-Ons alongside all 10 Core themes => 15 themes total.
+        self._widget(at, "checkbox", "Program Enrollment & Paperwork").check()
+        self._widget(at, "checkbox", "Benefit Cliffs & Aid Loss").check()
         at.run()
-        self._widget(at, "button", "▶ Run Analysis").click()
+        self._widget(at, "button", "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception))
-        meta_lines = [str(t.value) for t in at.text]
-        self.assertTrue(
-            any(f"gbi_focus_group_starter.yaml (+{len(all_extras)} stacked · " in line for line in meta_lines),
-            meta_lines,
-        )
-        for line in meta_lines:
-            self.assertNotIn("Project: Stacked Codebook", line)
-            self.assertLess(len(line), 200, f"Header still overly verbose: {line!r}")
+        banners = [str(m.value) for m in at.markdown if "provenance-banner" in str(m.value)]
+        self.assertTrue(any("10 Core + 2 Add-On (12 themes)" in b for b in banners), banners)
 
 
 class GuidesV12AlignmentTests(unittest.TestCase):
     def test_all_four_guides_and_readme_reflect_v12_features_without_stale_v11_drift(self):
         user_guide = (DOCS_DIR / "ATLAS_User_Guide.md").read_text(encoding="utf-8")
         for req in ("TF-IDF + NMF", "Group / summarized notes", "Quotable Verbatim Only",
-                    "Stack Additional Starter Codebooks", "Add Theme to Active Codebook",
-                    "False-Alarm Spot-Check", "match_mode", "Reference Guides", "▶ Run Analysis"):
+                    "Core Evaluation Themes", "Optional Add-On Themes", "Add Theme to Active Themes",
+                    "Spot-Check Matches", "Discover Unlisted Themes", "Choose Excel tab",
+                    "written answers scanned", "Allow minor spelling typos", "match_mode",
+                    "Reference Guides", "Run Analysis", "speaker diarization"):
             self.assertIn(req, user_guide, f"User Guide missing v1.2 feature {req!r}")
-        for stale in ("Suggests emergent topics with LDA", "updates the workbench live", "and project name"):
+        for stale in ("Suggests emergent topics with LDA", "updates the workbench live",
+                      "Active YAML Codebook", "Stack Additional Starter Codebooks", "▶ Run Analysis",
+                      "Distinct Participant Voices"):
             self.assertNotIn(stale, user_guide, f"User Guide still carries stale wording {stale!r}")
 
         method_manual = (DOCS_DIR / "ATLAS_Methodology_and_Reference_Manual.md").read_text(encoding="utf-8")
         for req in ("TF-IDF", "NMF", "match_mode", "group_by_source", "coded_evidence_inventory",
-                    "audit_false_alarm_risks", "merge_codebook_dicts", "append_topic_to_codebook"):
+                    "audit_false_alarm_risks", "merge_codebook_dicts", "append_topic_to_codebook",
+                    "spelling_tolerance", "compute_topic_codebook_overlap", "duplicate_id_policy"):
             self.assertIn(req, method_manual, f"Methodology Manual missing v1.2 feature {req!r}")
-        for unbacked in ("Holm-adjusted", "+3.5"):
-            self.assertNotIn(unbacked, method_manual, f"Methodology Manual carries unbacked benchmark claim {unbacked!r}")
+        for unbacked in ("Holm-adjusted", "+3.5", "▶ Run Analysis"):
+            self.assertNotIn(unbacked, method_manual, f"Methodology Manual carries unbacked/stale wording {unbacked!r}")
 
         field_guide = (DOCS_DIR / "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md").read_text(encoding="utf-8")
-        for req in ("gbi_focus_group_starter.yaml", "Group Mode", "Quotable Verbatim Only",
-                    "TF-IDF + NMF", "Add Theme to Active Codebook", "False-Alarm Spot-Check",
-                    "Stack Additional Starter Codebooks", "match_mode: exact"):
+        for req in ("gbi_focus_group_starter.yaml", "optional_delivery_addons.yaml", "Group Mode",
+                    "Quotable Verbatim Only", "TF-IDF + NMF", "Add Theme to Active Themes",
+                    "Spot-Check Matches", "How to Develop, Test, and Add New Themes", "match_mode: exact"):
             self.assertIn(req, field_guide, f"Practitioner Field Guide missing v1.2 feature {req!r}")
+        for stale in ("Stack Additional Starter Codebooks", "▶ Run Analysis", "Active YAML Codebook"):
+            self.assertNotIn(stale, field_guide, f"Practitioner Field Guide still carries stale wording {stale!r}")
 
         quick_start = (DOCS_DIR / "ATLAS_GBI_Analyst_Quick_Start.md").read_text(encoding="utf-8")
-        for req in ("Tab 3: Reference Guides", ".docx", "Stack Additional Starter Codebooks",
-                    "Add Theme to Active Codebook", "False-Alarm Spot-Check"):
+        for req in ("Reference Guides", ".docx", "Core Evaluation Themes", "Optional Add-On Themes",
+                    "Add Theme to Active Themes", "Spot-Check Matches", "Discover Unlisted Themes",
+                    "Download Full Report (.docx)", "Excluded Questions & Session Headers"):
             self.assertIn(req, quick_start, f"Quick-Start Guide missing {req!r}")
+        for stale in ("Stack Additional Starter Codebooks", "▶ Run Analysis", "Distinct Participant Voices"):
+            self.assertNotIn(stale, quick_start, f"Quick-Start Guide still carries stale wording {stale!r}")
 
         readme = " ".join((REPO_ROOT / "README.md").read_text(encoding="utf-8").split())
-        for req in ("Group Mode", "Focus Groups (G)", "Distinct Participant Voices", "coded_evidence_inventory.csv",
-                    "Quotable Verbatim Only", "TF-IDF + NMF", "False-Alarm Spot-Check", "▶ Run Analysis"):
+        for req in ("Group Mode", "Focus Groups", "Core Evaluation Themes", "Optional Add-On Themes",
+                    "coded_evidence_inventory.csv", "Quotable Verbatim Only", "TF-IDF + NMF",
+                    "Spot-Check Matches", "Discover Unlisted Themes", "atlas_summary_report.docx", "Run Analysis"):
             self.assertIn(req, readme, f"README.md missing v1.2 feature {req!r}")
-        self.assertNotIn("They do not set `--server.address`", readme)
+        for stale in ("They do not set `--server.address`", "▶ Run Analysis", "Distinct Participant Voices"):
+            self.assertNotIn(stale, readme, f"README.md still carries stale wording {stale!r}")
 
     def test_desktop_launchers_bind_strictly_to_localhost(self):
         run_cmd = (REPO_ROOT / "run.command").read_text(encoding="utf-8")

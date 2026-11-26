@@ -4,7 +4,7 @@
 **Victoria Cholette**  
 *Open ATLAS Toolkit for Community Programs and Applied Evaluation*
 
-**Strong program evaluations pair human stories with exact, verifiable scale—and ATLAS (`v1.2`) lets community evaluation teams produce both offline on their own workstation.** This guide shows how to move from raw interviews, surveys, or 3-column focus-group notes to clear, audit-ready evaluation narratives without uploading confidential community records to the cloud.
+**Strong program evaluations pair human stories with exact, verifiable scale—and ATLAS (`v1.2`) lets community evaluation teams produce both offline on their own workstation.** This guide explains where ATLAS's starter themes come from, how to develop and add new pilot themes without writing code, and how to turn transcripts, surveys, or 3-column focus-group notes into clear, audit-ready evaluation narratives without uploading confidential records to the cloud.
 
 ---
 
@@ -26,9 +26,9 @@ That sentence reflects real observations, yet it leaves three gaps that review c
 
 * **Scope and prevalence:** Words like *"several"* hide whether an issue was isolated or systemic, which makes resource decisions difficult.
 * **Mechanism:** General labels like *"travel barriers"* blur distinct operational causes—hourly bus schedules, transit fares, and car repairs require different fixes.
-* **Accountability:** Reviewers need to know how themes were defined, whether negative or counter-examples were checked, and whether quoted remarks are authentic participant speech rather than staff paraphrases.
+* **Accountability:** Reviewers need to know how themes were defined, whether look-alike words or negations were checked, and whether quoted remarks are authentic participant speech rather than staff paraphrases.
 
-Pairing exact denominators, verified verbatim quotes, and a saved codebook resolves all three gaps at once.
+Pairing exact denominators, verified verbatim quotes, and a saved theme file resolves all three gaps at once.
 
 ---
 
@@ -75,81 +75,91 @@ Historically, combining discovery with measurement meant juggling separate tools
                                  |
                                  v
 +-------------------------------------------------------------------+
-|  STEP 1: PICK OR STACK STARTER CODEBOOKS (Sidebar)                |
-|  * Start with gbi_focus_group_starter.yaml or another starter.    |
-|  * Stack extra packs via Stack Additional Starter Codebooks.      |
+|  STEP 1: PICK CORE & ADD-ON THEMES (Sidebar)                      |
+|  * 10 Core Evaluation Themes pre-checked (expand to pick subset). |
+|  * Add 5 Optional Add-On Themes or Upload Custom Themes (.yaml).  |
 +--------------------------------+----------------------------------+
                                  |
                                  v
 +-------------------------------------------------------------------+
-|  STEP 2: SPOT MISSED THEMES & ADD THEM IN ONE CLICK (Tab 1)       |
-|  * Run TF-IDF + NMF discovery (or classic LDA) and read medoids.  |
-|  * Click Add Theme to Active Codebook (exact whole-word default). |
+|  STEP 2: SPOT UNLISTED THEMES & ADD THEM IN ONE CLICK             |
+|  * Open Discover Unlisted Themes (TF-IDF + NMF, or LDA).          |
+|  * Check Mostly Uncoded clusters; click Add Theme to Active.      |
 +--------------------------------+----------------------------------+
                                  |
                                  v
 +-------------------------------------------------------------------+
-|  STEP 3: RUN FALSE-ALARM SPOT-CHECK & EXPORT (Tab 1 -> Tab 2)     |
-|  * Review prefix extensions and nearby negations in 2 minutes.    |
-|  * Filter Quotable Verbatim Only, then export audited files.      |
+|  STEP 3: SPOT-CHECK MATCHES & DOWNLOAD REPORTS                    |
+|  * Review partial-word, typo, and negation flags in 2 minutes.    |
+|  * Filter Quotable Verbatim Only; download Word, Excel & CSVs.    |
 +-------------------------------------------------------------------+
 ```
 
-### Step A: Load Your Files and Check Individual vs. Group Mode
+### Step A: Load Your Files and Confirm Data Type
 
-In the sidebar, choose **Corpus Dataset → Upload Custom Files** and drag in your transcripts, survey tables, or 3-column Word focus-group notes (`Key Points | Notable Quotes | Observations`). If ATLAS detects 3-column focus-group notes, it automatically switches **Data Type** to **Group / summarized notes** (**Group Mode**).
+In the sidebar, **Corpus Dataset** opens on **Upload Custom Files**. Drag in your transcripts, Excel/CSV survey tables (1 row per person; any columns; pick the worksheet tab and one open-ended question column at a time), or 3-column Word focus-group notes (`Key Points | Notable Quotes | Observations`). If ATLAS detects 3-column focus-group notes, it automatically switches **Data Type** to **Group / summarized notes** (**Group Mode**).
 
-Why does **Group Mode** matter? In a focus-group pilot, each file represents one room of people who hear and react to one another, and total group counts (`G`) are typically small. Reporting individual-level survey error bars on small, clustered focus groups overstates statistical precision. Group Mode therefore counts `1 file = 1 focus group`, reports exact integer **Groups Reporting (`g of G`)** counts alongside a **Group × Theme Matrix**, keeps `P1` in separate rooms counted as distinct voices, and hides invalid Binomial error bars.
+Why does **Group Mode** matter? In a focus-group pilot, each file represents one room of people who hear and react to one another, and total group counts are typically small. Reporting individual-level survey error bars on small, clustered focus groups overstates statistical precision. Group Mode therefore counts `1 file = 1 focus group`, leads with a uniform **Group × Theme Grid** (`✓` / `—` plus a `Groups` column `g/G`) and a clearly labeled **Notes Volume** bar chart, and hides invalid Binomial error bars.
 
-### Step B: Start from a Starter Pack, Stack Extras, and Click `▶ Run Analysis`
+For open-ended Excel or CSV surveys, you can also check **Allow minor spelling typos (useful for open-ended surveys)** so 1-letter misspellings on longer theme words (such as `gorceries` or `chldcare`) are caught without editing the participant's original text.
 
-**Active YAML Codebook** starts on **`gbi_focus_group_starter.yaml`** (for guaranteed basic income or cash-assistance pilots). If your evaluation spans two areas—such as cash-assistance stability and clinic access—select a second pack under **Stack Additional Starter Codebooks (optional)** (for example, stack `sdoh_basic_needs.yaml` or `workforce_and_mobility.yaml`). ATLAS combines their rules automatically without duplicating domain IDs or losing existing fences. Once your files and codebooks are selected, click **`▶ Run Analysis`** in the sidebar to run the coding pass.
+### Step B: Choose Core Themes, Optional Add-Ons, and Click `Run Analysis`
 
-### Step C: Discover Local Themes and Add Them in One Click
+Under **2. Themes to Code**, ATLAS organizes themes into three collapsible drawers:
 
-Open **Tab 1 → 💡 Unsupervised Topic Discovery (Medoids)** and leave **Discovery method** on **`TF-IDF + NMF`** (faster, repeatable across runs, and sharper non-overlapping keywords; classic **LDA** remains available for comparison). Choose **Number of topics (k)** between `1` and `10` and read each topic's top terms alongside its **medoid**—the real participant turn or coded notes entry closest to that topic's center.
+* **Core Evaluation Themes (10 of 10 checked by default, backed by `gbi_focus_group_starter.yaml`):** Covers ten foundational social-policy and cash-assistance household outcomes—Housing & Rent Stability, Food Security & Basic Needs, Financial Stability/Bills & Debt, Employment, Education & Training, Transportation & Mobility, Childcare & Parenting, Healthcare, Mental Health & Stress Relief, and Legal & Justice.
+* **Optional Add-On Themes (0 of 5 checked by default, backed by `optional_delivery_addons.yaml`):** Adds non-overlapping program delivery and policy friction themes—Program Enrollment & Paperwork, Benefit Cliffs & Aid Loss, Utility Shutoffs & Energy Burden, Wait Times & Processing Backlogs, and Language & Translation Barriers.
+* **Upload Custom Themes (.yaml):** Lets you replace checked themes with your own pilot file or combine them together.
 
-If discovery surfaces an unexpected local issue (such as prepaid card fees or a local housing waitlist), you do not have to edit YAML by hand: pick that topic under **Add a discovered theme to your active codebook**, type a clear program label, leave exact whole-word matching checked, and click **`➕ Add Theme to Active Codebook`**. ATLAS appends the new theme onto your active codebook using `match_mode: exact` so short words like `car` or `fee` never spill into `career` or `feedback`. *(You can still click **`📥 Download Discovered Codebook (.yaml)`** or **`⚡ Apply Discovered Codebook to Engine`** if you prefer to explore a full draft codebook from scratch.)*
+Click **`Run Analysis`** once your files and themes are selected.
 
-### Step D: Run the 2-Minute False-Alarm Spot-Check
+### Step C: Discover Unlisted Themes and Add Them in One Click
 
-Before trusting counts, open **Tab 1 → 🔎 False-Alarm Spot-Check**. ATLAS automatically flags matches most likely to be false alarms: short or non-inflectional prefix extensions (such as `car` firing inside `card` or `career`), nearby negation words (`not`, `never`, `didn't`), and short unfenced stems. Right inside that tab, you can click **`🛡️ Exclude Selected Words from Domain`** or **`🎯 Switch Domain to Exact Whole-Word Matching`** to tighten a noisy rule immediately and watch the false alarms drop away, or download `atlas_false_alarm_spot_check.csv` for team review.
+Open **Themes & Quotes → Discover Unlisted Themes**. ATLAS defaults to deterministic **TF-IDF + NMF** clustering (classic **LDA** remains available inside collapsed **Method settings**). Each cluster shows its exclusive top keywords, its **Most representative example**, and a coverage badge telling you how many entries in that cluster matched none of your active themes (for example, **Mostly Uncoded by Active Themes**). Expand **View all N entries in Cluster K** to read every entry in the cluster.
 
-### Step E: Separate Direct Quotes from Paraphrases and Export
+If discovery surfaces a pilot-specific topic (such as prepaid card fees or a local housing waitlist), pick that cluster under **Add a discovered cluster to your active themes**, type a clear program label, leave exact whole-word matching checked, and click **`Add Theme to Active Themes`**. ATLAS appends the new theme onto your active rules using `match_mode: exact` so short words like `car` or `fee` never spill into `career` or `feedback`.
 
-Before pulling direct quotations for slides or leadership briefs, open the Evidence Browser and check **`Quotable Verbatim Only`**. In focus-group notes, that single checkbox hides paraphrased `Key Points` and staff `Observations` so you only quote participants' own words. Then move to **Tab 2** to confirm the green integrity banner and download your Excel workbook, JSON provenance manifest, quote CSVs (`verbatim_quotes_inventory.csv` and, when mixed evidence is present, `coded_evidence_inventory.csv`), and your final customized **`atlas_active_codebook.yaml`**.
+### Step D: Run the 2-Minute Spot-Check
+
+Before trusting counts, open **Themes & Quotes → Spot-Check Matches**. Remember that every flagged match remains counted in your charts and tables until you exclude it. ATLAS groups items into three clear priorities: **Check First (Partial-Word Match)**, **Check First (Spelling Match)** (when spelling tolerance is enabled), and **Check in Context (Negation or Short Word)**. Right inside that tab, click **`Exclude Selected Words from Theme`** or **`Switch Theme to Exact Whole-Word Matching`** to tighten a noisy rule immediately, or download `atlas_spot_check_report.csv` for team review.
+
+### Step E: Separate Direct Quotes from Paraphrases and Download Reports
+
+Before pulling direct quotations for slides or leadership briefs, open **Coded Evidence** and check **`Quotable Verbatim Only`**. In focus-group notes, that single checkbox hides paraphrased `Key Points` and staff `Observations` so you only quote participants' own words. Then download the printable Word report (**Download Full Report (.docx)**), audited Excel frequencies (**Download Theme Frequencies (.xlsx)**), and **Download Direct Quotes (.csv)** right from the bottom of **Theme Summary**, or open **Exports & Audit Files** for the provenance manifest and your saved **`atlas_active_codebook.yaml`**.
 
 ---
 
-## 5. How ATLAS Protects Confidentiality and Auditability
+## 5. How to Develop, Test, and Add New Themes
+
+Where do starter themes come from, and how should an evaluation team design new ones for a fresh pilot or cohort?
+
+Starter themes in ATLAS are **transparent keyword checklists** built from standard program-evaluation outcome domains—not hidden AI categories. Every theme is a short list of everyday words participants actually use (for example, `rent`, `landlord`, `eviction`, `lease`), paired with **look-alike exclusions** (`parent`, `current`, `different`, `rental car`) so partial-word matching never miscounts unrelated words.
+
+When a new pilot needs custom themes, follow a four-step workflow:
+
+1. **Start from your evaluation plan, not a blank screen.** Keep the default **Core Evaluation Themes** that match your pilot's main outcome goals, and turn on any relevant **Optional Add-On Themes** for program administration or policy friction. Uncheck themes you do not intend to report if you want a cleaner summary table.
+2. **Let participants' own words reveal what is missing.** Run **Discover Unlisted Themes** on your first batch of notes or survey answers. Look first at clusters tagged **Mostly Uncoded by Active Themes**—those are real topics people talked about that your starting checklist did not measure.
+3. **Add and name the theme in-app—or author a clean `.yaml` file.**
+   * *Fastest path (no file editing):* Click **Add Theme to Active Themes** inside **Discover Unlisted Themes** with exact whole-word matching checked, then click **Save active themes (.yaml)** in the sidebar to save that rule set for the rest of the study.
+   * *Team-wide codebook path:* Open the saved `.yaml` file in any plain-text editor, add everyday synonyms (including Spanish phrasing when applicable), set `match_mode: exact` for short 3-to-4-letter words (`car`, `bus`, `pay`, `fee`), and add `exclude_fences` with `exclude_window: 0` for any look-alike words. Upload it under **Upload Custom Themes (.yaml)** and choose **Combine with checked themes above** or **Use uploaded themes only**.
+4. **Pilot-test with Spot-Check before locking the rules.** Run your new theme on one or two real files, open **Spot-Check Matches**, and check every flagged partial-word, typo, or negation hit. Once counts are clean, freeze the `.yaml` file and archive it alongside your exported reports so every later quarterly wave uses the exact same definition.
+
+---
+
+## 6. How ATLAS Protects Confidentiality and Auditability
 
 Many commercial qualitative tools upload transcripts to external cloud servers, which can conflict with participant consent agreements or agency data policies. **ATLAS executes locally on your workstation.** Input files remain on your disk during parsing, discovery, coding, and export without being transmitted to external APIs (subject to your local computer's security). Both desktop launchers (`run.bat` and `run.command`) pass `--server.address=localhost` by default so other devices on a shared network cannot view the local web page (see [Privacy and network use](../README.md#privacy-and-network-use)).
 
 Keeping core measurement deterministic rather than relying on a generative language model provides three practical advantages for program evaluation:
 
-1. **No paraphrasing drift:** Instead of summarizing remarks in an AI voice, ATLAS extracts exact verbatim text paired with source file, speaker, line number, character offsets, evidence type, and source file SHA-256 hash.
-2. **Exact repeatability:** Running the same codebook on the same files yields identical counts and percentages every time—eliminating run-to-run randomness during board or funder audits.
-3. **Clear role for upstream brainstorming:** If your team uses a separate general-purpose AI tool to brainstorm candidate synonyms during early design, keep it strictly abstract (never upload raw participant transcripts or identifiable notes). Once you vet candidate words and place them in a local YAML codebook, ATLAS performs every search, fence check, and count offline.
+1. **No paraphrasing drift:** Instead of summarizing remarks in an AI voice, ATLAS extracts exact verbatim text paired with source file, speaker, line number, character offsets, source type, and source file SHA-256 hash.
+2. **Exact repeatability:** Running the same theme file on the same documents yields identical counts every time—eliminating run-to-run randomness during board or funder audits.
+3. **Clear role for upstream brainstorming:** If your team uses a separate general-purpose AI tool to brainstorm candidate synonyms during early design, keep it strictly abstract (never upload raw participant transcripts or identifiable notes). Once you vet candidate words and place them in a local YAML file, ATLAS performs every search, fence check, and count offline.
 
 **Choosing the right unit of measurement.** Always state your denominator explicitly in reports:
 
-* **Individual transcripts or survey tables:** Report analytical units (one per transcript or survey respondent row) alongside matching turns.
-* **Focus-group notes (Group Mode):** Report focus groups (`g of G` groups) alongside distinct participant voices and coded entries, and do not report individual-sample survey error bars.
-
----
-
-## 6. Setting Up an Evaluation Checklist (The Codebook)
-
-When building a checklist from scratch, organize your core evaluation questions into a focused set of domains (typically 4 to 8 clear categories). Below is an example checklist for a community health navigation initiative:
-
-| Domain | Evaluation Target | Words and Context Rules |
-| :--- | :--- | :--- |
-| **Transit Access** | Travel barriers causing missed clinic visits | `bus`, `transit`, `route`, `ride`, `car trouble`, `fare` (with clinic/appointment context or `match_mode: exact` on short stems) |
-| **Intake Burden** | Paperwork delays during program signup | `forms`, `documentation`, `pay stub`, `verification`, `delay` |
-| **Benefit Cliffs** | Loss of public aid after modest wage gains | `cliff`, `threshold`, `medi-cal`, `calfresh`, `lost coverage` |
-| **Staff Support** | Positive rapport and care from navigators | `navigator`, `listened`, `advocate`, `patient` (excluding `patients` / `patient portal`), `answered` |
-
-Notice the exclusion note on `patient`: because *"patient"* can mean either a respectful staff member or a medical clinic patient, fencing out `patients` and `patient portal` (or adding a staff context fence) prevents false matches before they ever enter your tables.
+* **Individual transcripts or survey tables:** Report analytical units (one per transcript or survey respondent unit) alongside written answers scanned (`X written answers scanned, Y rows left this question blank`—never calling optional text-box completion the study's "response rate").
+* **Focus-group notes (Group Mode):** Report focus groups (`g of G` groups) alongside clearly labeled notes volume (`Theme Matches` in notes entries), and never present notes volume as participant headcount or report survey error bars on small focus-group pilots.
 
 ---
 
@@ -195,9 +205,9 @@ The models below show how moving from vague prose to denominator-clear counts an
 Funders and evaluation monitors want assurance that reported numbers and quotes match the underlying files. ATLAS builds an automated verification trail for every run:
 
 1. **Cryptographic File Fingerprints (SHA-256):** `provenance_manifest.json` records the SHA-256 digest of every uploaded source file so reviewers can confirm whether local originals match the files analyzed.
-2. **Line, Character-Span, and Evidence-Type Receipts:** Every exported quote lists its source file, line number, character offsets, and evidence type (`verbatim` vs. `paraphrase`), making every citation verifiable in seconds.
-3. **Deterministic Reproducibility:** Archiving your final `.yaml` codebook alongside `provenance_manifest.json` allows any reviewer to re-run ATLAS on the same files and obtain identical counts.
-4. **Tamper-Evident Excel Audit Stamps:** Each prevalence cell in `actuarial_parameter_matrix.xlsx` carries an `ATLAS VERIFICATION AUDIT STAMP` comment, and Tab 2 verifies that the workbook still agrees with the manifest before download.
+2. **Line, Character-Span, and Source-Type Receipts:** Every exported quote lists its source file, line number, character offsets, and source type (`Verbatim Quote` vs. `Paraphrase`), making every citation verifiable in seconds.
+3. **Deterministic Reproducibility:** Archiving your final `.yaml` theme file alongside `provenance_manifest.json` allows any reviewer to re-run ATLAS on the same files and obtain identical counts.
+4. **Tamper-Evident Excel Audit Stamps:** Each prevalence cell in `actuarial_parameter_matrix.xlsx` carries an `ATLAS VERIFICATION AUDIT STAMP` comment, and **Exports & Audit Files** verifies that the workbook still agrees with the manifest before download.
 
 ![Four-step SOFTWARE_TEST audit bridge diagram tracing a highlighted verbatim survey quote with file SHA-256 to its coded frequency row, Excel cell audit-stamp comment, and verify_workbook_integrity PASS check](figures/atlas_audit_bridge.png)
 *SOFTWARE_TEST illustration of the audit trail on a built-in sample; mechanics only.*
@@ -209,35 +219,20 @@ Funders and evaluation monitors want assurance that reported numbers and quotes 
 Before submitting an evaluation report, grant renewal, or board brief, confirm each item:
 
 - [ ] **Dual Grounding:** Does every major qualitative claim pair an exact count and denominator with a verified verbatim quote?
-- [ ] **Denominator Honesty:** Are individual counts (`N` transcripts/respondents) kept strictly separate from focus-group counts (`g of G` groups), with survey error bars omitted on small focus-group pilots?
+- [ ] **Denominator Honesty:** Are individual counts (`N` transcripts/survey units) kept strictly separate from focus-group counts (`g of G` groups), with survey error bars omitted on small focus-group pilots and optional open-ended skip counts never mislabeled as study "response rates"?
 - [ ] **Verbatim Integrity:** Did you filter by `Quotable Verbatim Only` (or export `verbatim_quotes_inventory.csv`) so no note-taker paraphrase is presented inside quotation marks?
-- [ ] **False-Alarm Review:** Did you review **False-Alarm Spot-Check** and tighten any short-stem collisions or negated hits?
-- [ ] **Inductive & Deductive Balance:** Did you run TF-IDF + NMF topic discovery to check for unexpected community themes missing from your initial checklist?
-- [ ] **Confidentiality & Archiving:** Are personal identifiers removed from public deliverables, and are your final `.yaml` codebook and `provenance_manifest.json` archived together?
+- [ ] **Spot-Check Review:** Did you review **Spot-Check Matches** and exclude any partial-word collisions, spelling-tolerance misfires, or negated hits?
+- [ ] **Inductive & Deductive Balance:** Did you inspect **Discover Unlisted Themes** (TF-IDF + NMF) to check for unexpected community themes missing from your initial checklist?
+- [ ] **Confidentiality & Archiving:** Are personal identifiers removed from public deliverables, and are your final `.yaml` theme file and `provenance_manifest.json` archived together?
 
 ---
 
-## Appendix: Developing and Refining a YAML Codebook
+## Appendix: Example Custom YAML Theme File & Public Topic Libraries
 
-A **codebook** is the explicit rule set telling ATLAS which words belong to each domain, whether short stems require whole-word boundaries (`match_mode: exact`), and which phrases should require context or be excluded.
-
-### Option A: Customize Inside ATLAS (No YAML Editor Required)
-
-1. Load your files and pick a starter pack (such as `gbi_focus_group_starter.yaml`), optionally stacking additional starter packs via **Stack Additional Starter Codebooks (optional)**.
-2. Run **💡 Unsupervised Topic Discovery (Medoids)** with **TF-IDF + NMF** and click **`➕ Add Theme to Active Codebook`** on any local theme your starter pack missed.
-3. Open **🔎 False-Alarm Spot-Check** and click **`🛡️ Exclude Selected Words from Domain`** or **`🎯 Switch Domain to Exact Whole-Word Matching`** on any noisy domain.
-4. Click **`📥 Download Active Codebook (.yaml)`** in the sidebar or Tab 2 to archive your finished rules.
-
-### Option B: Author a Custom YAML Codebook Step-by-Step
-
-1. **Start from grant goals and real transcripts:** List the 4 to 8 core outcomes you must track, then scan 5 sample transcripts or focus-group notes to capture the everyday phrases participants actually use (for example, *"ran out of groceries"* alongside *"food insecure"*).
-2. **Write a plain definition for each domain:** Spell out what counts and what does not count so every team member interprets the rule identically.
-3. **Add roots, matching mode, and fences:** Use `match_mode: exact` on short words (`car`, `bus`, `pay`, `fee`) or add `exclude_fences` (with `exclude_window: 0`) so prefix stems never collide with unrelated words (`card`, `career`, `busy`). Add `context_fences` with `context_window` when a broad word like `ride` or `delay` only counts near `clinic`, `bus`, or `intake`.
-4. **Pilot and tighten:** Run your draft on sample files, inspect **False-Alarm Spot-Check**, and revise before running the full dataset.
-5. **Save as UTF-8 YAML (`.yaml`):** ATLAS accepts both the Practitioner layout (`topics` with `label`, `keywords`, `required_context`, `context_window`) and the Researcher layout (`domains` with `roots_en`, `roots_es`, `match_mode`, `context_fences`, `exclude_fences`, `exclude_window`).
+Below is a clean, ready-to-adapt YAML theme file showing exact matching (`match_mode: exact`), context windows, and `exclude_window: 0` look-alike fences:
 
 ```yaml
-# Family Support Program Evaluation Codebook (Practitioner Layout)
+# Family Support Program Evaluation Theme File (Practitioner Layout)
 program_name: "Community Health and Navigation"
 version: "1.2"
 
@@ -260,24 +255,6 @@ topics:
       - "visit"
       - "job"
       - "appointment"
-
-  paperwork_delays:
-    label: "Enrollment & Paperwork Friction"
-    description: "Administrative delays during program intake"
-    keywords:
-      - "forms"
-      - "documentation"
-      - "pay stubs"
-      - "proof of income"
-      - "verification"
-      - "delayed"
-    context_window: 8
-    required_context:
-      - "intake"
-      - "application"
-      - "sign up"
-      - "enrollment"
-      - "weeks"
 
   staff_advocacy:
     label: "Staff Navigation & Support"
@@ -302,24 +279,21 @@ topics:
       - "appointment"
 ```
 
-### Public Topic Libraries and Shipped ATLAS Starter Packs
+### Public Topic Libraries and Shipped Theme Packs
 
-You rarely need to write domain definitions from scratch. Public standards provide vetted definitions you can pair with everyday participant phrasing:
+You rarely need to write theme definitions from scratch. Public standards provide vetted definitions you can pair with everyday participant phrasing:
 
 1. **The 2-1-1 Community Needs Directory ([211taxonomy.org](https://211taxonomy.org)):** Standardized definitions for over 10,000 community needs (rent assistance, food pantries, bus passes, utility relief).
 2. **The PRAPARE® Community Clinic Tool ([prapare.org](https://prapare.org)):** Vetted social-determinants categories for housing stress, food security, transit barriers, and clinic access.
 3. **The IRIS+ Impact Catalog ([iris.thegiin.org](https://iris.thegiin.org)):** Structured social-outcome definitions covering youth programs, schooling, health access, and family nutrition.
 4. **The O*NET Job Skills System ([onetonline.org](https://www.onetonline.org)):** U.S. Department of Labor vocabulary for job training, workplace tasks, and career mobility barriers.
-5. **ATLAS Starter Packs (shipped inside `config/`):**
-   * `gbi_focus_group_starter.yaml`: 8 pre-fenced GBI and cash-assistance focus-group domains (housing, groceries, debt/bills, employment/education, transportation, caregiving, stress/autonomy, and program paperwork).
-   * `sdoh_basic_needs.yaml`: Housing, food, transportation, and utility barriers with short-stem exclusion fences.
-   * `intake_and_enrollment.yaml`: Paperwork delays, wait times, language access, and staff navigation rapport.
-   * `workforce_and_mobility.yaml`: Benefit cliffs, wage progression, job training, and workplace scheduling.
-   * `youth_and_family.yaml`: School attendance, family support, childcare, and youth engagement.
-   * `pfl_case_study_codebook.yaml` and `labor_market_codebook.yaml`: Paid family leave and labor-market research packs.
+5. **ATLAS Built-In Theme Drawers (shipped inside `config/`):**
+   * `gbi_focus_group_starter.yaml` (**Core Evaluation Themes**, 10 themes): Housing & Rent Stability, Food Security & Basic Needs, Financial Stability/Bills & Debt, Employment, Education & Training, Transportation & Mobility, Childcare & Parenting, Healthcare, Mental Health & Stress Relief, and Legal & Justice.
+   * `optional_delivery_addons.yaml` (**Optional Add-On Themes**, 5 non-overlapping themes): Program Enrollment & Paperwork, Benefit Cliffs & Aid Loss, Utility Shutoffs & Energy Burden, Wait Times & Processing Backlogs, and Language & Translation Barriers.
+   * Additional specialized YAML templates inside `config/` (`sdoh_basic_needs.yaml`, `intake_and_enrollment.yaml`, `workforce_and_mobility.yaml`, `youth_and_family.yaml`) can also be uploaded anytime via **Upload Custom Themes (.yaml)**.
 
-*(Read any ATLAS guide formatted right inside **Tab 3: Reference Guides**, or download formatted Word `.docx` copies from the sidebar.)*
+*(Read any ATLAS guide formatted right inside **Reference Guides**, or download formatted Word `.docx` copies from the sidebar.)*
 
 ---
 
-*ATLAS is open-source software distributed under the MIT License. Documentation, sample codebooks, and implementation guides are available at [github.com/dphdame/atlas](https://github.com/dphdame/atlas).*
+*ATLAS is open-source software distributed under the MIT License. Documentation, sample theme files, and implementation guides are available at [github.com/dphdame/atlas](https://github.com/dphdame/atlas).*

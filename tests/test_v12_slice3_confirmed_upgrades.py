@@ -198,21 +198,22 @@ class DiscoveryUIAndQuickStartTests(unittest.TestCase):
         at = AppTest.from_file(str(APP_PATH), default_timeout=20)
         at.run()
         corpus_box = next(s for s in at.selectbox if s.label == "Corpus Dataset")
-        corpus_box.set_value(next(o for o in corpus_box.options if "Bilingual" in str(o)))
+        corpus_box.set_value(next(o for o in corpus_box.options if "Focus-Group Notes" in str(o)))
         at.run()
-        next(b for b in at.button if b.label == "▶ Run Analysis").click()
+        next(b for b in at.button if b.label == "Run Analysis").click()
         at.run()
         self.assertFalse(list(at.exception))
-        radios = [r for r in at.radio if r.label == "Discovery method"]
+        radios = [r for r in at.radio if r.label == "Clustering method"]
         self.assertEqual(len(radios), 1, [r.label for r in at.radio])
         self.assertIn("TF-IDF + NMF", str(radios[0].value))
-        self.assertTrue(any("TF-IDF + NMF topics" in m.value for m in at.markdown))
+        self.assertTrue(any("Cluster 1:" in m.value for m in at.markdown))
 
         lda_opt = next(opt for opt in radios[0].options if "LDA" in str(opt))
         radios[0].set_value(lda_opt)
         at.run()
         self.assertFalse(list(at.exception))
-        self.assertTrue(any("LDA topics" in m.value for m in at.markdown))
+        self.assertIn("LDA", str(next(r for r in at.radio if r.label == "Clustering method").value))
+        self.assertTrue(any("Cluster 1:" in m.value for m in at.markdown))
 
 
 if __name__ == "__main__":

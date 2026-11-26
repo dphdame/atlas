@@ -16,6 +16,7 @@ import hashlib
 import html
 import inspect
 import io
+import json
 import math
 import os
 import re
@@ -45,7 +46,7 @@ except ImportError:  # pragma: no cover - lxml ships with python-docx
     class LxmlError(Exception):
         pass
 
-from atlas_discover import discover_topics, topics_to_codebook_dict
+from atlas_discover import compute_topic_codebook_overlap, discover_topics, topics_to_codebook_dict
 from atlas_engine import (
     AtlasEngine,
     append_topic_to_codebook,
@@ -57,6 +58,7 @@ from atlas_engine import (
     tighten_codebook_domain,
     verbatim_only as verbatim_rows,
 )
+from atlas_report import build_summary_report_docx
 from universal_transcript_parser import (
     TABULAR_EXTENSIONS,
     TRANSCRIPT_EXTENSIONS,
@@ -72,32 +74,17 @@ NAVY = "#1E3A8A"
 TEAL = "#0F766E"
 SLATE = "#334155"
 
+CORE_THEMES_FILE = "gbi_focus_group_starter.yaml"
+ADDON_THEMES_FILE = "optional_delivery_addons.yaml"
+
 CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes (.docx)"
-CORPUS_BILINGUAL = "Sample: Bilingual Interview Transcripts"
-CORPUS_SURVEY = "Sample: Community Health Survey (.csv)"
-CORPUS_DOCX = "Sample: Teams Multiline Transcript (.docx)"
 CORPUS_UPLOAD = "Upload Custom Files (.docx, .vtt, .srt, .txt, .md, .csv, .xlsx)"
 
 SAMPLE_CORPORA = {
     CORPUS_GBI_NOTES: {
         "files": ["software_test_gbi_group_treatment.docx", "software_test_gbi_group_control.docx"],
         "tabular_options": None,
-        "codebook": "gbi_focus_group_starter.yaml",
-    },
-    CORPUS_BILINGUAL: {
-        "files": ["software_test_bilingual_interview.txt", "software_test_zoom_session.vtt"],
-        "tabular_options": None,
-        "codebook": "pfl_case_study_codebook.yaml",
-    },
-    CORPUS_SURVEY: {
-        "files": ["software_test_survey.csv"],
-        "tabular_options": {"text_col": "response", "id_col": "respondent_id", "speaker_col": "role"},
-        "codebook": "pfl_case_study_codebook.yaml",
-    },
-    CORPUS_DOCX: {
-        "files": ["software_test_teams_multiline.docx"],
-        "tabular_options": None,
-        "codebook": "intake_and_enrollment.yaml",
+        "codebook": CORE_THEMES_FILE,
     },
 }
 CORPUS_OPTIONS = [CORPUS_UPLOAD, *SAMPLE_CORPORA]
@@ -117,39 +104,54 @@ VERBATIM_EVIDENCE = "notable_quote_verbatim"
 # Speakers that are not a participant voice: unattributed entries and note-taker themes.
 NON_VOICE_SPEAKERS = frozenset({"", "Unknown", "NoteTaker_Themes"})
 GROUP_TABLE_COLUMNS = [
-    "Domain ID", "Domain", "Groups Reporting", "Total Groups (G)", "Group Share (%)",
-    "Distinct Participant Voices", "Verbatim Quotes", "Paraphrased Key Points", "Matching Entries",
+    "Theme", "Focus Groups", "Theme Matches", "Verbatim Quotes", "Paraphrased Key Points",
+]
+GROUP_TABLE_COLUMNS_WITH_OBS = [
+    *GROUP_TABLE_COLUMNS, "Note-Taker Observations",
 ]
 THEMES_EXPANDER_LABEL = "Note-Taker Themes Summary (Reference Only — Not Counted in Prevalence)"
 CODED_EVIDENCE_CSV = "coded_evidence_inventory.csv"
 NOTES_STRUCTURE = "focus_group_notes"
 # (text colour, background colour, label) per evidence type; every pair is >= 4.5:1.
 EVIDENCE_BADGE_STYLES = {
-    "notable_quote_verbatim": ("#FFFFFF", TEAL, "Verbatim Quote"),
-    "key_point_paraphrase": ("#FFFFFF", SLATE, "Paraphrase (Key Point)"),
-    "observation": (NAVY, "#FFFFFF", "Observation"),
+    "notable_quote_verbatim": ("#FFFFFF", TEAL, "Source: Verbatim Quote"),
+    "verbatim_turn": ("#FFFFFF", TEAL, "Source: Verbatim Quote"),
+    "": ("#FFFFFF", TEAL, "Source: Verbatim Quote"),
+    "key_point_paraphrase": ("#FFFFFF", SLATE, "Source: Paraphrase (Key Point)"),
+    "observation": ("#334155", "#F1F5F9", "Source: Note-Taker Observation"),
 }
-EVIDENCE_BADGE_FALLBACK = ("#FFFFFF", "#475569", "Transcript / Survey")
-# Group x theme tiles: state -> (fill, text colour), each text/fill pair >= 4.5:1.
+EVIDENCE_BADGE_FALLBACK = ("#FFFFFF", "#475569", "Source: Transcript / Survey")
+# Group x theme tiles: uniform visual weight across all focus groups (every pair >= 4.5:1).
 GROUP_TILE_COLOURS = {
     "none": ("#F1F5F9", "#475569"),
-    "unknown_only": ("#CCFBF1", TEAL),
-    "voices": (NAVY, "#FFFFFF"),
+    "present": (NAVY, "#FFFFFF"),
 }
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-RUN_BUTTON_LABEL = "▶ Run Analysis"
+RUN_BUTTON_LABEL = "Run Analysis"
+TOP_TABS = ["Themes & Quotes", "Exports & Audit Files", "Reference Guides"]
+SUB_TABS = ["Theme Summary", "Coded Evidence", "Discover Unlisted Themes", "Spot-Check Matches"]
 
 REFERENCE_GUIDES = [
-    ("📋 GBI Analyst Quick-Start Guide (.docx)", "ATLAS_GBI_Analyst_Quick_Start.md"),
-    ("📘 User Guide (.docx)", "ATLAS_User_Guide.md"),
-    ("📗 Methodology & Reference Manual (.docx)", "ATLAS_Methodology_and_Reference_Manual.md"),
-    ("📙 Practitioner Field Guide (.docx)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
+    ("GBI Analyst Quick-Start Guide (.docx)", "ATLAS_GBI_Analyst_Quick_Start.md"),
+    ("User Guide (.docx)", "ATLAS_User_Guide.md"),
+    ("Methodology & Reference Manual (.docx)", "ATLAS_Methodology_and_Reference_Manual.md"),
+    ("Practitioner Field Guide (.docx)", "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md"),
 ]
 
 DISCOVERY_METHOD_NMF = "TF-IDF + NMF (Recommended — faster, sharper keywords)"
 DISCOVERY_METHOD_LDA = "LDA (Classic bag-of-words)"
 DISCOVERY_METHOD_MAP = {DISCOVERY_METHOD_NMF: "nmf", DISCOVERY_METHOD_LDA: "lda"}
+
+SPOTCHECK_PRIORITY_PARTIAL = "Check First (Partial-Word Match)"
+SPOTCHECK_PRIORITY_SPELLING = "Check First (Spelling Match)"
+SPOTCHECK_PRIORITY_CONTEXT = "Check in Context (Negation or Short Word)"
+
+UPLOAD_MODE_REPLACE = "Use uploaded themes only"
+UPLOAD_MODE_COMBINE = "Combine with checked themes above"
+
+DUP_ID_PER_ROW = "Keep each row as its own response (preserves Respondent ID in exports)"
+DUP_ID_COMBINE = "Combine repeated rows under one Respondent ID (N = unique respondents)"
 
 # Errors raised by reading a malformed upload: bad CSV structure or quoting (ValueError),
 # invalid UTF-8, or a corrupt .xlsx / .docx package or malformed XML part inside one.
@@ -169,7 +171,6 @@ _TEXT_COLUMN_HINTS = (
 # ------------------------------------------------------------------------------
 st.set_page_config(
     page_title="ATLAS Workbench",
-    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -177,32 +178,40 @@ st.set_page_config(
 st.markdown(
     f"""
 <style>
-.main .block-container {{ padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }}
+.main .block-container {{ padding-top: 1.75rem; padding-bottom: 3rem; max-width: 1240px; }}
+html, body, [class*="css"] {{ font-size: 16px; }}
 .brand-header {{ background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 6px solid {NAVY};
-  padding: 1.5rem 2rem; border-radius: 8px; margin-bottom: 1.25rem; }}
-.brand-header h1 {{ color: {NAVY} !important; font-size: 1.85rem !important; font-weight: 800 !important;
-  margin: 0 0 0.4rem 0 !important; }}
-.brand-header p {{ color: #1E293B !important; font-size: 1.05rem !important; margin: 0 0 0.9rem 0 !important; }}
+  padding: 1.35rem 1.85rem; border-radius: 8px; margin-bottom: 1.1rem; }}
+.brand-header h1 {{ color: {NAVY} !important; font-size: 2rem !important; font-weight: 800 !important;
+  margin: 0 0 0.35rem 0 !important; }}
+.brand-header p {{ color: #1E293B !important; font-size: 1.08rem !important; margin: 0 !important; }}
+.provenance-banner {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-left: 4px solid {NAVY};
+  padding: 0.85rem 1.15rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.98rem; color: #0F172A; }}
 .badge-row {{ display: flex; flex-wrap: wrap; gap: 0.5rem; }}
-.atlas-badge {{ display: inline-block; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.03em;
-  padding: 0.25rem 0.7rem; border-radius: 4px; color: #FFFFFF; background: {NAVY}; }}
+.atlas-badge {{ display: inline-block; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+  padding: 0.2rem 0.65rem; border-radius: 4px; color: #FFFFFF; background: {NAVY}; }}
 .atlas-badge-teal {{ background: {TEAL}; }}
 .atlas-badge-outline {{ background: #FFFFFF; color: {NAVY}; border: 2px solid {NAVY}; }}
+.coverage-badge {{ display: inline-block; font-size: 0.8rem; font-weight: 700; padding: 0.16rem 0.55rem;
+  border-radius: 4px; margin-right: 0.45rem; border: 1px solid #CBD5E1; }}
+.coverage-uncoded {{ background: #FEF3C7; color: #92400E; border-color: #D97706; }}
+.coverage-partial {{ background: #E0F2FE; color: #075985; border-color: #0284C7; }}
+.coverage-covered {{ background: #F1F5F9; color: #334155; border-color: #94A3B8; }}
 .quote-box {{ background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4px solid {TEAL};
   padding: 1rem 1.25rem; border-radius: 6px; margin-bottom: 0.9rem; }}
 .topic-box {{ border-left-color: {NAVY}; }}
 .risk-high-box {{ border-left-color: #B91C1C; }}
 .risk-medium-box {{ border-left-color: #92400E; }}
-.risk-badge {{ display: inline-block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
-  padding: 0.12rem 0.45rem; border-radius: 3px; color: #FFFFFF; margin-right: 0.45rem; }}
+.risk-badge {{ display: inline-block; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.02em;
+  padding: 0.15rem 0.5rem; border-radius: 3px; color: #FFFFFF; margin-right: 0.45rem; }}
 .risk-badge-high {{ background: #B91C1C; }}
 .risk-badge-medium {{ background: #92400E; }}
-.quote-meta {{ font-size: 0.85rem; font-weight: 700; color: {TEAL}; margin-bottom: 0.35rem; }}
+.quote-meta {{ font-size: 0.94rem; font-weight: 700; color: {TEAL}; margin-bottom: 0.4rem; line-height: 1.45; }}
 .topic-box .quote-meta {{ color: {NAVY}; }}
-.quote-text {{ font-size: 1rem; color: #0F172A; line-height: 1.6; margin-bottom: 0.5rem; white-space: pre-wrap; }}
+.quote-text {{ font-size: 1.05rem; color: #0F172A; line-height: 1.6; margin-bottom: 0.5rem; white-space: pre-wrap; }}
 .quote-text mark {{ background: #FEF08A; color: #0F172A; padding: 0 0.1rem; }}
-.quote-provenance {{ font-size: 0.8rem; font-family: monospace; color: #334155; background: #E2E8F0;
-  padding: 0.2rem 0.5rem; border-radius: 3px; display: inline-block; }}
+.quote-provenance {{ font-size: 0.85rem; font-family: monospace; color: #334155; background: #E2E8F0;
+  padding: 0.22rem 0.55rem; border-radius: 3px; display: inline-block; }}
 </style>
 """,
     unsafe_allow_html=True,
@@ -216,6 +225,37 @@ def list_config_codebooks():
     if not CONFIG_DIR.is_dir():
         return []
     return sorted(p.name for p in CONFIG_DIR.glob("*.yaml") if p.is_file())
+
+
+@st.cache_data(show_spinner=False)
+def load_catalog_rules(filename):
+    path = CONFIG_DIR / filename
+    if not path.is_file():
+        return []
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return normalize_codebook_rules(raw)
+
+
+def build_catalog_codebook_dict(core_rules, selected_core_ids, addon_rules, selected_addon_ids,
+                                uploaded_dict=None, uploaded_name=None, upload_mode=UPLOAD_MODE_REPLACE):
+    """Build a single valid ATLAS codebook dict from checkbox selections and/or uploaded YAML."""
+    checked = [
+        r for r in core_rules if r["id"] in selected_core_ids
+    ] + [
+        r for r in addon_rules if r["id"] in selected_addon_ids
+    ]
+    checked_cb = {"project": "Selected Evaluation Themes", "version": "2.0", "domains": checked} if checked else None
+
+    if uploaded_dict is not None:
+        if upload_mode == UPLOAD_MODE_REPLACE or checked_cb is None:
+            return uploaded_dict
+        return merge_codebook_dicts([
+            ("Selected Evaluation Themes", checked_cb),
+            (uploaded_name or "uploaded_codebook.yaml", uploaded_dict),
+        ])
+    if checked_cb is None:
+        return None
+    return checked_cb
 
 
 def is_id_column(name):
@@ -364,168 +404,327 @@ def group_labels_for(source_ids):
     return {sid: (name if names.count(name) == 1 else sid) for sid, name in zip(ids, names)}
 
 
-def build_group_frequency_table(freq, quotes, total_groups):
-    """One row per codebook domain: groups reporting (g of G) and the evidence behind it."""
+def build_group_frequency_table(freq, quotes, total_groups, *, include_observations=False):
+    """
+    One row per codebook theme: focus groups reporting (g of G) and reconciled
+    evidence counts. Uses atlas_engine.verbatim_only so transcript/survey
+    `verbatim_turn` rows and notes `notable_quote_verbatim` rows both count as
+    Verbatim Quotes, ensuring Verbatim + Paraphrased (+ Observations) == Theme Matches.
+    """
+    has_obs = bool(include_observations) or (
+        quotes is not None
+        and len(quotes) > 0
+        and "evidence_type" in quotes.columns
+        and (quotes["evidence_type"].astype(str) == "observation").any()
+    )
+    cols = GROUP_TABLE_COLUMNS_WITH_OBS if has_obs else GROUP_TABLE_COLUMNS
     rows = []
     for _, r in freq.iterrows():
-        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])]
-        evidence = dq["evidence_type"].astype(str) if "evidence_type" in dq.columns else pd.Series(dtype=str)
-        rows.append({
-            "Domain ID": str(r["domain_id"]),
-            "Domain": str(r["domain_name"]),
-            "Groups Reporting": int(r["documents_reporting"]),
-            "Total Groups (G)": int(total_groups),
-            "Group Share (%)": float(r["prevalence_pct"]),
-            "Distinct Participant Voices": count_distinct_voices(dq),
-            "Verbatim Quotes": int((evidence == "notable_quote_verbatim").sum()),
-            "Paraphrased Key Points": int((evidence == "key_point_paraphrase").sum()),
-            "Matching Entries": len(dq),
-        })
-    return pd.DataFrame(rows, columns=GROUP_TABLE_COLUMNS)
+        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])] if len(quotes) else quotes
+        evidence = dq["evidence_type"].astype(str) if (len(dq) and "evidence_type" in dq.columns) else pd.Series(dtype=str)
+        n_verbatim = int(len(verbatim_rows(dq))) if len(dq) else 0
+        n_paraphrase = int((evidence == "key_point_paraphrase").sum()) if len(dq) else 0
+        n_obs = int((evidence == "observation").sum()) if len(dq) else 0
+        g_rep = int(r["documents_reporting"])
+        row = {
+            "Theme": str(r["domain_name"]),
+            "Focus Groups": f"{g_rep} of {int(total_groups)}",
+            "Theme Matches": int(len(dq)),
+            "Verbatim Quotes": n_verbatim,
+            "Paraphrased Key Points": n_paraphrase,
+            "_groups_reporting": g_rep,
+            "_domain_id": str(r["domain_id"]),
+        }
+        if has_obs:
+            row["Note-Taker Observations"] = n_obs
+        rows.append(row)
+    df = pd.DataFrame(rows, columns=[*cols, "_groups_reporting", "_domain_id"])
+    if len(df):
+        df = df.sort_values(
+            ["Theme Matches", "_groups_reporting", "Theme"],
+            ascending=[False, False, True],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    return df
 
 
-def build_group_theme_matrix(freq, quotes, file_hashes):
+def build_group_theme_matrix(freq, quotes, file_hashes, *, theme_order=None):
     """
-    One row per (domain, focus-group file): whether the group reported the domain,
-    its matching entries, its distinct participant voices and the tile label
-    ("<n>v" voices, "✓" matched only by unattributed entries, "—" not reported).
+    One row per (theme, focus-group file): uniform presence/entry tile state across
+    all focus groups (never mixing voice counts with checkmarks).
+
+    Keyed strictly by `domain_id` so two valid themes that share a display name
+    never overwrite each other; duplicate display names are disambiguated in
+    `theme_label` while unique display names stay verbatim.
     """
     source_ids = sorted(str(s) for s in file_hashes)
     labels = group_labels_for(source_ids)
+    freq_by_id = {str(r["domain_id"]): r for _, r in freq.iterrows()}
+    all_ids = [str(r["domain_id"]) for _, r in freq.iterrows()]
+    if theme_order is not None:
+        order_list = [str(x) for x in theme_order]
+        if all(x in freq_by_id for x in order_list):
+            ordered_ids = order_list
+        else:
+            # Backward compatibility if a caller passes display names in theme_order.
+            name_to_ids: dict[str, list[str]] = {}
+            for _, r in freq.iterrows():
+                name_to_ids.setdefault(str(r["domain_name"]), []).append(str(r["domain_id"]))
+            ordered_ids = []
+            seen_ids = set()
+            for x in order_list:
+                for did in name_to_ids.get(x, []):
+                    if did not in seen_ids:
+                        ordered_ids.append(did)
+                        seen_ids.add(did)
+            for did in all_ids:
+                if did not in seen_ids:
+                    ordered_ids.append(did)
+                    seen_ids.add(did)
+    else:
+        ordered_ids = all_ids
+
+    name_counts: dict[str, int] = {}
+    for did in ordered_ids:
+        r = freq_by_id.get(did)
+        if r is not None:
+            dn = str(r["domain_name"])
+            name_counts[dn] = name_counts.get(dn, 0) + 1
+
     rows = []
-    for _, r in freq.iterrows():
-        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])]
+    for did in ordered_ids:
+        r = freq_by_id.get(did)
+        if r is None:
+            continue
+        name = str(r["domain_name"])
+        theme_label = f"{name} ({did})" if name_counts.get(name, 0) > 1 else name
+        dq = quotes[quotes["domain_id"].astype(str) == did] if len(quotes) else quotes
+        if "documents_reporting" in r and pd.notna(r["documents_reporting"]):
+            g_rep = int(r["documents_reporting"])
+        else:
+            g_rep = sum(
+                1 for sid in source_ids
+                if len(dq) and len(dq[dq["source_id"].astype(str) == sid]) > 0
+            )
         for sid in source_ids:
-            gq = dq[dq["source_id"].astype(str) == sid]
-            n = len(gq)
-            voices = len({str(p) for p in gq["speaker"] if str(p) not in NON_VOICE_SPEAKERS})
-            state = "voices" if voices else ("unknown_only" if n else "none")
+            gq = dq[dq["source_id"].astype(str) == sid] if len(dq) else dq
+            n = int(len(gq))
             rows.append({
-                "domain_id": str(r["domain_id"]),
-                "domain_name": str(r["domain_name"]),
+                "domain_id": did,
+                "domain_name": name,
+                "theme_label": theme_label,
                 "source_id": sid,
                 "group_label": labels[sid],
                 "present": n > 0,
                 "matching_entries": n,
-                "distinct_voices": voices,
-                "cell_label": f"{voices}v" if voices else ("✓" if n else "—"),
-                "tile_state": state,
+                "groups_reporting": g_rep,
+                "presence_label": "✓" if n > 0 else "—",
+                "entries_label": str(n) if n > 0 else "—",
+                "tile_state": "present" if n > 0 else "none",
             })
-    return pd.DataFrame(rows, columns=["domain_id", "domain_name", "source_id", "group_label", "present",
-                                       "matching_entries", "distinct_voices", "cell_label", "tile_state"])
+    return pd.DataFrame(rows, columns=[
+        "domain_id", "domain_name", "theme_label", "source_id", "group_label", "present",
+        "matching_entries", "groups_reporting", "presence_label", "entries_label", "tile_state",
+    ])
 
 
 def describe_group_prevalence_chart(group_df, total_groups):
     """
-    Plain-text summary of the Groups Reporting (g of G) bar chart, for the Vega-Lite
-    description and the visible st.html summary. Deterministic: built only from
-    group_df (GROUP_TABLE_COLUMNS); lists the three domains reported by the most
-    groups, ordered by groups reporting descending, then domain name.
+    Plain-text summary of Group Mode theme frequency (Vega-Lite description and
+    st.html summary). Reports themes by match volume and groups reporting; never
+    emits partial participant-voice counts.
     """
     if group_df is None or len(group_df) == 0:
-        return "No domains defined in the active codebook."
+        return "No themes selected."
     k = len(group_df)
-    domains = "domain" if k == 1 else "domains"
+    themes_w = "theme" if k == 1 else "themes"
     total = int(total_groups)
     if total <= 0:
-        return f"Horizontal bar chart with 0 focus groups, so no group count is defined for the {k} coded {domains}."
+        return f"Horizontal bar chart with 0 focus groups across {k} {themes_w}."
     groups = "focus group" if total == 1 else "focus groups"
 
     def count(value):
         number = pd.to_numeric(value, errors="coerce")
         return int(number) if pd.notna(number) and math.isfinite(float(number)) else 0
 
+    g_col = "_groups_reporting" if "_groups_reporting" in group_df.columns else "Groups Reporting"
+    m_col = "Theme Matches" if "Theme Matches" in group_df.columns else "Matching Entries"
+    n_col = "Theme" if "Theme" in group_df.columns else "Domain"
     rows = group_df.assign(
-        _name=group_df["Domain"].astype(str),
-        _groups=group_df["Groups Reporting"].map(count),
-        _voices=group_df["Distinct Participant Voices"].map(count),
-    ).sort_values(["_groups", "_name"], ascending=[False, True], kind="mergesort")
+        _name=group_df[n_col].astype(str),
+        _groups=group_df[g_col].map(count),
+        _matches=group_df[m_col].map(count),
+    ).sort_values(["_matches", "_groups", "_name"], ascending=[False, False, True], kind="mergesort")
     matched = rows[rows["_groups"] > 0]
-    lead = f"Horizontal bar chart of focus groups reporting each domain, out of {total} {groups}."
+    lead = f"Horizontal bar chart of matched notes entries across {total} {groups}."
     if matched.empty:
-        return f"{lead} No group reported any of the {k} coded {domains}."
+        return f"{lead} No group reported any of the {k} active {themes_w}."
     listed = []
     for _, r in matched.head(3).iterrows():
-        voices = "voice" if r["_voices"] == 1 else "voices"
-        listed.append(f"{r['_name']} {r['_groups']} of {total} {groups} ({r['_voices']} distinct participant {voices})")
-    text = f"{lead} Reported by the most groups: {'; '.join(listed)}."
+        m_w = "match" if r["_matches"] == 1 else "matches"
+        listed.append(f"{r['_name']}: {r['_matches']} {m_w} ({r['_groups']} of {total} {groups})")
+    text = f"{lead} Most frequently matched in notes: {'; '.join(listed)}."
     if len(matched) > 3:
-        text += f" Other reported domains not listed: {len(matched) - 3}."
+        text += f" Other matched themes not listed: {len(matched) - 3}."
     if len(matched) < k:
-        text += f" Domains reported by no group: {k - len(matched)} of {k}."
+        text += f" Themes reported by no group: {k - len(matched)} of {k}."
     return text
 
 
 def describe_group_matrix_chart(matrix_df, total_groups):
-    """
-    Plain-text summary of the group x theme tile matrix (Vega-Lite description and
-    st.html summary). Deterministic: built only from matrix_df
-    (build_group_theme_matrix); groups are listed in label order.
-    """
+    """Plain-text summary of the Group x Theme presence grid."""
     if matrix_df is None or len(matrix_df) == 0:
-        return "No domains defined in the active codebook."
+        return "No themes selected."
     k = matrix_df["domain_id"].astype(str).nunique()
-    domains = "domain" if k == 1 else "domains"
+    themes_w = "theme" if k == 1 else "themes"
     total = int(total_groups)
     groups = "focus group" if total == 1 else "focus groups"
     present = matrix_df["present"].astype(bool)
     per_group = []
     for label in sorted(matrix_df["group_label"].astype(str).unique()):
         n = int(present[matrix_df["group_label"].astype(str) == label].sum())
-        per_group.append(f"{label} {n} of {k}")
-    return (f"Tile matrix of {k} coded {domains} by {total} {groups}. "
-            f"{int(present.sum())} of {len(matrix_df)} domain-group tiles have at least one matching entry. "
-            f"Domains reported per group: {'; '.join(per_group)}.")
+        per_group.append(f"{label}: {n} of {k}")
+    return (f"Focus-group grid of {k} active {themes_w} across {total} {groups}. "
+            f"{int(present.sum())} of {len(matrix_df)} theme-group tiles have at least one match. "
+            f"Themes reported per group: {'; '.join(per_group)}.")
 
 
-def group_prevalence_chart(group_df, total_groups):
-    """Integer Groups Reporting (g of G) bar chart, labelled g/G."""
+def group_volume_chart(group_df, total_groups):
+    """Horizontal bar chart of Theme Matches in notes, labelled `<matches> (<g>/<G>)`."""
     total = int(total_groups)
-    top = max(total, 1)
+    g_col = "_groups_reporting" if "_groups_reporting" in group_df.columns else "Groups Reporting"
+    m_col = "Theme Matches" if "Theme Matches" in group_df.columns else "Matching Entries"
+    n_col = "Theme" if "Theme" in group_df.columns else "Domain"
+    raw_names = [str(v) for v in group_df[n_col].tolist()]
+    if "_domain_id" in group_df.columns:
+        row_ids = [str(v) for v in group_df["_domain_id"].tolist()]
+    else:
+        row_ids = [f"__row_{i}" for i in range(len(group_df))]
+    name_counts: dict[str, int] = {}
+    for rn in raw_names:
+        name_counts[rn] = name_counts.get(rn, 0) + 1
+    if "_domain_id" in group_df.columns:
+        disp_names = [
+            f"{rn} ({did})" if name_counts.get(rn, 0) > 1 else rn
+            for rn, did in zip(raw_names, row_ids)
+        ]
+    else:
+        disp_names = raw_names
+    id_to_label = dict(zip(row_ids, disp_names))
+    label_expr = f"({json.dumps(id_to_label)})[datum.value]"
     data = pd.DataFrame({
-        "domain_name": group_df["Domain"].astype(str),
-        "groups_reporting": group_df["Groups Reporting"].astype(int),
-        "distinct_voices": group_df["Distinct Participant Voices"].astype(int),
-        "bar_label": [f"{int(g)}/{total}" for g in group_df["Groups Reporting"]],
+        "domain_id": row_ids,
+        "theme_name": disp_names,
+        "theme_matches": group_df[m_col].astype(int).tolist(),
+        "groups_reporting": group_df[g_col].astype(int).tolist(),
+        "bar_label": [f"{int(m)} ({int(g)}/{total})" for m, g in zip(group_df[m_col], group_df[g_col])],
     })
-    x = alt.X("groups_reporting:Q", title=f"Groups Reporting (out of {total} focus groups)",
-              scale=alt.Scale(domain=[0, top]), axis=alt.Axis(values=list(range(0, top + 1)), format="d"))
-    bars = alt.Chart(data).mark_bar(color=NAVY).encode(
+    max_m = max(int(data["theme_matches"].max()) if len(data) else 1, 1)
+    y_order = list(row_ids)
+    x = alt.X(
+        "theme_matches:Q",
+        title="Matched Notes Entries (note volume — not participant headcount)",
+        scale=alt.Scale(domain=[0, max(max_m + max(1, int(max_m * 0.22)), 2)]),
+        axis=alt.Axis(tickMinStep=1, format="d"),
+    )
+    bars = alt.Chart(data).mark_bar(color=NAVY, cornerRadiusEnd=3).encode(
         x=x,
-        y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+        y=alt.Y("domain_id:N", sort=y_order, title=None, axis=alt.Axis(labelLimit=360, labelExpr=label_expr)),
         tooltip=[
-            alt.Tooltip("domain_name:N", title="Domain"),
-            alt.Tooltip("groups_reporting:Q", title="Groups reporting", format="d"),
-            alt.Tooltip("distinct_voices:Q", title="Distinct participant voices", format="d"),
+            alt.Tooltip("theme_name:N", title="Theme"),
+            alt.Tooltip("domain_id:N", title="Theme ID"),
+            alt.Tooltip("theme_matches:Q", title="Theme matches (notes entries)", format="d"),
+            alt.Tooltip("groups_reporting:Q", title=f"Focus groups reporting (of {total})", format="d"),
         ],
     )
-    labels = alt.Chart(data).mark_text(align="left", dx=4, color="#0F172A").encode(
-        x="groups_reporting:Q", y=alt.Y("domain_name:N", sort="-x"), text="bar_label:N",
+    labels = alt.Chart(data).mark_text(align="left", dx=6, fontSize=13, fontWeight="bold", color="#0F172A").encode(
+        x="theme_matches:Q",
+        y=alt.Y("domain_id:N", sort=y_order),
+        text="bar_label:N",
     )
     return bars + labels
 
 
-def group_matrix_chart(matrix_df):
-    """Group x theme tile matrix: fill and text colour encode the tile state."""
+def group_matrix_chart(matrix_df, total_groups, *, show_entries=False):
+    """
+    Uniform Group x Theme grid: every focus group uses the exact same tile colors
+    and encoding (`✓` / `—` or matching entry counts), plus a rightmost `Groups`
+    summary column (`g/G`).
+
+    Y coordinates are encoded strictly by `domain_id` (rendered with human-readable
+    axis labels via `labelExpr`) so duplicate or colliding display names never merge
+    or overwrite rows.
+    """
     states = list(GROUP_TILE_COLOURS)
-    base = alt.Chart(matrix_df).encode(
-        x=alt.X("group_label:N", title="Focus group", sort=sorted(matrix_df["group_label"].astype(str).unique()),
-                axis=alt.Axis(labelAngle=0, labelLimit=240, orient="top")),
-        y=alt.Y("domain_name:N", title=None, sort=list(dict.fromkeys(matrix_df["domain_name"].astype(str))),
-                axis=alt.Axis(labelLimit=320)),
+    groups_sorted = sorted(matrix_df["group_label"].astype(str).unique())
+    y_col = "theme_label" if "theme_label" in matrix_df.columns else "domain_name"
+    y_order = list(dict.fromkeys(matrix_df["domain_id"].astype(str)))
+    id_to_label: dict[str, str] = {}
+    for _, r in matrix_df.iterrows():
+        did = str(r["domain_id"])
+        if did not in id_to_label:
+            id_to_label[did] = str(r[y_col])
+    label_expr = f"({json.dumps(id_to_label)})[datum.value]"
+    label_field = "entries_label" if show_entries else "presence_label"
+
+    grid_rows = matrix_df.copy()
+    grid_rows["domain_id"] = grid_rows["domain_id"].astype(str)
+    grid_rows["theme_display"] = grid_rows[y_col].astype(str)
+    grid_rows["col_label"] = grid_rows["group_label"].astype(str)
+    grid_rows["display_text"] = grid_rows[label_field].astype(str)
+
+    # Append a rightmost "Groups" summary column (g/G) keyed strictly by domain_id.
+    summary_rows = []
+    seen = set()
+    for _, r in matrix_df.iterrows():
+        did = str(r["domain_id"])
+        if did in seen:
+            continue
+        seen.add(did)
+        dn = str(r["domain_name"])
+        disp = str(r[y_col])
+        g_rep = int(r["groups_reporting"])
+        summary_rows.append({
+            "domain_id": did,
+            "domain_name": dn,
+            "theme_label": disp,
+            "theme_display": disp,
+            "source_id": "__groups_summary__",
+            "group_label": "Groups",
+            "col_label": "Groups",
+            "present": g_rep > 0,
+            "matching_entries": int(matrix_df.loc[matrix_df["domain_id"].astype(str) == did, "matching_entries"].sum()),
+            "groups_reporting": g_rep,
+            "presence_label": f"{g_rep}/{int(total_groups)}",
+            "entries_label": f"{g_rep}/{int(total_groups)}",
+            "display_text": f"{g_rep}/{int(total_groups)}",
+            "tile_state": "none",
+        })
+    combined = pd.concat([grid_rows, pd.DataFrame(summary_rows)], ignore_index=True)
+    col_order = [*groups_sorted, "Groups"]
+
+    x_axis = (
+        alt.Axis(labelAngle=-25, labelAlign="left", labelBaseline="bottom", labelLimit=160, labelOverlap=False, orient="top")
+        if len(col_order) > 4
+        else alt.Axis(labelAngle=0, labelAlign="center", labelLimit=170, labelOverlap=False, orient="top")
     )
-    tiles = base.mark_rect(stroke="#FFFFFF", strokeWidth=2).encode(
+    base = alt.Chart(combined).encode(
+        x=alt.X("col_label:N", title=None, sort=col_order, axis=x_axis),
+        y=alt.Y("domain_id:N", title=None, sort=y_order,
+                axis=alt.Axis(labelLimit=360, labelExpr=label_expr)),
+    )
+    tiles = base.mark_rect(stroke="#FFFFFF", strokeWidth=2, cornerRadius=3).encode(
         color=alt.Color("tile_state:N", legend=None,
                         scale=alt.Scale(domain=states, range=[GROUP_TILE_COLOURS[s][0] for s in states])),
         tooltip=[
-            alt.Tooltip("domain_name:N", title="Domain"),
-            alt.Tooltip("group_label:N", title="Focus group"),
+            alt.Tooltip("theme_display:N", title="Theme"),
+            alt.Tooltip("domain_id:N", title="Theme ID"),
+            alt.Tooltip("col_label:N", title="Column"),
             alt.Tooltip("matching_entries:Q", title="Matching entries", format="d"),
-            alt.Tooltip("distinct_voices:Q", title="Distinct participant voices", format="d"),
         ],
     )
-    text = base.mark_text(fontWeight="bold").encode(
-        text="cell_label:N",
+    text = base.mark_text(fontWeight="bold", fontSize=14).encode(
+        text="display_text:N",
         color=alt.Color("tile_state:N", legend=None,
                         scale=alt.Scale(domain=states, range=[GROUP_TILE_COLOURS[s][1] for s in states])),
     )
@@ -533,26 +732,38 @@ def group_matrix_chart(matrix_df):
 
 
 def light_chart_surface(chart):
-    """Coordinated light chart surface so marks and labels keep their contrast on any app theme."""
+    """Coordinated light chart surface with screen-share-readable typography."""
     return (chart.configure(background="#FFFFFF")
             .configure_view(fill="#FFFFFF", stroke="#64748B")
             .configure_axis(labelColor="#1E293B", titleColor="#0F172A", domainColor="#64748B",
-                            tickColor="#64748B", gridColor="#E2E8F0")
-            .configure_title(color="#0F172A")
-            .configure_legend(labelColor="#1E293B", titleColor="#0F172A"))
+                            tickColor="#64748B", gridColor="#E2E8F0",
+                            labelFontSize=13, titleFontSize=14, titlePadding=10)
+            .configure_title(color="#0F172A", fontSize=15)
+            .configure_legend(labelColor="#1E293B", titleColor="#0F172A", labelFontSize=13, titleFontSize=13))
 
 
 def evidence_badge_html(evidence_type):
-    """High-contrast badge naming a quote's evidence type (escaped, never Markdown)."""
+    """High-contrast badge naming an entry's source column (escaped, never Markdown)."""
     fg, bg, label = EVIDENCE_BADGE_STYLES.get(str(evidence_type), EVIDENCE_BADGE_FALLBACK)
-    border = fg if bg == "#FFFFFF" else bg
-    return (f'<span class="atlas-evidence-badge" style="display:inline-block;font-size:0.75rem;font-weight:700;'
-            f'padding:0.1rem 0.5rem;border-radius:4px;margin-right:0.4rem;color:{fg};background-color:{bg};'
-            f'border:2px solid {border};">{html.escape(label)}</span>')
+    border = "#94A3B8" if bg == "#F1F5F9" else bg
+    return (f'<span class="atlas-evidence-badge" style="display:inline-block;font-size:0.8rem;font-weight:700;'
+            f'padding:0.12rem 0.55rem;border-radius:4px;margin-right:0.45rem;color:{fg};background-color:{bg};'
+            f'border:1px solid {border};">{html.escape(label)}</span>')
 
 
 @st.cache_data(show_spinner=False)
-def read_table_columns(name, payload):
+def read_table_sheets(name, payload):
+    """Sheet names of an uploaded .xlsx file (empty list for .csv)."""
+    if os.path.splitext(str(name))[1].lower() != ".xlsx":
+        return []
+    with tempfile.TemporaryDirectory(prefix="atlas_sheets_") as tmp:
+        path = Path(tmp) / safe_upload_name(name, set())
+        path.write_bytes(payload)
+        return UniversalTranscriptParser.list_excel_sheets(str(path))
+
+
+@st.cache_data(show_spinner=False)
+def read_table_columns(name, payload, sheet_name=0):
     """Columns and rows of an uploaded table exactly as the parser reads them."""
     ext = os.path.splitext(name)[1].lower()
     with tempfile.TemporaryDirectory(prefix="atlas_preview_") as tmp:
@@ -561,7 +772,9 @@ def read_table_columns(name, payload):
         if ext == ".csv":
             frame, _ = UniversalTranscriptParser()._read_csv(str(path))
         else:
-            frame = pd.read_excel(path, dtype=str, keep_default_na=False, na_filter=False)
+            frame = pd.read_excel(
+                path, sheet_name=sheet_name, dtype=str, keep_default_na=False, na_filter=False
+            )
     frame.columns = [str(c) for c in frame.columns]
     return frame
 
@@ -582,19 +795,9 @@ def detect_structured_notes(name, payload):
 
 @st.cache_data(show_spinner=False)
 def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_patterns, notes_evidence=None,
-                   group_by_source=False):
+                   group_by_source=False, spelling_tolerance=False):
     """
     Run UniversalTranscriptParser -> AtlasEngine on byte copies of the inputs.
-    notes_evidence (Group mode) is the tuple of notes evidence types to code;
-    None keeps the parser defaults.
-
-    inputs is a tuple of (relative_path, bytes); the files are written under a
-    fresh temporary root with those relative paths, so each source_id equals the
-    relative path and each source_sha256 is the SHA-256 of the exact bytes.
-    The engine's own export (xlsx with audit-stamp comments, provenance manifest,
-    quotes CSV) is produced in the same temporary root and returned as bytes.
-    Two relative paths that one case- or normalization-insensitive filesystem
-    maps to the same file are refused, so no payload can overwrite another.
     """
     keys = [upload_path_key(rel) for rel, _ in inputs]
     if len(set(keys)) != len(keys):
@@ -621,6 +824,7 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
             include_evidence_types=list(notes_evidence) if notes_evidence else None,
             notes_unit_level="group",
             group_by_source=group_by_source,
+            spelling_tolerance=bool(spelling_tolerance),
         )
 
         export_dir = Path(tmp) / "export"
@@ -640,7 +844,12 @@ def analyze_corpus(codebook_bytes, inputs, tabular_items, facilitators, prompt_p
     results["exports"] = exports
     results["integrity_ok"] = bool(integrity_ok)
     results["integrity_problems"] = list(integrity_problems)
-    results["false_alarm_audit_df"] = audit_false_alarm_risks(results["quotes_df"], engine.domains)
+    results["compiled_domains"] = list(engine.domains)
+    results["false_alarm_audit_df"] = audit_false_alarm_risks(
+        results["quotes_df"],
+        engine.domains,
+        typo_matches_df=results.get("typo_matches_df"),
+    )
     return results
 
 
@@ -675,8 +884,8 @@ def highlighted_quote(text, start, end):
 
 
 def format_codebook_summary(primary_label, extra_codebooks, n_domains):
-    """Concise, non-redundant codebook summary for the Tab 1 header."""
-    unit = "domain" if int(n_domains) == 1 else "domains"
+    """Concise, non-redundant theme-set summary for headers."""
+    unit = "theme" if int(n_domains) == 1 else "themes"
     if extra_codebooks:
         return f"{primary_label} (+{len(extra_codebooks)} stacked · {int(n_domains)} {unit})"
     if f"{int(n_domains)} {unit}" in str(primary_label):
@@ -685,27 +894,34 @@ def format_codebook_summary(primary_label, extra_codebooks, n_domains):
 
 
 def _update_snapshot_codebook(label, yaml_bytes):
-    st.session_state.discovered_codebooks[label] = yaml_bytes
-    st.session_state.codebook_choice = label
-    st.session_state.stacked_codebooks = []
+    st.session_state.session_override_label = label
+    st.session_state.session_override_bytes = yaml_bytes
     snap = st.session_state.get("run_snapshot")
     if isinstance(snap, dict):
         updated = dict(snap)
         updated["codebook_bytes"] = yaml_bytes
         updated["primary_codebook_label"] = label
-        updated["extra_codebooks"] = ()
         updated["is_custom_or_stacked"] = True
-        updated["codebook_choice"] = label
         updated["codebook_sha256"] = hashlib.sha256(yaml_bytes).hexdigest()
-        fp = snap.get("fingerprint")
-        if isinstance(fp, tuple) and len(fp) == 11:
-            updated["fingerprint"] = (*fp[:8], label, None, ())
         st.session_state.run_snapshot = updated
         st.session_state.run_error = None
 
 
 def apply_discovered_codebook(label, yaml_bytes):
     _update_snapshot_codebook(label, yaml_bytes)
+
+
+def reset_session_override():
+    st.session_state.session_override_label = None
+    st.session_state.session_override_bytes = None
+    snap = st.session_state.get("run_snapshot")
+    if isinstance(snap, dict) and snap.get("base_codebook_bytes") is not None:
+        restored = dict(snap)
+        restored["codebook_bytes"] = snap["base_codebook_bytes"]
+        restored["primary_codebook_label"] = snap["base_primary_codebook_label"]
+        restored["is_custom_or_stacked"] = snap["base_is_custom_or_stacked"]
+        restored["codebook_sha256"] = snap["base_codebook_sha256"]
+        st.session_state.run_snapshot = restored
 
 
 def esc_inline(value):
@@ -730,11 +946,7 @@ def add_theme_to_active_codebook(current_bytes, topic_choices):
     new_domain = updated_dict["domains"][-1]
     updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
     clean_name = re.sub(r"[\r\n]+", " ", str(new_domain["name"])).strip()
-    base = f"Custom: +{clean_name} ({len(updated_dict['domains'])} domains)"
-    label, idx = base, 2
-    while label in st.session_state.discovered_codebooks:
-        label = f"{base} #{idx}"
-        idx += 1
+    label = f"Session edit: +{clean_name} ({len(updated_dict['domains'])} themes)"
     _update_snapshot_codebook(label, updated_bytes)
     st.session_state.add_topic_name = ""
 
@@ -763,21 +975,25 @@ def apply_tightened_codebook(current_bytes, domain_choice_map, rendered_fix_labe
         set_exact_mode=bool(set_exact_mode),
     )
     updated_bytes = yaml.safe_dump(updated_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
-    action = "exact" if set_exact_mode and not words else "fenced"
+    action = "exact matching" if set_exact_mode and not words else "excluded words"
     clean_name = re.sub(r"[\r\n]+", " ", str(domain_name)).strip()
-    base = f"Custom: {clean_name} ({action}, {len(updated_dict['domains'])} domains)"
-    label, idx = base, 2
-    while label in st.session_state.discovered_codebooks:
-        label = f"{base} #{idx}"
-        idx += 1
+    label = f"Session edit: {clean_name} ({action}, {len(updated_dict['domains'])} themes)"
     _update_snapshot_codebook(label, updated_bytes)
 
 
-def risk_badge_html(risk_level):
-    level = str(risk_level or "")
-    cls = "risk-badge-high" if level == "High" else "risk-badge-medium"
-    label = "HIGH RISK" if level == "High" else "MEDIUM RISK"
-    return f'<span class="risk-badge {cls}">{label}</span>'
+def spotcheck_priority_label(risk_level, flag_codes=""):
+    codes = str(flag_codes or "")
+    if "spelling_tolerance" in codes:
+        return SPOTCHECK_PRIORITY_SPELLING
+    if str(risk_level or "") == "High":
+        return SPOTCHECK_PRIORITY_PARTIAL
+    return SPOTCHECK_PRIORITY_CONTEXT
+
+
+def risk_badge_html(risk_level, flag_codes=""):
+    label = spotcheck_priority_label(risk_level, flag_codes)
+    cls = "risk-badge-high" if str(risk_level or "") == "High" else "risk-badge-medium"
+    return f'<span class="risk-badge {cls}">{html.escape(label)}</span>'
 
 
 def _neutralize_relative_md_links(text):
@@ -1204,7 +1420,7 @@ def markdown_to_docx_bytes(md_text, base_dir):
         if cbm or bm or nm:
             if cbm:
                 indent_spaces = len(cbm.group(1))
-                prefix = "☑ " if cbm.group(2).lower() == "x" else "☐ "
+                prefix = "[x] " if cbm.group(2).lower() == "x" else "[ ] "
                 item_parts = [cbm.group(3).strip()]
             elif bm:
                 indent_spaces = len(bm.group(1))
@@ -1305,7 +1521,7 @@ def render_reference_guides_tab():
         chosen_docx = load_guide_docx_bytes(chosen_filename, hashlib.sha256(chosen_raw).hexdigest())
         g_col2.markdown("<div style='height:1.75rem;'></div>", unsafe_allow_html=True)
         g_col2.download_button(
-            f"📥 Download {chosen_path.with_suffix('.docx').name}",
+            f"Download {chosen_path.with_suffix('.docx').name}",
             data=chosen_docx,
             file_name=chosen_path.with_suffix(".docx").name,
             mime=DOCX_MIME,
@@ -1333,26 +1549,34 @@ def render_footer():
     )
 
 
-if "discovered_codebooks" not in st.session_state:
-    st.session_state.discovered_codebooks = {}
-if "stacked_codebooks" not in st.session_state:
-    st.session_state.stacked_codebooks = []
 if "run_snapshot" not in st.session_state:
     st.session_state.run_snapshot = None
 if "run_error" not in st.session_state:
     st.session_state.run_error = None
+if "session_override_label" not in st.session_state:
+    st.session_state.session_override_label = None
+if "session_override_bytes" not in st.session_state:
+    st.session_state.session_override_bytes = None
 
 
 # ------------------------------------------------------------------------------
-# 3. Sidebar: corpus, codebook, Run button, and Word reference guides
+# 3. Sidebar: files, mode, uncluttered theme drawers, Run button, guides
 # ------------------------------------------------------------------------------
-config_codebooks = list_config_codebooks()
-default_codebook = "gbi_focus_group_starter.yaml" if "gbi_focus_group_starter.yaml" in config_codebooks else (
-    config_codebooks[0] if config_codebooks else CODEBOOK_UPLOAD
-)
+core_rules = load_catalog_rules(CORE_THEMES_FILE)
+addon_rules = load_catalog_rules(ADDON_THEMES_FILE)
+for r in core_rules:
+    st.session_state.setdefault(f"core_theme_{r['id']}", True)
+for r in addon_rules:
+    st.session_state.setdefault(f"addon_theme_{r['id']}", False)
+
+
+def _set_theme_checkboxes(prefix, rule_ids, checked):
+    for rid in rule_ids:
+        st.session_state[f"{prefix}_{rid}"] = bool(checked)
+
 
 with st.sidebar:
-    st.markdown("### 1. Data & Codebook")
+    st.markdown("### 1. Files & Mode")
 
     corpus_choice = st.selectbox("Corpus Dataset", CORPUS_OPTIONS, index=0)
 
@@ -1363,74 +1587,166 @@ with st.sidebar:
     prompt_patterns = []
     if corpus_choice == CORPUS_UPLOAD:
         uploaded_files = st.file_uploader(
-            "Upload Transcript or Tabular Files",
+            "Upload Files",
             type=UPLOAD_TYPES,
             accept_multiple_files=True,
         ) or []
+        st.caption(
+            "Upload 3-column Word focus-group notes (.docx), standard Excel/CSV surveys "
+            "(1 row per person; any columns), or transcripts (.vtt, .srt, .docx, .txt)."
+        )
         tabular_uploads = [f for f in uploaded_files if os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS]
-        # Uploads that share a filename are labelled by position so each keeps its own entry.
         name_counts = {}
         for f in tabular_uploads:
             name_counts[f.name] = name_counts.get(f.name, 0) + 1
-        upload_labels = [f"{f.name} (#{idx + 1})" if name_counts[f.name] > 1 else f.name
-                         for idx, f in enumerate(tabular_uploads)]
+        upload_labels = [
+            f"{f.name} (#{i + 1})" if name_counts[f.name] > 1 else f.name
+            for i, f in enumerate(tabular_uploads)
+        ]
+
+        selected_sheet = 0
+        xlsx_uploads = [
+            (f, label) for f, label in zip(tabular_uploads, upload_labels)
+            if os.path.splitext(f.name)[1].lower() == ".xlsx"
+        ]
+        if xlsx_uploads:
+            sheet_lists = []
+            for f, label in xlsx_uploads:
+                try:
+                    sheet_lists.append((label, read_table_sheets(f.name, f.getvalue())))
+                except UPLOAD_READ_ERRORS as exc:
+                    tabular_error = f"Could not read sheets in '{label}': {exc}"
+                    break
+            if not tabular_error and sheet_lists:
+                if len(sheet_lists) == 1:
+                    sheets = sheet_lists[0][1]
+                    if len(sheets) > 1:
+                        selected_sheet = st.selectbox(
+                            "Choose Excel tab",
+                            sheets,
+                            index=0,
+                            key="excel_sheet_select",
+                            help="This workbook has multiple tabs. Pick the tab containing your survey responses.",
+                        )
+                    elif sheets:
+                        selected_sheet = sheets[0]
+                else:
+                    common_sheets = [
+                        s for s in sheet_lists[0][1]
+                        if all(s in other for _, other in sheet_lists[1:])
+                    ]
+                    if not common_sheets:
+                        tabular_error = (
+                            "The uploaded Excel workbooks have different tab names, so one sheet cannot be "
+                            "applied to all of them. Upload workbooks with different tab layouts one at a time."
+                        )
+                    elif len(common_sheets) > 1:
+                        selected_sheet = st.selectbox(
+                            "Choose Excel tab",
+                            common_sheets,
+                            index=0,
+                            key="excel_sheet_select",
+                        )
+                    else:
+                        selected_sheet = common_sheets[0]
+
         frames = []
-        for f, label in zip(tabular_uploads, upload_labels):
-            try:
-                frames.append(read_table_columns(f.name, f.getvalue()))
-            except UPLOAD_READ_ERRORS as exc:
-                tabular_error = f"Could not read '{label}': {exc}"
-                break
+        if tabular_uploads and not tabular_error:
+            for f, label in zip(tabular_uploads, upload_labels):
+                try:
+                    ext = os.path.splitext(f.name)[1].lower()
+                    frames.append(read_table_columns(f.name, f.getvalue(), sheet_name=selected_sheet if ext == ".xlsx" else 0))
+                except UPLOAD_READ_ERRORS as exc:
+                    tabular_error = f"Could not read '{label}': {exc}"
+                    break
+
         if tabular_uploads and not tabular_error:
             shared = [c for c in frames[0].columns if all(c in fr.columns for fr in frames[1:])]
             text_choices = [c for c in shared if not is_id_column(c)]
             if not shared:
                 tabular_error = (
                     "The uploaded tables share no column names, so one text column cannot be applied to all "
-                    "of them. Upload tables with the same header, or analyse them one at a time."
+                    "of them. Upload tables with the same header, or analyze them one at a time."
                 )
             elif not text_choices:
                 tabular_error = (
-                    "No free-text column found: every shared column is an id column "
-                    f"({', '.join(shared)}). Add a response column, or rename it so it is not called 'id' "
-                    "or '*_id'."
+                    "No open-ended response column found: every shared column is an ID column "
+                    f"({', '.join(shared)}). Add a response column, or rename it so it is not called 'id' or '*_id'."
                 )
             else:
-                # One text column is applied to every table, so each table must agree on it.
                 detected_entries = [
                     (label, detect_text_column(fr[text_choices])) for label, fr in zip(upload_labels, frames)
                 ]
                 if len({col for _, col in detected_entries}) > 1:
                     tabular_error = (
-                        "The uploaded tables keep their free text in different columns ("
+                        "The uploaded tables keep their open-ended text in different columns ("
                         + "; ".join(f"{label}: {col}" for label, col in detected_entries)
-                        + "). ATLAS applies one text column to every table, so upload these tables one at a time."
+                        + "). ATLAS applies one response column per run, so upload these tables one at a time."
                     )
                 else:
-                    st.markdown("**Table columns** (.csv / .xlsx)")
+                    st.markdown("**Survey table columns** (.csv / .xlsx)")
                     detected = detected_entries[0][1]
                     text_col = st.selectbox(
-                        "Text column (free-text responses)", text_choices, index=text_choices.index(detected),
-                        help="Auto-detected; id and *_id columns are never offered as the text column.",
+                        "Open-ended question column to code",
+                        text_choices,
+                        index=text_choices.index(detected),
+                        help="Auto-detected; pick one open-ended question column at a time.",
                     )
                     id_col = st.selectbox("Respondent ID column (optional)", [NONE_OPTION, *shared], index=0)
                     speaker_col = st.selectbox("Speaker / role column (optional)", [NONE_OPTION, *shared], index=0)
-                    empty_in = [label for label, fr in zip(upload_labels, frames)
-                                if not any(str(v).strip() for v in fr[text_col].tolist())]
+                    empty_in = [
+                        label for label, fr in zip(upload_labels, frames)
+                        if not any(str(v).strip() for v in fr[text_col].tolist())
+                    ]
                     if empty_in:
                         tabular_error = (
-                            f"The text column '{text_col}' is empty in {', '.join(empty_in)}. Choose the column "
-                            "that holds the responses in every table, or upload the tables one at a time."
+                            f"The column '{text_col}' is empty in {', '.join(empty_in)}. Choose the column "
+                            "that holds the written answers, or upload the tables one at a time."
                         )
                     else:
+                        total_non_blank = sum(
+                            sum(1 for v in fr[text_col].tolist() if str(v).strip())
+                            for fr in frames
+                        )
+                        total_blank = sum(
+                            sum(1 for v in fr[text_col].tolist() if not str(v).strip())
+                            for fr in frames
+                        )
+                        st.caption(
+                            f"Preview: {total_non_blank} written answers scanned "
+                            f"({total_blank} rows left this question blank)."
+                        )
                         tabular_options = {"text_col": text_col}
+                        if xlsx_uploads and isinstance(selected_sheet, str):
+                            tabular_options["sheet_name"] = selected_sheet
                         if id_col != NONE_OPTION:
                             tabular_options["id_col"] = id_col
+                            has_dup_ids = False
+                            for fr in frames:
+                                non_blank_mask = fr[text_col].astype(str).str.strip() != ""
+                                id_vals = [
+                                    str(v).strip()
+                                    for v in fr.loc[non_blank_mask, id_col].tolist()
+                                    if str(v).strip()
+                                ]
+                                if len(id_vals) != len(set(id_vals)):
+                                    has_dup_ids = True
+                                    break
+                            if has_dup_ids:
+                                dup_choice = st.radio(
+                                    "Repeated Respondent IDs detected",
+                                    [DUP_ID_PER_ROW, DUP_ID_COMBINE],
+                                    index=0,
+                                    key="dup_id_policy_radio",
+                                    help="Choose whether repeated IDs (for example across survey quarters) stay separate rows or combine under one person.",
+                                )
+                                tabular_options["duplicate_id_policy"] = (
+                                    "per_row" if dup_choice == DUP_ID_PER_ROW else "combine"
+                                )
                         if speaker_col != NONE_OPTION:
                             tabular_options["speaker_col"] = speaker_col
 
-    # Data Type follows the inputs: whenever the selected corpus changes, Group mode is
-    # chosen automatically if any .docx holds a structured 3-column focus-group notes table.
+    # Data Type follows uploaded/selected inputs cleanly.
     selected_sample = SAMPLE_CORPORA.get(corpus_choice)
     if selected_sample is not None:
         detect_items = [(name, (SAMPLES_DIR / name).read_bytes()) for name in selected_sample["files"]]
@@ -1446,28 +1762,35 @@ with st.sidebar:
         st.session_state.data_type = DATA_TYPE_GROUP if has_structured_notes else DATA_TYPE_INDIVIDUAL
     data_type = st.radio(
         "Data Type", DATA_TYPES, key="data_type",
-        help="Group mode treats each file as one focus group (1 file = 1 group). It is chosen automatically "
-             "for 3-column focus-group notes and can be switched at any time.",
+        help="Group mode treats each file as one focus group (1 file = 1 group). Chosen automatically for 3-column focus-group notes.",
     )
     draft_group_mode = data_type == DATA_TYPE_GROUP
     draft_notes_evidence = None
+    include_observations = False
     if draft_group_mode:
         include_observations = st.checkbox(
             "Include Note-Taker Observations", value=False,
-            help="Also code the Observations column of structured notes (key points and notable quotes are "
-                 "always coded).",
+            help="Also code the Observations column of structured notes (Key Points and Notable Quotes are always coded).",
         )
         draft_notes_evidence = NOTES_EVIDENCE_WITH_OBSERVATIONS if include_observations else NOTES_EVIDENCE_CORE
 
-    # Advanced free-form transcript filters stay hidden only when every uploaded file is a
-    # 3-column focus-group notes table in Group mode (which strips headers and prompts structurally);
-    # free-form and mixed uploads keep the collapsed expander available.
+    draft_spelling_tolerance = st.checkbox(
+        "Allow minor spelling typos (useful for open-ended surveys)",
+        value=False,
+        key="spelling_tolerance_checkbox",
+        help="Matches 1-letter typos on 5+ letter theme keywords without altering original quotes. Every typo match appears in Spot-Check Matches.",
+    )
+    if corpus_choice == CORPUS_UPLOAD and any(
+        os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS for f in uploaded_files
+    ) and not draft_spelling_tolerance:
+        st.caption("Tip: open-ended survey responses often contain typos — turn on spelling tolerance above if needed.")
+
     if corpus_choice == CORPUS_UPLOAD and not (draft_group_mode and all_structured_notes):
-        with st.expander("⚙️ Advanced transcript filters (optional)", expanded=False):
-            st.caption("Only needed for free-form interview transcripts—3-column focus-group notes filter headers and prompts automatically.")
+        with st.expander("Advanced transcript filters (optional)", expanded=False):
+            st.caption("Only needed for free-form interview transcripts — 3-column focus-group notes strip headers and prompts automatically.")
             names_raw = st.text_input(
                 "Facilitator names (optional, comma-separated)", "",
-                help="Turns by these speakers are treated as facilitator prompts and excluded from coding.",
+                help="Turns by these named speakers are excluded as facilitator prompts.",
             )
             facilitator_names = [n.strip() for n in names_raw.split(",") if n.strip()]
             patterns_raw = st.text_area(
@@ -1476,40 +1799,83 @@ with st.sidebar:
             )
             prompt_patterns = [p.strip() for p in patterns_raw.splitlines() if p.strip()]
 
-    # Default the codebook to the GBI starter on boot, or to a sample's matching starter when switched.
-    if st.session_state.get("last_corpus_choice") != corpus_choice:
-        st.session_state.last_corpus_choice = corpus_choice
-        suggested = SAMPLE_CORPORA.get(corpus_choice, {}).get("codebook")
-        if suggested in config_codebooks:
-            st.session_state.codebook_choice = suggested
-        elif "codebook_choice" not in st.session_state:
-            st.session_state.codebook_choice = default_codebook
-    codebook_options = [*config_codebooks, *st.session_state.discovered_codebooks, CODEBOOK_UPLOAD]
-    if st.session_state.get("codebook_choice") not in codebook_options:
-        st.session_state.codebook_choice = default_codebook if default_codebook in codebook_options else codebook_options[0]
-    codebook_choice = st.selectbox("Active YAML Codebook", codebook_options, key="codebook_choice")
+    st.markdown("---")
+    st.markdown("### 2. Themes to Code")
+
+    selected_core_ids = [r["id"] for r in core_rules if st.session_state.get(f"core_theme_{r['id']}", True)]
+    selected_addon_ids = [r["id"] for r in addon_rules if st.session_state.get(f"addon_theme_{r['id']}", False)]
+
+    with st.expander(f"Core Evaluation Themes ({len(selected_core_ids)} of {len(core_rules)})", expanded=False):
+        c_all, c_clr = st.columns(2)
+        c_all.button(
+            "Select all", key="core_select_all_btn",
+            on_click=_set_theme_checkboxes, args=("core_theme", [r["id"] for r in core_rules], True),
+            **stretch_kwargs(st.button),
+        )
+        c_clr.button(
+            "Clear", key="core_clear_btn",
+            on_click=_set_theme_checkboxes, args=("core_theme", [r["id"] for r in core_rules], False),
+            **stretch_kwargs(st.button),
+        )
+        for r in core_rules:
+            st.checkbox(r["name"], key=f"core_theme_{r['id']}", help=r.get("description", ""))
+
+    with st.expander(f"Optional Add-On Themes ({len(selected_addon_ids)} of {len(addon_rules)})", expanded=False):
+        st.caption("Program delivery and policy friction themes (no overlap with Core themes).")
+        a_all, a_clr = st.columns(2)
+        a_all.button(
+            "Select all", key="addon_select_all_btn",
+            on_click=_set_theme_checkboxes, args=("addon_theme", [r["id"] for r in addon_rules], True),
+            **stretch_kwargs(st.button),
+        )
+        a_clr.button(
+            "Clear", key="addon_clear_btn",
+            on_click=_set_theme_checkboxes, args=("addon_theme", [r["id"] for r in addon_rules], False),
+            **stretch_kwargs(st.button),
+        )
+        for r in addon_rules:
+            st.checkbox(r["name"], key=f"addon_theme_{r['id']}", help=r.get("description", ""))
+
+    # Re-read checkbox state after rendering widgets above.
+    selected_core_ids = [r["id"] for r in core_rules if st.session_state.get(f"core_theme_{r['id']}", True)]
+    selected_addon_ids = [r["id"] for r in addon_rules if st.session_state.get(f"addon_theme_{r['id']}", False)]
 
     uploaded_codebook = None
-    if codebook_choice == CODEBOOK_UPLOAD:
-        uploaded_codebook = st.file_uploader("Upload Custom Codebook (.yaml)", type=["yaml", "yml"])
+    upload_mode = UPLOAD_MODE_REPLACE
+    with st.expander("Upload Custom Themes (.yaml)", expanded=False):
+        st.caption("Upload your own theme file for a custom pilot or study.")
+        uploaded_codebook = st.file_uploader("Upload Custom Theme File (.yaml)", type=["yaml", "yml"])
+        if uploaded_codebook is not None:
+            upload_mode = st.radio(
+                "How to apply uploaded themes",
+                [UPLOAD_MODE_REPLACE, UPLOAD_MODE_COMBINE],
+                index=0,
+                key="upload_codebook_mode",
+            )
 
-    extra_choices = [cb for cb in config_codebooks if cb != codebook_choice]
-    st.session_state.stacked_codebooks = [
-        cb for cb in st.session_state.get("stacked_codebooks", []) if cb in extra_choices
-    ]
-    extra_codebooks = st.multiselect(
-        "Stack Additional Starter Codebooks (optional)",
-        extra_choices,
-        key="stacked_codebooks",
-        help="Combine domains from additional starter codebooks with the active codebook without editing YAML by hand.",
-    )
+    n_checked = len(selected_core_ids) + len(selected_addon_ids)
+    if uploaded_codebook is not None and upload_mode == UPLOAD_MODE_REPLACE:
+        st.text(f"Active selection: custom file ({uploaded_codebook.name})")
+    elif uploaded_codebook is not None:
+        st.text(f"Active selection: {n_checked} checked themes + {uploaded_codebook.name}")
+    else:
+        st.text(f"Active selection: {n_checked} {'theme' if n_checked == 1 else 'themes'}")
+
+    if st.session_state.get("session_override_bytes"):
+        st.text(f"In-app edit active: {st.session_state.get('session_override_label')}")
+        st.button(
+            "Reset in-app theme edits",
+            on_click=reset_session_override,
+            key="reset_session_override_btn",
+            **stretch_kwargs(st.button),
+        )
 
     run_clicked = st.button(
         RUN_BUTTON_LABEL,
         type="primary",
         key="run_analysis_btn",
         **stretch_kwargs(st.button),
-        help="Run ATLAS on the selected files and codebook(s).",
+        help="Run ATLAS on the selected files and themes.",
     )
 
 
@@ -1544,17 +1910,24 @@ draft_fingerprint = (
     tuple(prompt_patterns),
     draft_group_mode,
     draft_notes_evidence,
-    codebook_choice,
+    bool(draft_spelling_tolerance),
+    tuple(selected_core_ids),
+    tuple(selected_addon_ids),
     uploaded_cb_sig,
-    tuple(extra_codebooks),
+    upload_mode if uploaded_codebook is not None else None,
 )
 
 if run_clicked:
+    # A manual Run Analysis click commits the current sidebar selections (clearing stale session edits).
+    st.session_state.session_override_label = None
+    st.session_state.session_override_bytes = None
     commit_error = None
     sample = SAMPLE_CORPORA.get(corpus_choice)
     commit_inputs = None
     commit_tabular = None
     commit_corpus_label = None
+    commit_is_fixture = sample is not None
+
     if sample is not None:
         commit_inputs = tuple(
             ((SAMPLES_DIR / name).relative_to(APP_DIR).as_posix(), (SAMPLES_DIR / name).read_bytes())
@@ -1568,12 +1941,14 @@ if run_clicked:
         elif tabular_error:
             commit_error = tabular_error
         elif any(os.path.splitext(f.name)[1].lower() in TABULAR_EXTENSIONS for f in uploaded_files) and not tabular_options:
-            commit_error = "Choose a text column for the uploaded tables before running analysis."
+            commit_error = "Choose an open-ended response column for the uploaded tables before clicking Run Analysis."
         else:
             taken = set()
             commit_inputs = tuple((f"uploads/{safe_upload_name(f.name, taken)}", f.getvalue()) for f in uploaded_files)
-            unsupported = [rel for rel, _ in commit_inputs
-                           if os.path.splitext(rel)[1].lower() not in TRANSCRIPT_EXTENSIONS | TABULAR_EXTENSIONS]
+            unsupported = [
+                rel for rel, _ in commit_inputs
+                if os.path.splitext(rel)[1].lower() not in TRANSCRIPT_EXTENSIONS | TABULAR_EXTENSIONS
+            ]
             if unsupported:
                 commit_error = f"Unsupported file type: {', '.join(unsupported)}"
             else:
@@ -1582,38 +1957,51 @@ if run_clicked:
 
     commit_cb_bytes = None
     commit_primary_label = None
+    commit_is_custom = False
     if commit_error is None:
-        if codebook_choice == CODEBOOK_UPLOAD:
-            if uploaded_codebook is None:
-                commit_error = "Upload a YAML codebook in the sidebar, or choose one from the list."
-            else:
-                primary_cb_bytes = uploaded_codebook.getvalue()
-                commit_primary_label = uploaded_codebook.name
-        elif codebook_choice in st.session_state.discovered_codebooks:
-            primary_cb_bytes = st.session_state.discovered_codebooks[codebook_choice]
-            commit_primary_label = codebook_choice
-        else:
-            primary_cb_bytes = (CONFIG_DIR / codebook_choice).read_bytes()
-            commit_primary_label = codebook_choice
+        try:
+            uploaded_dict = None
+            uploaded_name = None
+            if uploaded_codebook is not None:
+                uploaded_name = uploaded_codebook.name
+                uploaded_dict = yaml.safe_load(uploaded_codebook.getvalue())
+                if not isinstance(uploaded_dict, dict):
+                    raise ValueError(f"Uploaded theme file {uploaded_name!r} must be a YAML mapping.")
+                if not normalize_codebook_rules(uploaded_dict):
+                    raise ValueError(f"Uploaded theme file {uploaded_name!r} contains no themes.")
 
-        if commit_error is None:
-            if extra_codebooks:
-                try:
-                    primary_dict = yaml.safe_load(primary_cb_bytes)
-                    if not isinstance(primary_dict, dict):
-                        raise ValueError(f"Primary codebook {commit_primary_label!r} must be a YAML mapping.")
-                    to_merge = [(commit_primary_label, primary_dict)]
-                    for extra_name in extra_codebooks:
-                        extra_dict = yaml.safe_load((CONFIG_DIR / extra_name).read_bytes())
-                        if not isinstance(extra_dict, dict):
-                            raise ValueError(f"Stacked codebook {extra_name!r} must be a YAML mapping.")
-                        to_merge.append((extra_name, extra_dict))
-                    merged_dict = merge_codebook_dicts(to_merge)
-                    commit_cb_bytes = yaml.safe_dump(merged_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
-                except (*UPLOAD_READ_ERRORS, yaml.YAMLError) as exc:
-                    commit_error = f"ATLAS could not combine the selected codebooks: {exc}"
+            cb_dict = build_catalog_codebook_dict(
+                core_rules,
+                set(selected_core_ids),
+                addon_rules,
+                set(selected_addon_ids),
+                uploaded_dict=uploaded_dict,
+                uploaded_name=uploaded_name,
+                upload_mode=upload_mode,
+            )
+            if cb_dict is None or not normalize_codebook_rules(cb_dict):
+                commit_error = "Select at least one theme—or upload a custom theme file—before clicking Run Analysis."
             else:
-                commit_cb_bytes = primary_cb_bytes
+                commit_cb_bytes = yaml.safe_dump(cb_dict, allow_unicode=True, sort_keys=False).encode("utf-8")
+                n_sel = len(normalize_codebook_rules(cb_dict))
+                if uploaded_dict is not None and upload_mode == UPLOAD_MODE_REPLACE:
+                    commit_primary_label = f"{uploaded_name} ({n_sel} themes)"
+                    commit_is_custom = True
+                elif uploaded_dict is not None:
+                    commit_primary_label = f"Selected Themes + {uploaded_name} ({n_sel} themes)"
+                    commit_is_custom = True
+                else:
+                    parts = []
+                    if selected_core_ids:
+                        parts.append(f"{len(selected_core_ids)} Core")
+                    if selected_addon_ids:
+                        parts.append(f"{len(selected_addon_ids)} Add-On")
+                    commit_primary_label = f"{' + '.join(parts)} ({n_sel} {'theme' if n_sel == 1 else 'themes'})"
+                    commit_is_custom = bool(
+                        len(selected_core_ids) != len(core_rules) or bool(selected_addon_ids)
+                    )
+        except (*UPLOAD_READ_ERRORS, yaml.YAMLError) as exc:
+            commit_error = f"ATLAS could not load the selected themes: {exc}"
 
     if commit_error is None:
         bad_patterns = []
@@ -1635,34 +2023,39 @@ if run_clicked:
             "facilitator_names": tuple(facilitator_names),
             "prompt_patterns": tuple(prompt_patterns),
             "notes_evidence": draft_notes_evidence,
+            "include_observations": bool(include_observations),
             "group_mode": draft_group_mode,
+            "spelling_tolerance": bool(draft_spelling_tolerance),
             "corpus_label": commit_corpus_label,
+            "is_fixture": commit_is_fixture,
             "codebook_bytes": commit_cb_bytes,
             "primary_codebook_label": commit_primary_label,
-            "extra_codebooks": tuple(extra_codebooks),
-            "is_custom_or_stacked": bool(extra_codebooks or codebook_choice in st.session_state.discovered_codebooks),
-            "codebook_choice": codebook_choice,
+            "is_custom_or_stacked": commit_is_custom,
             "codebook_sha256": hashlib.sha256(commit_cb_bytes).hexdigest(),
+            "base_codebook_bytes": commit_cb_bytes,
+            "base_primary_codebook_label": commit_primary_label,
+            "base_is_custom_or_stacked": commit_is_custom,
+            "base_codebook_sha256": hashlib.sha256(commit_cb_bytes).hexdigest(),
             "fingerprint": draft_fingerprint,
         }
         st.session_state.run_error = None
 
-# Add Active Codebook download (when stacked/customized) and Word Reference Guides to the sidebar.
+# Add Save Active Themes button (when customized) and Word Reference Guides to the sidebar.
 snap = st.session_state.get("run_snapshot")
 with st.sidebar:
     if isinstance(snap, dict) and snap.get("is_custom_or_stacked"):
         st.download_button(
-            "📥 Download Active Codebook (.yaml)",
+            "Save active themes (.yaml)",
             data=snap["codebook_bytes"],
             file_name="atlas_active_codebook.yaml",
             mime="application/x-yaml",
             key="download_active_codebook_sidebar",
-            help="Save a copy of the exact stacked or customized YAML codebook alongside your export files.",
+            help="Save a copy of your active theme rules alongside your export files.",
             **stretch_kwargs(st.download_button),
         )
     st.markdown("---")
     st.markdown("### Reference Guides")
-    st.caption("Download formatted Word (.docx) copies, or read inside Tab 3: Reference Guides.")
+    st.caption("Download formatted Word (.docx) copies, or read inside the Reference Guides tab.")
     for label, filename in REFERENCE_GUIDES:
         guide = DOCS_DIR / filename
         if guide.is_file():
@@ -1678,52 +2071,47 @@ with st.sidebar:
             )
 
 if st.session_state.get("run_error"):
-    tab_thematic, tab_econometric, tab_guides = st.tabs([
-        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
-        "📊 Tab 2: Econometric & Actuarial Ledger Export",
-        "📚 Tab 3: Reference Guides",
-    ])
+    tab_thematic, tab_exports, tab_guides = st.tabs(TOP_TABS)
     with tab_thematic:
         st.error(st.session_state.run_error)
-    with tab_econometric:
-        st.info("Fix the input error in the sidebar and click **▶ Run Analysis** to generate exports.")
+    with tab_exports:
+        st.info("Fix the input error in the sidebar and click **Run Analysis** to generate exports.")
     with tab_guides:
         render_reference_guides_tab()
     render_footer()
     st.stop()
 
 if not isinstance(snap, dict):
-    tab_thematic, tab_econometric, tab_guides = st.tabs([
-        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
-        "📊 Tab 2: Econometric & Actuarial Ledger Export",
-        "📚 Tab 3: Reference Guides",
-    ])
+    tab_thematic, tab_exports, tab_guides = st.tabs(TOP_TABS)
     with tab_thematic:
         st.info(
-            "**Ready to analyze.** Choose your files (or a built-in sample) and codebook in the left sidebar, "
-            "then click **▶ Run Analysis**."
+            "**Ready to analyze.** Choose your files (or the built-in focus-group notes sample) and themes "
+            "in the left sidebar, then click **Run Analysis**."
         )
         st.markdown(
-            "1. **Load files:** Drag in your 3-column Word focus-group notes (`.docx`), transcripts, or survey "
-            "tables—or pick a built-in sample dataset from **Corpus Dataset**.\n"
-            "2. **Choose or stack codebooks:** Start with `gbi_focus_group_starter.yaml` (selected by default) "
-            "and optionally stack extra starter packs.\n"
-            "3. **Click `▶ Run Analysis`** in the left sidebar to code your corpus, spot emergent themes, "
-            "check false alarms, and export verified tables and quotes."
+            "1. **Load files:** Drag in 3-column Word focus-group notes (`.docx`), Excel/CSV surveys "
+            "(1 row per person; any columns), or transcripts — or select the built-in sample.\n"
+            "2. **Choose themes:** All 10 Core Evaluation Themes are checked by default. Open the drawers "
+            "to pick a subset, add Program Delivery & Policy Friction add-ons, or upload a custom `.yaml` file.\n"
+            "3. **Click Run Analysis** in the left sidebar to inspect group presence, notes volume, "
+            "direct quotes, unlisted clusters, and Spot-Check matches."
         )
-    with tab_econometric:
-        st.info("Click **▶ Run Analysis** in the left sidebar to generate tables and audited exports.")
+    with tab_exports:
+        st.info("Click **Run Analysis** in the left sidebar to generate tables, reports, and audit files.")
     with tab_guides:
         render_reference_guides_tab()
     render_footer()
     st.stop()
 
-# Unpack the committed run snapshot so displayed results never mix with un-run sidebar edits.
+# Unpack committed run snapshot so displayed results never mix with un-run sidebar edits.
 inputs = snap["inputs"]
 codebook_bytes = snap["codebook_bytes"]
 corpus_label = snap["corpus_label"]
 group_mode = snap["group_mode"]
-is_custom_or_stacked = snap["is_custom_or_stacked"]
+spelling_tolerance = bool(snap.get("spelling_tolerance", False))
+include_obs_snap = bool(snap.get("include_observations", False))
+is_fixture = bool(snap.get("is_fixture", False))
+is_custom_or_stacked = bool(snap.get("is_custom_or_stacked", False))
 pending_changes = draft_fingerprint != snap["fingerprint"]
 
 try:
@@ -1736,20 +2124,17 @@ try:
             snap["prompt_patterns"],
             snap["notes_evidence"],
             group_mode,
+            spelling_tolerance,
         )
 except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
-    err_msg = f"ATLAS could not analyse this corpus with this codebook: {exc}"
+    err_msg = f"ATLAS could not analyze this corpus with the selected themes: {exc}"
     st.session_state.run_snapshot = None
     st.session_state.run_error = err_msg
-    tab_thematic, tab_econometric, tab_guides = st.tabs([
-        "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
-        "📊 Tab 2: Econometric & Actuarial Ledger Export",
-        "📚 Tab 3: Reference Guides",
-    ])
+    tab_thematic, tab_exports, tab_guides = st.tabs(TOP_TABS)
     with tab_thematic:
         st.error(err_msg)
-    with tab_econometric:
-        st.info("Fix the input error in the sidebar and click **▶ Run Analysis** to generate exports.")
+    with tab_exports:
+        st.info("Fix the input error in the sidebar and click **Run Analysis** to generate exports.")
     with tab_guides:
         render_reference_guides_tab()
     render_footer()
@@ -1757,148 +2142,348 @@ except (*UPLOAD_READ_ERRORS, RuntimeError, yaml.YAMLError) as exc:
 
 freq = results["frequencies_df"]
 quotes = results["quotes_df"]
+tagged_df = results["tagged_turns_df"]
+typo_df = results.get("typo_matches_df")
+if typo_df is None:
+    typo_df = pd.DataFrame()
+audit_df = results["false_alarm_audit_df"]
+tabular_stats = results.get("tabular_stats") or []
+notes_metadata = results.get("notes_metadata") or {}
+compiled_domains = results.get("compiled_domains") or normalize_codebook_rules(yaml.safe_load(codebook_bytes) or {})
+
 total_documents = int(results["total_documents"])
 participant_turns = int(results["participant_turns_analyzed"])
-matched_mentions = int(freq["matching_turns"].sum()) if len(freq) else 0
-# Structured notes are always counted one unit per focus-group file, so the binomial
-# interval is withheld for them whatever the Data Type, and their coded entries are
-# labelled by evidence type wherever verbatim words could be implied.
-notes_present = NOTES_STRUCTURE in set(results.get("document_structures", {}).values())
-active_codebook_summary = format_codebook_summary(
-    snap["primary_codebook_label"], snap["extra_codebooks"], len(freq)
-)
+total_themes = int(len(freq))
+themes_found = int((freq["documents_reporting"] > 0).sum()) if total_themes else 0
+theme_matches = int(len(quotes))
+if len(tagged_df) and "matched_domains" in tagged_df.columns:
+    matched_entries = int(sum(1 for ds in tagged_df["matched_domains"] if ds))
+else:
+    matched_entries = 0
+uncoded_entries = max(0, participant_turns - matched_entries)
 
+doc_structures = set(results.get("document_structures", {}).values())
+notes_present = NOTES_STRUCTURE in doc_structures
+all_notes_corpus = bool(doc_structures) and doc_structures == {NOTES_STRUCTURE}
+active_theme_names = [str(d["name"]) for d in compiled_domains]
+domain_name_map = {str(d["id"]): str(d["name"]) for d in compiled_domains}
+
+group_labels = group_labels_for(results["file_hashes"])
+group_table = None
+group_matrix = None
+group_summary = ""
+matrix_summary = ""
+themes_df = pd.DataFrame()
 if group_mode:
-    group_labels = group_labels_for(results["file_hashes"])
-    group_table = build_group_frequency_table(freq, quotes, total_documents)
+    group_table = build_group_frequency_table(
+        freq, quotes, total_documents, include_observations=include_obs_snap
+    )
+    theme_order = list(group_table["_domain_id"].astype(str)) if len(group_table) else None
     group_summary = describe_group_prevalence_chart(group_table, total_documents)
-    group_matrix = build_group_theme_matrix(freq, quotes, results["file_hashes"])
+    group_matrix = build_group_theme_matrix(freq, quotes, results["file_hashes"], theme_order=theme_order)
     matrix_summary = describe_group_matrix_chart(group_matrix, total_documents)
-    group_table_config = {
-        "Group Share (%)": st.column_config.NumberColumn("Group Share (%)", format="%.1f"),
-    }
     themes_df = results.get("note_taker_themes_df")
     if themes_df is None:
         themes_df = pd.DataFrame()
 
+# Compute default discovery once for the active snapshot so the Full Report (.docx)
+# matches the Discover Unlisted Themes tab exactly.
+turn_records = tagged_df.to_dict("records") if len(tagged_df) else []
+active_disc_method = DISCOVERY_METHOD_MAP.get(st.session_state.get("disc_method_radio", DISCOVERY_METHOD_NMF), "nmf")
+active_disc_k = int(st.session_state.get("disc_k_slider", 3))
+discovery = run_topic_discovery(turn_records, active_disc_k, method=active_disc_method)
+discovery_overlap = compute_topic_codebook_overlap(discovery, turn_records, domain_name_map)
+
+full_report_docx = build_summary_report_docx(
+    results,
+    group_mode=group_mode,
+    group_table=group_table[[c for c in group_table.columns if not c.startswith("_")]] if group_table is not None else None,
+    group_matrix=group_matrix,
+    discovery=discovery,
+    discovery_overlap=discovery_overlap,
+    audit_df=audit_df,
+    active_theme_names=active_theme_names,
+    corpus_label=corpus_label,
+    is_fixture=is_fixture,
+    spelling_tolerance=spelling_tolerance,
+    include_observations=include_obs_snap,
+)
+
 if pending_changes:
-    st.warning("Sidebar inputs have changed since the last run. Click **▶ Run Analysis** in the left sidebar to refresh results.")
+    st.warning("Sidebar inputs have changed since the last run. Click **Run Analysis** in the left sidebar to refresh results.")
 
 # ------------------------------------------------------------------------------
-# 6. Dual-track interface + formatted Reference Guides
+# 6. Three-tab interface: Themes & Quotes | Exports & Audit Files | Reference Guides
 # ------------------------------------------------------------------------------
-tab_thematic, tab_econometric, tab_guides = st.tabs([
-    "🔍 Tab 1: Standalone Thematic Discovery & Qualitative Coding",
-    "📊 Tab 2: Econometric & Actuarial Ledger Export",
-    "📚 Tab 3: Reference Guides",
-])
+tab_thematic, tab_exports, tab_guides = st.tabs(TOP_TABS)
 
 # ==============================================================================
-# TAB 1: STANDALONE THEMATIC DISCOVERY & QUALITATIVE CODING
+# TAB 1: THEMES & QUOTES
 # ==============================================================================
 with tab_thematic:
-    st.markdown("### Qualitative Thematic Workbench")
-    workbench_meta = re.sub(
-        r"[\r\n\x0b\x0c\x85\u2028\u2029]+",
-        " ",
-        f"Corpus: {corpus_label} · Codebook: {active_codebook_summary}",
-    )
-    st.text(workbench_meta)
+    if is_fixture:
+        st.info(
+            "Sample practice data active — Built-in focus-group notes are loaded for demonstration only "
+            "and are not real study findings."
+        )
 
+    # Plain-English provenance banner ("Where these themes come from")
+    st.markdown(
+        f'<div class="provenance-banner">'
+        f'<strong>How these themes work:</strong> Charts count matches against the '
+        f'<strong>{total_themes} predefined {"theme" if total_themes == 1 else "themes"}</strong> selected on the left '
+        f'— transparent keyword rules, not AI-invented topics. To cluster entries without a preset list, '
+        f'open <strong>Discover Unlisted Themes</strong>.'
+        f'<br><span style="color:#475569;font-size:0.9rem;">Corpus: {esc_inline(corpus_label)} · '
+        f'Themes: {esc_inline(snap["primary_codebook_label"])}'
+        f'{" · Spelling tolerance: On" if spelling_tolerance else ""}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander(f"View active theme keywords ({total_themes} {'theme' if total_themes == 1 else 'themes'})", expanded=False):
+        kw_rows = []
+        for dom in compiled_domains:
+            roots = list(dom.get("roots_en") or []) + list(dom.get("roots_es") or [])
+            excl = list(dom.get("exclude_fences") or [])
+            kw_rows.append({
+                "Theme": str(dom["name"]),
+                "Keywords Matched": ", ".join(roots),
+                "Look-Alikes Blocked": ", ".join(excl) if excl else "—",
+                "Match Mode": str(dom.get("match_mode", "prefix")),
+            })
+        st.dataframe(pd.DataFrame(kw_rows), **stretch_kwargs(st.dataframe), hide_index=True)
+
+    # Four reconciled KPI cards (Points #2 & #3)
     k1, k2, k3, k4 = st.columns(4)
     if group_mode:
-        k1.metric("Focus Groups (G)", total_documents, help="One focus group per file (1 file = 1 group).")
-        k2.metric("Distinct Participant Voices", count_distinct_voices(results["tagged_turns_df"]),
-                  help="Distinct participant labels per group, so P1 in two groups counts as two voices. "
-                       "Unattributed entries are not counted.")
-        k3.metric("Coded Notes Entries", participant_turns,
-                  help="Key points, notable quotes (and observations, when included) coded against the codebook.")
-        k4.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
+        scanned_label = "Notes Entries Scanned" if all_notes_corpus else "Entries Scanned"
+        k1.metric("Focus Groups", total_documents, help="1 uploaded file = 1 focus group.")
+        k2.metric("Themes Found", f"{themes_found} of {total_themes}", help="Active themes matched in at least one focus group.")
+        k3.metric(scanned_label, participant_turns, help="Total non-facilitator entries read by ATLAS (including entries matching no theme).")
+        k3.caption(f"{matched_entries} matched · {uncoded_entries} none")
+        k4.metric("Theme Matches", theme_matches, help="Total (entry x theme) matches. One entry mentioning two themes counts twice.")
+        k4.caption("1 entry can match 2+ themes")
     else:
-        k1.metric("Analytical Units (N)", total_documents,
-                  help="Distinct analytical units: one per transcript, one per tabular respondent row.")
-        k2.metric("Participant Turns", participant_turns, help="Turns coded after facilitator turns are removed.")
-        k3.metric("Active Domains", len(freq), help="Domains defined in the active codebook.")
-        k4.metric("Matched Turn Mentions", matched_mentions,
-                  help="Participant turns matched to a domain, summed over domains.")
+        scanned_label = "Written Answers Scanned" if "tabular" in doc_structures else "Turns Scanned"
+        k1.metric("Analytical Units", total_documents, help="One unit per transcript file or survey respondent unit.")
+        k2.metric("Themes Found", f"{themes_found} of {total_themes}", help="Active themes matched in at least one unit.")
+        k3.metric(scanned_label, participant_turns, help="Total non-facilitator entries scanned by ATLAS.")
+        k3.caption(f"{matched_entries} matched · {uncoded_entries} none")
+        k4.metric("Theme Matches", theme_matches, help="Total (entry x theme) matches. One entry can match multiple themes.")
+        k4.caption("1 entry can match 2+ themes")
 
-    # Mixed evidence (paraphrases/observations) is shown in either mode unless
-    # Group mode's "Quotable Verbatim Only" filter is checked.
-    mixed_view = bool(has_non_verbatim_evidence(quotes)
-                      and not (group_mode and st.session_state.get("verbatim_only_filter", False)))
-    qtab_freq, qtab_quotes, qtab_topics, qtab_spotcheck = st.tabs([
-        "📈 Thematic Prevalence & Distribution",
-        "💬 Coded Evidence & Provenance Browser" if mixed_view else "💬 Verbatim Quote & Provenance Browser",
-        "💡 Unsupervised Topic Discovery (Medoids)",
-        "🔎 False-Alarm Spot-Check",
-    ])
-
-    with qtab_freq:
-        if group_mode:
-            st.markdown("#### Focus groups reporting each domain")
-            st.caption("Groups reporting (g of G) = focus groups with at least one matching coded entry; "
-                       "G = all focus groups (1 file = 1 group).")
+    if tabular_stats:
+        total_non_blank = sum(int(s.get("non_blank_rows", 0)) for s in tabular_stats)
+        total_blank = sum(int(s.get("skipped_blank_rows", 0)) for s in tabular_stats)
+        total_unique = sum(int(s.get("unique_units", 0)) for s in tabular_stats)
+        if not group_mode and total_unique < total_non_blank:
+            st.caption(
+                f"Survey counts: {total_non_blank} written answers across {total_unique} unique respondents "
+                f"({total_blank} rows left this question blank)."
+            )
         else:
-            st.markdown("#### Domain prevalence across analytical units")
-            st.caption("Prevalence = units with at least one matching participant turn ÷ all analytical units.")
+            st.caption(
+                f"Survey counts: {total_non_blank} written answers scanned "
+                f"({total_blank} rows left this question blank)."
+            )
+
+    # Quiet attribution note in Group Mode only when speaker tagging varies across files.
+    if group_mode and len(tagged_df) and {"source_id", "speaker"} <= set(tagged_df.columns):
+        per_file_tagged = []
+        for sid in sorted(results["file_hashes"]):
+            sub = tagged_df[tagged_df["source_id"].astype(str) == str(sid)]
+            has_spk = any(str(p) not in NON_VOICE_SPEAKERS for p in sub["speaker"].tolist())
+            per_file_tagged.append(has_spk)
+        if any(per_file_tagged) and not all(per_file_tagged):
+            n_tagged_files = sum(1 for x in per_file_tagged if x)
+            st.caption(
+                f"Note: speaker tags appear in {n_tagged_files} of {len(per_file_tagged)} focus-group files. "
+                "Group summaries compare across focus groups rather than individual speaker counts; "
+                "use the Speaker filter in Coded Evidence to inspect tagged files."
+            )
+
+    mixed_view = bool(
+        has_non_verbatim_evidence(quotes)
+        and not (group_mode and st.session_state.get("verbatim_only_filter", False))
+    )
+    qtab_summary, qtab_quotes, qtab_topics, qtab_spotcheck = st.tabs(SUB_TABS)
+
+    # --------------------------------------------------------------------------
+    # SUB-TAB 1: THEME SUMMARY (Option A: Group Grid first, Notes Volume second)
+    # --------------------------------------------------------------------------
+    with qtab_summary:
         if len(freq):
             if group_mode:
-                panels = [
-                    (group_prevalence_chart(group_table, total_documents), group_summary, max(160, 42 * len(freq)),
-                     "Bar labels show g/G: focus groups reporting the domain out of all focus groups."),
-                    (group_matrix_chart(group_matrix), matrix_summary, max(160, 42 * len(freq)),
-                     "Tiles show distinct participant voices per group (for example 2v); ✓ = matched only by "
-                     "unattributed entries; — = not reported."),
-                ]
+                st.markdown("#### Which Focus Groups Mentioned Each Theme?")
+                g_ctrl1, g_ctrl2 = st.columns([3, 1])
+                grid_mode = g_ctrl1.radio(
+                    "Grid shows",
+                    ["Presence (✓ / —)", "Notes entries per group"],
+                    horizontal=True,
+                    key="group_grid_mode_radio",
+                )
+                hide_zero = g_ctrl2.checkbox(
+                    "Hide 0-match themes",
+                    value=False,
+                    key="hide_zero_themes_chk",
+                )
+                show_entries = grid_mode == "Notes entries per group"
+                visible_table = group_table[group_table["Theme Matches"] > 0] if hide_zero else group_table
+                visible_ids = set(visible_table["_domain_id"].astype(str))
+                visible_matrix = group_matrix[group_matrix["domain_id"].astype(str).isin(visible_ids)] if hide_zero else group_matrix
+
+                if visible_matrix.empty:
+                    st.info("No active theme matched any entry in these focus groups. Uncheck 'Hide 0-match themes' to view all themes.")
+                else:
+                    if show_entries:
+                        st.caption("Counts show matching notes entries per file (reflects note volume, not participant headcount).")
+                    else:
+                        st.caption("Uniform across all focus groups: ✓ = mentioned in group notes · — = not mentioned.")
+                    n_rows_vis = visible_matrix["domain_id"].nunique()
+                    st.altair_chart(
+                        light_chart_surface(
+                            group_matrix_chart(visible_matrix, total_documents, show_entries=show_entries)
+                            .properties(height=max(180, 46 * n_rows_vis), description=matrix_summary)
+                        ),
+                        **stretch_kwargs(st.altair_chart),
+                    )
+                    st.html(chart_summary_html(matrix_summary))
+
+                    st.markdown("#### How Often Each Theme Appeared in the Notes")
+                    st.caption(
+                        "Bars show matched notes entries sorted highest to lowest (labelled `<matches> (<groups reporting>)`). "
+                        "Entry counts reflect how much was written in the notes — not how many participants agreed."
+                    )
+                    st.altair_chart(
+                        light_chart_surface(
+                            group_volume_chart(visible_table, total_documents)
+                            .properties(height=max(180, 44 * len(visible_table)), description=group_summary)
+                        ),
+                        **stretch_kwargs(st.altair_chart),
+                    )
+                    st.html(chart_summary_html(group_summary))
+
+                st.markdown("##### Theme Summary Table")
+                display_cols = [c for c in group_table.columns if not c.startswith("_")]
+                st.dataframe(
+                    (visible_table if hide_zero else group_table)[display_cols],
+                    **stretch_kwargs(st.dataframe),
+                    hide_index=True,
+                )
             else:
-                chart = alt.Chart(freq).mark_bar(color=NAVY).encode(
-                    x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
-                    y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+                st.markdown("#### Theme Prevalence Across Analytical Units")
+                st.caption("Prevalence = units with at least one matching entry / all analytical units.")
+                ind_sorted = freq.sort_values(
+                    ["prevalence_pct", "matching_turns", "domain_name", "domain_id"],
+                    ascending=[False, False, True, True],
+                    kind="mergesort",
+                )
+                y_order_ind = list(ind_sorted["domain_id"].astype(str))
+                ind_id_to_label = dict(zip(y_order_ind, ind_sorted["domain_name"].astype(str)))
+                ind_label_expr = f"({json.dumps(ind_id_to_label)})[datum.value]"
+                chart = alt.Chart(ind_sorted).mark_bar(color=NAVY, cornerRadiusEnd=3).encode(
+                    x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 105])),
+                    y=alt.Y("domain_id:N", sort=y_order_ind, title=None, axis=alt.Axis(labelLimit=360, labelExpr=ind_label_expr)),
                     tooltip=[
-                        alt.Tooltip("domain_name:N", title="Domain"),
+                        alt.Tooltip("domain_name:N", title="Theme"),
+                        alt.Tooltip("domain_id:N", title="Theme ID"),
                         alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
                         alt.Tooltip("documents_reporting:Q", title="Units reporting"),
-                        alt.Tooltip("matching_turns:Q", title="Matching turns"),
+                        alt.Tooltip("matching_turns:Q", title="Theme matches"),
                     ],
                 )
-                labels = alt.Chart(freq).mark_text(align="left", dx=4, color="#0F172A").encode(
+                labels = alt.Chart(ind_sorted).mark_text(
+                    align="left", dx=6, fontSize=13, fontWeight="bold", color="#0F172A"
+                ).encode(
                     x="prevalence_pct:Q",
-                    y=alt.Y("domain_name:N", sort="-x"),
+                    y=alt.Y("domain_id:N", sort=y_order_ind),
                     text=alt.Text("matching_turns:Q", format="d"),
                 )
-                panels = [(chart + labels, describe_prevalence_chart(freq, total_documents, include_ci=False),
-                           max(160, 42 * len(freq)), "Bar labels show matching participant turns per domain.")]
-            for panel_chart, freq_summary, panel_height, panel_note in panels:
+                ind_summary = describe_prevalence_chart(ind_sorted, total_documents, include_ci=False)
                 st.altair_chart(
-                    light_chart_surface(panel_chart.properties(height=panel_height, description=freq_summary)),
+                    light_chart_surface(
+                        (chart + labels).properties(height=max(180, 44 * len(ind_sorted)), description=ind_summary)
+                    ),
                     **stretch_kwargs(st.altair_chart),
                 )
-                st.html(chart_summary_html(freq_summary))
-                st.caption(panel_note)
-            if group_mode:
-                st.markdown("##### Group frequency table")
-                st.dataframe(group_table, **stretch_kwargs(st.dataframe), hide_index=True,
-                             column_config=group_table_config)
-            else:
-                st.markdown("##### Domain frequency table")
+                st.html(chart_summary_html(ind_summary))
+                st.caption("Bar labels show total theme matches per theme.")
+                st.markdown("##### Theme Summary Table")
                 st.dataframe(
-                    freq[["domain_id", "domain_name", "documents_reporting", "total_documents",
-                          "prevalence_pct", "matching_turns", "total_mentions"]],
-                    **stretch_kwargs(st.dataframe), hide_index=True,
+                    ind_sorted[["domain_name", "documents_reporting", "total_documents", "prevalence_pct", "matching_turns"]],
+                    **stretch_kwargs(st.dataframe),
+                    hide_index=True,
                     column_config={
-                        "domain_id": "Domain ID", "domain_name": "Domain",
-                        "documents_reporting": "Units reporting", "total_documents": "Analytical units (N)",
+                        "domain_name": "Theme",
+                        "documents_reporting": "Units Reporting",
+                        "total_documents": "Analytical Units (N)",
                         "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
-                        "matching_turns": "Matching turns", "total_mentions": "Mentions",
+                        "matching_turns": "Theme Matches",
                     },
                 )
         else:
-            st.info("The active codebook defines no domains.")
+            st.info("No active themes selected.")
+
+        # Direct 3-button Download Bar right on Tab 1 (Point #9)
+        st.markdown("---")
+        st.markdown("##### Download Results")
+        dl1, dl2, dl3 = st.columns(3)
+        dl1.download_button(
+            "Download Full Report (.docx)",
+            data=full_report_docx,
+            file_name="atlas_summary_report.docx",
+            mime=DOCX_MIME,
+            key="tab1_download_full_report",
+            **stretch_kwargs(st.download_button),
+            help="Printable Word report combining KPIs, Group Grid, Theme Summary, Quotes, Unlisted Clusters, Spot-Check, and Excluded Questions.",
+        )
+        dl2.download_button(
+            "Download Theme Frequencies (.xlsx)",
+            data=results["exports"]["actuarial_parameter_matrix.xlsx"],
+            file_name="actuarial_parameter_matrix.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="tab1_download_xlsx",
+            **stretch_kwargs(st.download_button),
+            help="Audited Excel frequency workbook with embedded verification stamps.",
+        )
+        dl3.download_button(
+            "Download Direct Quotes (.csv)",
+            data=results["exports"]["verbatim_quotes_inventory.csv"],
+            file_name="verbatim_quotes_inventory.csv",
+            mime="text/csv",
+            key="tab1_download_quotes_csv",
+            **stretch_kwargs(st.download_button),
+            help="Direct verbatim quotes only, ready for reports and slides.",
+        )
+
+        # Collapsed Excluded Questions & Session Headers drawer (Point #7)
+        excl_records = []
+        for sid, meta in sorted(notes_metadata.items()):
+            for item in (meta or {}).get("excluded_structural_rows") or []:
+                excl_records.append({
+                    "Source File": group_labels.get(sid, os.path.basename(sid)),
+                    "Location": f"Block {item.get('location', '')}",
+                    "Exclusion Reason": str(item.get("reason", "")).replace("_", " "),
+                    "Excluded Text": str(item.get("text", "")),
+                })
+        if excl_records:
+            with st.expander(
+                f"Excluded Questions & Session Headers ({len(excl_records)} skipped — click to verify)",
+                expanded=False,
+            ):
+                st.caption(
+                    "ATLAS stripped these question prompts, consent lines, and summary boxes before coding so "
+                    "question wording never inflates theme counts."
+                )
+                st.dataframe(pd.DataFrame(excl_records), **stretch_kwargs(st.dataframe), hide_index=True)
 
         if group_mode and len(themes_df) and {"source_id", "question_id", "text"} <= set(themes_df.columns):
             with st.expander(THEMES_EXPANDER_LABEL, expanded=False):
-                st.caption("Note-taker theme summaries, shown for reference. They are not coded and are not "
-                           "counted in any prevalence, quote or KPI.")
+                st.caption(
+                    "Note-taker theme summaries, shown for reference only. They are not coded and are not "
+                    "counted in any prevalence, quote, or KPI."
+                )
                 for sid in sorted(themes_df["source_id"].astype(str).unique()):
                     rows = themes_df[themes_df["source_id"].astype(str) == sid]
                     items = "".join(
@@ -1912,26 +2497,25 @@ with tab_thematic:
                         unsafe_allow_html=True,
                     )
 
+    # --------------------------------------------------------------------------
+    # SUB-TAB 2: CODED EVIDENCE
+    # --------------------------------------------------------------------------
     with qtab_quotes:
-        if mixed_view:
-            st.markdown("#### Coded evidence with source provenance")
-        else:
-            st.markdown("#### Verbatim evidence with line-level provenance")
+        st.markdown("#### Coded Evidence & Direct Quotes")
         if quotes.empty:
-            st.info("No participant turn matched a domain of the active codebook in this corpus.")
+            st.info("No entry matched any of the active themes in this corpus.")
         elif group_mode:
             labelled = quotes.assign(group_label=quotes["source_id"].astype(str).map(
                 lambda sid: group_labels.get(sid, os.path.basename(sid))))
             questions = sorted(q for q in labelled["question_id"].astype(str).unique() if q)
             f1, f2, f3 = st.columns([2, 1, 1])
-            search = f1.text_input("Search coded entries" if mixed_view else "Search verbatim text", "")
-            domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(labelled["domain_name"].astype(str).unique())])
+            search = f1.text_input("Search theme matches", "")
+            domain_filter = f2.selectbox("Filter by theme", ["All themes", *sorted(labelled["domain_name"].astype(str).unique())])
             speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(labelled["speaker"].astype(str).unique())])
             g1, g2, g3 = st.columns([2, 1, 1])
             verbatim_only = g1.checkbox(
                 "Quotable Verbatim Only", value=False, key="verbatim_only_filter",
-                help="Show only verbatim words: notable quotes from notes and transcript or survey turns. "
-                     "Paraphrased key points and observations are hidden.",
+                help="Show direct participant quotations only (hides paraphrased key points and note-taker observations).",
             )
             group_filter = g2.selectbox("Filter by group", ["All groups", *sorted(labelled["group_label"].unique())])
             question_filter = "All questions"
@@ -1940,7 +2524,7 @@ with tab_thematic:
             shown = labelled
             if verbatim_only:
                 shown = verbatim_rows(shown)
-            if domain_filter != "All domains":
+            if domain_filter != "All themes":
                 shown = shown[shown["domain_name"].astype(str) == domain_filter]
             if speaker_filter != "All speakers":
                 shown = shown[shown["speaker"].astype(str) == speaker_filter]
@@ -1951,26 +2535,24 @@ with tab_thematic:
             if search.strip():
                 shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
             if mixed_view:
-                st.markdown(f"**{len(shown)} of {len(quotes)} coded entries shown (includes paraphrases/"
-                            f"observations; check 'Quotable Verbatim Only' for direct quotes)**")
+                st.markdown(
+                    f"**Showing {len(shown)} of {len(quotes)} theme matches** "
+                    "(one entry can match multiple themes; check 'Quotable Verbatim Only' for direct quotes)"
+                )
             else:
-                st.markdown(f"**{len(shown)} of {len(quotes)} matched entries shown**")
+                st.markdown(f"**Showing {len(shown)} of {len(quotes)} theme matches** (direct verbatim quotes only)")
             if shown.empty:
                 st.info("No verbatim quote matches the current filters." if verbatim_only
-                        else "No quote matches these filters.")
+                        else "No theme match fits these filters.")
             else:
                 st.dataframe(
-                    shown[["evidence_type", "group_label", "question_id", "domain_name", "speaker", "source_id",
-                           "unit_id", "line_number", "match_char_start", "match_char_end", "match_text", "text",
-                           "source_sha256"]],
+                    shown[["evidence_type", "group_label", "question_id", "domain_name", "speaker",
+                           "line_number", "match_text", "text", "source_id"]],
                     **stretch_kwargs(st.dataframe), hide_index=True,
                     column_config={
-                        "evidence_type": "Evidence Type", "group_label": "Group", "question_id": "Question",
-                        "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
-                        "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
-                        "match_char_end": "Match end", "match_text": "Matched span",
-                        "text": "Coded entry (see Evidence Type)" if mixed_view else "Verbatim quote",
-                        "source_sha256": "Source SHA-256",
+                        "evidence_type": "Source Type", "group_label": "Focus Group", "question_id": "Question",
+                        "domain_name": "Theme", "speaker": "Speaker", "line_number": "Line",
+                        "match_text": "Matched Word", "text": "Entry Text", "source_id": "Source File",
                     },
                 )
                 for _, q in shown.head(25).iterrows():
@@ -1981,42 +2563,40 @@ with tab_thematic:
                         f'{esc(q["domain_name"])} · {esc(q["speaker"])} · {esc(q["group_label"])}{question}</div>'
                         f'<div class="quote-text">{highlighted_quote(q["text"], q["match_char_start"], q["match_char_end"])}</div>'
                         f'<div class="quote-provenance">SOURCE {esc(q["source_id"])} · LINE {esc(q["line_number"])} · '
-                        f'CHARS {esc(q["match_char_start"])}–{esc(q["match_char_end"])} · '
-                        f'SHA-256 {esc(q["source_sha256"])}</div>'
+                        f'CHARS {esc(q["match_char_start"])}-{esc(q["match_char_end"])} · '
+                        f'SHA-256 {esc(str(q["source_sha256"])[:12])}</div>'
                         f"</div>",
                         unsafe_allow_html=True,
                     )
         else:
             f1, f2, f3 = st.columns([2, 1, 1])
-            search = f1.text_input("Search coded entries" if mixed_view else "Search verbatim text", "")
-            domain_filter = f2.selectbox("Filter by domain", ["All domains", *sorted(quotes["domain_name"].astype(str).unique())])
+            search = f1.text_input("Search theme matches", "")
+            domain_filter = f2.selectbox("Filter by theme", ["All themes", *sorted(quotes["domain_name"].astype(str).unique())])
             speaker_filter = f3.selectbox("Filter by speaker", ["All speakers", *sorted(quotes["speaker"].astype(str).unique())])
             shown = quotes
-            if domain_filter != "All domains":
+            if domain_filter != "All themes":
                 shown = shown[shown["domain_name"].astype(str) == domain_filter]
             if speaker_filter != "All speakers":
                 shown = shown[shown["speaker"].astype(str) == speaker_filter]
             if search.strip():
                 shown = shown[shown["text"].astype(str).str.contains(search.strip(), case=False, regex=False)]
-            if mixed_view:
-                st.markdown(f"**{len(shown)} of {len(quotes)} coded entries shown (includes paraphrases/observations)**")
-            else:
-                st.markdown(f"**{len(shown)} of {len(quotes)} matched quotes shown**")
+            st.markdown(
+                f"**Showing {len(shown)} of {len(quotes)} theme matches** "
+                "(one entry can match multiple themes)"
+            )
             if shown.empty:
-                st.info("No entry matches these filters." if mixed_view else "No quote matches these filters.")
+                st.info("No theme match fits these filters.")
             else:
+                cols_ind = [*(["evidence_type"] if notes_present else []), "domain_name", "speaker",
+                            *(["respondent_id"] if "respondent_id" in shown.columns else []),
+                            "source_id", "line_number", "match_text", "text"]
                 st.dataframe(
-                    shown[[*(["evidence_type"] if notes_present else []), "domain_name", "speaker", "source_id",
-                           "unit_id", "line_number", "match_char_start", "match_char_end", "match_text", "text",
-                           "source_sha256"]],
+                    shown[cols_ind],
                     **stretch_kwargs(st.dataframe), hide_index=True,
                     column_config={
-                        "evidence_type": "Evidence Type",
-                        "domain_name": "Domain", "speaker": "Speaker", "source_id": "Source ID",
-                        "unit_id": "Unit ID", "line_number": "Line", "match_char_start": "Match start",
-                        "match_char_end": "Match end", "match_text": "Matched span",
-                        "text": "Coded entry (see Evidence Type)" if mixed_view else "Verbatim turn",
-                        "source_sha256": "Source SHA-256",
+                        "evidence_type": "Source Type", "domain_name": "Theme", "speaker": "Speaker",
+                        "respondent_id": "Respondent ID", "source_id": "Source File",
+                        "line_number": "Line", "match_text": "Matched Word", "text": "Entry Text",
                     },
                 )
                 for _, q in shown.head(25).iterrows():
@@ -2026,172 +2606,192 @@ with tab_thematic:
                         f'<div class="quote-meta">{badge}{esc(q["domain_name"])} · {esc(q["speaker"])}</div>'
                         f'<div class="quote-text">{highlighted_quote(q["text"], q["match_char_start"], q["match_char_end"])}</div>'
                         f'<div class="quote-provenance">SOURCE {esc(q["source_id"])} · LINE {esc(q["line_number"])} · '
-                        f'CHARS {esc(q["match_char_start"])}–{esc(q["match_char_end"])} · '
-                        f'SHA-256 {esc(q["source_sha256"])}</div>'
+                        f'CHARS {esc(q["match_char_start"])}-{esc(q["match_char_end"])} · '
+                        f'SHA-256 {esc(str(q["source_sha256"])[:12])}</div>'
                         f"</div>",
                         unsafe_allow_html=True,
                     )
 
+    # --------------------------------------------------------------------------
+    # SUB-TAB 3: DISCOVER UNLISTED THEMES (Point #5 + safe index join)
+    # --------------------------------------------------------------------------
     with qtab_topics:
-        disc_choice = st.radio(
-            "Discovery method",
-            list(DISCOVERY_METHOD_MAP),
-            index=0,
-            horizontal=True,
-            help="TF-IDF + NMF is faster, deterministic across runs, and produces more distinct topic keywords; "
-                 "LDA is the classic bag-of-words topic model.",
+        st.markdown("#### Discover Unlisted Themes")
+        st.caption(
+            "Groups entries by shared words without using your theme checklist — useful as a sanity check "
+            "and to spot topics your selected themes may have missed."
         )
+        n_topics = st.slider("Number of clusters (k)", min_value=1, max_value=10, value=3, key="disc_k_slider")
+        with st.expander("Method settings", expanded=False):
+            disc_choice = st.radio(
+                "Clustering method",
+                list(DISCOVERY_METHOD_MAP),
+                index=0,
+                horizontal=True,
+                key="disc_method_radio",
+                help="TF-IDF + NMF is deterministic and produces sharper keywords; LDA is classic bag-of-words.",
+            )
         disc_method = DISCOVERY_METHOD_MAP[disc_choice]
-        disc_label = "TF-IDF + NMF topics" if disc_method == "nmf" else "LDA topics"
-        st.markdown(f"#### Unsupervised topic discovery ({disc_label}, TF-IDF cosine medoids)")
-        if notes_present:
-            st.caption("Each medoid is the coded notes entry closest to its topic's TF-IDF centroid. A medoid "
-                       "can be a verbatim quote, a paraphrased key point or a note-taker observation; its "
-                       "evidence type is shown on every card and in the table.")
-        else:
-            st.caption("Each medoid is the real participant turn closest to its topic's TF-IDF centroid.")
-        n_topics = st.slider("Number of topics (k)", min_value=1, max_value=10, value=3)
-        turn_records = results["tagged_turns_df"].to_dict("records")
-        discovery = run_topic_discovery(turn_records, n_topics, method=disc_method)
+        if disc_method != active_disc_method or n_topics != active_disc_k:
+            discovery = run_topic_discovery(turn_records, n_topics, method=disc_method)
+            discovery_overlap = compute_topic_codebook_overlap(discovery, turn_records, domain_name_map)
+
         topics = discovery["topics"]
-        medoid_evidence = {
-            (str(r.get("unit_id")), str(r.get("turn_id")), str(r.get("text"))): str(r.get("evidence_type") or "")
-            for r in turn_records
-        }
-        for topic in topics:
-            topic["medoid_evidence_type"] = medoid_evidence.get(
-                (str(topic["medoid_unit_id"]), str(topic["medoid_turn_id"]), str(topic["medoid_text"])), "")
         if not topics:
-            st.info("No participant turn has enough content words for topic discovery.")
+            st.info("No entries have enough content words for automatic clustering.")
         else:
-            st.caption(f"{discovery['n_analyzed']} participant turns analysed; k clamped to {len(topics)}.")
+            n_disc = int(discovery["n_analyzed"])
+            st.caption(f"{n_disc} entries analyzed; {len(topics)} {'cluster' if len(topics) == 1 else 'clusters'} shown.")
             for topic in topics:
+                tid = int(topic["topic_id"])
                 terms = ", ".join(dedupe_terms(topic["top_terms"]))
                 medoid = topic["medoid_text"]
-                badge = evidence_badge_html(topic["medoid_evidence_type"]) if notes_present else ""
+                cov = discovery_overlap.get(tid, {})
+                cov_status = cov.get("coverage_status", "mostly_covered")
+                cov_label = cov.get("coverage_label", "")
+                cov_cls = (
+                    "coverage-uncoded" if cov_status == "mostly_uncoded"
+                    else ("coverage-partial" if cov_status == "partially_uncoded" else "coverage-covered")
+                )
+                cov_badge = f'<span class="coverage-badge {cov_cls}">{esc_inline(cov_label)}</span>' if cov_label else ""
+
+                # Determine source badge of the representative example safely via member indices.
+                medoid_ev = ""
+                for idx in cov.get("member_indices") or []:
+                    rec = turn_records[idx]
+                    if (
+                        str(rec.get("unit_id")) == str(topic["medoid_unit_id"])
+                        and str(rec.get("turn_id")) == str(topic["medoid_turn_id"])
+                        and str(rec.get("text")) == str(topic["medoid_text"])
+                    ):
+                        medoid_ev = str(rec.get("evidence_type") or "")
+                        break
+                ev_badge = evidence_badge_html(medoid_ev) if notes_present else ""
+
                 st.markdown(
                     f'<div class="quote-box topic-box">'
-                    f'<div class="quote-meta">{badge}Topic {esc(topic["topic_id"])}: {esc(topic["label"])} · '
-                    f'{esc(topic["turn_count"])} turns ({esc(topic["share_pct"])}%)</div>'
-                    f'<div style="font-size:0.9rem;margin-bottom:0.4rem;"><strong>Top terms:</strong> {esc(terms)}</div>'
-                    f'<div class="quote-text">{esc(medoid) if medoid else "No medoid turn assigned."}</div>'
-                    f'<div class="quote-provenance">MEDOID UNIT {esc(topic["medoid_unit_id"])} · '
-                    f'SPEAKER {esc(topic["medoid_speaker"])}</div>'
+                    f'<div class="quote-meta">{cov_badge}{ev_badge}'
+                    f'Cluster {esc(tid)}: {esc(topic["label"])} · '
+                    f'{esc(topic["turn_count"])} of {n_disc} entries ({esc(topic["share_pct"])}%)</div>'
+                    f'<div style="font-size:0.95rem;margin-bottom:0.4rem;"><strong>Top keywords:</strong> {esc(terms)}</div>'
+                    f'<div style="font-size:0.88rem;font-weight:700;color:#475569;margin-bottom:0.2rem;">Most representative example:</div>'
+                    f'<div class="quote-text">{esc(medoid) if medoid else "No example entry assigned."}</div>'
+                    f'<div class="quote-provenance">SOURCE {esc(topic["medoid_unit_id"])} · SPEAKER {esc(topic["medoid_speaker"])}</div>'
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "topic_id": t["topic_id"],
-                        "top_terms": ", ".join(dedupe_terms(t["top_terms"])),
-                        "turn_count": t["turn_count"],
-                        "share_pct": t["share_pct"],
-                        "medoid_unit_id": t["medoid_unit_id"],
-                        "medoid_text": t["medoid_text"],
-                        **({"medoid_evidence_type": t["medoid_evidence_type"]} if notes_present else {}),
-                    }
-                    for t in topics
-                ]),
-                **stretch_kwargs(st.dataframe), hide_index=True,
-                column_config={
-                    "topic_id": "Topic", "top_terms": "Top terms", "turn_count": "Turns",
-                    "share_pct": st.column_config.NumberColumn("Share (%)", format="%.1f"),
-                    "medoid_unit_id": "Medoid unit",
-                    "medoid_text": "Medoid entry (see evidence type)" if notes_present else "Medoid turn (verbatim)",
-                    "medoid_evidence_type": "Medoid evidence type",
-                },
-            )
-            corpus_digest = hashlib.sha256(b"".join(p for _, p in inputs)).hexdigest()[:8]
-            discovered_label = f"Discovered: {len(topics)} topics ({disc_method.upper()}) · corpus {corpus_digest} (session)"
-            codebook_yaml = yaml.safe_dump(
-                topics_to_codebook_dict(discovery, project_name=f"Discovered Codebook ({corpus_label})"),
-                allow_unicode=True, sort_keys=False,
-            ).encode("utf-8")
-            d1, d2 = st.columns(2)
-            d1.download_button(
-                "📥 Download Discovered Codebook (.yaml)", data=codebook_yaml,
-                file_name="atlas_discovered_codebook.yaml", mime="application/x-yaml",
-                **stretch_kwargs(st.download_button),
-            )
-            d2.button(
-                "⚡ Apply Discovered Codebook to Engine", on_click=apply_discovered_codebook,
-                args=(discovered_label, codebook_yaml), **stretch_kwargs(st.button),
-                help="Adds this draft to the codebook list and re-codes the corpus with it.",
-            )
+
+                member_indices = cov.get("member_indices") or []
+                if member_indices:
+                    with st.expander(f"View all {len(member_indices)} entries in Cluster {tid}", expanded=False):
+                        cluster_rows = []
+                        for idx in member_indices:
+                            rec = turn_records[idx]
+                            matched_names = [domain_name_map.get(str(d), str(d)) for d in (rec.get("matched_domains") or [])]
+                            cluster_rows.append({
+                                "Source File": group_labels.get(str(rec.get("source_id", "")), str(rec.get("source_id", ""))),
+                                "Line": rec.get("line_number", ""),
+                                **({"Source Type": EVIDENCE_BADGE_STYLES.get(str(rec.get("evidence_type", "")), EVIDENCE_BADGE_FALLBACK)[2]} if notes_present else {}),
+                                "Active Theme Match": ", ".join(matched_names) if matched_names else "None (uncoded)",
+                                "Entry Text": str(rec.get("text", "")),
+                            })
+                        st.dataframe(pd.DataFrame(cluster_rows), **stretch_kwargs(st.dataframe), hide_index=True)
 
             st.markdown("---")
-            st.markdown("##### Add a discovered theme to your active codebook")
-            st.caption(
-                "Keeps all domains in your active codebook and appends one discovered topic as a new "
-                "domain—no YAML editing required."
-            )
+            st.markdown("##### Add a discovered cluster to your active themes")
+            st.caption("Appends one cluster as a new theme without editing YAML by hand.")
             topic_choices = {
-                f"Topic {t['topic_id']}: {t['label']} ({t['turn_count']} turns)": t for t in topics
+                f"Cluster {t['topic_id']}: {t['label']} ({t['turn_count']} entries)": t for t in topics
             }
             if st.session_state.get("add_topic_select") not in topic_choices:
                 st.session_state.pop("add_topic_select", None)
             a1, a2 = st.columns([2, 2])
-            picked_topic_label = a1.selectbox("Topic to add", list(topic_choices), key="add_topic_select")
-            picked_topic = topic_choices[picked_topic_label]
-            custom_theme_name = a2.text_input(
-                "New domain name (optional)",
+            a1.selectbox("Cluster to add", list(topic_choices), key="add_topic_select")
+            picked_topic = topic_choices[st.session_state.get("add_topic_select", next(iter(topic_choices)))]
+            a2.text_input(
+                "New theme name (optional)",
                 placeholder=str(picked_topic["label"]),
                 key="add_topic_name",
-                help="Leave blank to use the topic's top terms as the domain name.",
+                help="Leave blank to use the cluster's top keywords as the theme name.",
             )
-            exact_mode_add = st.checkbox(
+            st.checkbox(
                 "Use exact whole-word matching for added theme (recommended)",
                 value=True,
                 key="add_topic_exact",
                 help="Prevents short discovered words (such as 'car' or 'fee') from matching unrelated longer words.",
             )
             st.button(
-                "➕ Add Theme to Active Codebook",
+                "Add Theme to Active Themes",
                 on_click=add_theme_to_active_codebook,
                 args=(codebook_bytes, topic_choices),
                 key="add_topic_to_active_btn",
                 **stretch_kwargs(st.button),
-                help="Appends this topic to the active codebook, immediately re-codes the corpus, and lets you download the updated YAML.",
+                help="Appends this cluster to your active themes, immediately re-codes the corpus, and lets you save the updated YAML.",
             )
 
+    # --------------------------------------------------------------------------
+    # SUB-TAB 4: SPOT-CHECK MATCHES (Point #6 + spelling exclusion)
+    # --------------------------------------------------------------------------
     with qtab_spotcheck:
-        st.markdown("#### False-alarm spot-check")
+        st.markdown("#### Spot-Check Matches")
         st.caption(
-            "Flags coded matches that commonly create false alarms: short or non-inflectional prefix extensions "
-            "(for example, 'car' inside 'card' or 'career'), nearby negation cues ('not', 'never', 'didn\\'t'), "
-            "and short unfenced prefix roots."
+            "Flags theme matches worth a quick human check: keywords matched inside longer words "
+            "(such as 'kid' inside 'kidding'), spelling-tolerance typo matches, nearby negation words "
+            "('not', 'never', 'didn\\'t'), and short keywords without exclusion words."
         )
-        audit_df = results["false_alarm_audit_df"]
         if quotes.empty:
-            st.info("No coded matches to spot-check in the current corpus.")
+            st.info("No theme matches to spot-check in the current corpus.")
         elif audit_df.empty:
-            st.success("No high- or medium-risk false-alarm patterns detected across all current matches.")
+            st.success(f"0 of {len(quotes)} theme matches flagged for review.")
         else:
+            st.info("All flagged matches below are currently counted in your charts and tables until you exclude them.")
             n_flagged = len(audit_df)
-            n_high = int((audit_df["risk_level"] == "High").sum())
-            n_med = int((audit_df["risk_level"] == "Medium").sum())
+            codes_series = audit_df["flag_codes"].astype(str) if "flag_codes" in audit_df.columns else pd.Series(dtype=str)
+            n_spell = int(codes_series.str.contains("spelling_tolerance").sum())
+            n_pref = int(codes_series.str.contains("prefix_extension").sum())
+            n_ctx = int((audit_df["risk_level"] == "Medium").sum())
             st.markdown(
-                f"**{n_flagged} of {len(quotes)} coded matches flagged for review** · "
-                f"High risk: **{n_high}** · Medium risk: **{n_med}**"
+                f"**{n_flagged} of {len(quotes)} theme matches flagged for review** · "
+                f"{SPOTCHECK_PRIORITY_PARTIAL}: **{n_pref}** · "
+                f"{SPOTCHECK_PRIORITY_SPELLING}: **{n_spell}** · "
+                f"{SPOTCHECK_PRIORITY_CONTEXT}: **{n_ctx}**"
             )
-            summary_df = summarize_false_alarm_risks(audit_df)
-            st.dataframe(summary_df, **stretch_kwargs(st.dataframe), hide_index=True)
+
+            audit_display = audit_df.copy()
+            audit_display["review_priority"] = [
+                spotcheck_priority_label(rl, fc)
+                for rl, fc in zip(audit_display["risk_level"], audit_display["flag_codes"])
+            ]
+            summary_grouped = (
+                audit_display.groupby(
+                    ["review_priority", "domain_name", "matched_span", "full_word", "flag_reason", "suggested_fix"],
+                    dropna=False,
+                    as_index=False,
+                )
+                .size()
+                .rename(columns={
+                    "review_priority": "Review Priority",
+                    "domain_name": "Theme",
+                    "matched_span": "Matched",
+                    "full_word": "Full Word",
+                    "size": "Flagged Matches",
+                    "flag_reason": "Why Flagged",
+                    "suggested_fix": "Suggested Action",
+                })
+            )
+            st.dataframe(summary_grouped, **stretch_kwargs(st.dataframe), hide_index=True)
             st.download_button(
-                "📥 Download Spot-Check Report (.csv)",
+                "Download Spot-Check Report (.csv)",
                 data=audit_df.to_csv(index=False).encode("utf-8"),
-                file_name="atlas_false_alarm_spot_check.csv",
+                file_name="atlas_spot_check_report.csv",
                 mime="text/csv",
                 key="download_spotcheck_csv",
                 **stretch_kwargs(st.download_button),
             )
 
             st.markdown("---")
-            st.markdown("##### Quick-fix a flagged domain in your active codebook")
-            st.caption(
-                "Tighten a noisy domain right here without editing YAML. Download the updated codebook from "
-                "the sidebar or Tab 2 when finished."
-            )
+            st.markdown("##### Exclude false matches from a theme")
+            st.caption("Tighten a noisy theme right here without editing YAML. Save your updated theme file from the sidebar or Exports tab when finished.")
             flagged_domains = (
                 audit_df[["domain_id", "domain_name"]]
                 .drop_duplicates()
@@ -2204,59 +2804,53 @@ with tab_thematic:
             if st.session_state.get("spotcheck_fix_domain") not in domain_choice_map:
                 st.session_state.pop("spotcheck_fix_domain", None)
             sc1, sc2 = st.columns([2, 2])
-            picked_fix_label = sc1.selectbox("Domain to tighten", list(domain_choice_map), key="spotcheck_fix_domain")
+            picked_fix_label = sc1.selectbox("Theme to tighten", list(domain_choice_map), key="spotcheck_fix_domain")
             fix_domain_id, fix_domain_name = domain_choice_map[picked_fix_label]
             dom_audit = audit_df[audit_df["domain_id"].astype(str) == fix_domain_id]
-            ext_words = sorted({
+
+            # Aggregate BOTH prefix-extension words AND spelling-tolerance words for actionable exclusion.
+            excludable_words = sorted({
                 w.strip().lower()
-                for cell in dom_audit["extension_words"]
+                for col_name in ("extension_words", "spelling_words")
+                if col_name in dom_audit.columns
+                for cell in dom_audit[col_name]
                 for w in str(cell).split(",")
                 if w.strip()
             })
-            active_rules_by_id = {
-                r["id"]: r for r in normalize_codebook_rules(yaml.safe_load(codebook_bytes) or {})
-            }
+
+            active_rules_by_id = {r["id"]: r for r in compiled_domains}
             target_rule = active_rules_by_id.get(fix_domain_id, {})
             existing_excludes = bool(target_rule.get("exclude_fences"))
             raw_excl_win = target_rule.get("exclude_window")
             existing_excl_win = int(float(raw_excl_win)) if raw_excl_win is not None else None
             if (not existing_excludes and existing_excl_win is None) or existing_excl_win == 0:
-                excl_label = "False-alarm words to exclude (0-token fence)"
-                excl_help = "Adds these words to exclude_fences with a 0-token window so only the flagged word is blocked."
+                excl_label = "Words to exclude from this theme"
+                excl_help = "Blocks only these exact words without affecting other valid matches in the same entry."
                 excl_scope_note = None
             elif existing_excl_win is not None:
-                excl_label = f"False-alarm words to exclude (preserves {existing_excl_win}-token exclusion window)"
-                excl_help = (
-                    f"This domain already uses a {existing_excl_win}-token exclusion window. Adding words preserves "
-                    f"that window and may also block valid matches within {existing_excl_win} tokens of an excluded word."
-                )
+                excl_label = f"Words to exclude (keeps existing {existing_excl_win}-word exclusion window)"
+                excl_help = f"Preserves this theme's {existing_excl_win}-word exclusion window."
                 excl_scope_note = (
-                    f"Note: this domain already has exclude_fences with a {existing_excl_win}-token window. "
-                    f"Adding an exclusion word preserves that {existing_excl_win}-token window (so nearby valid matches "
-                    f"within {existing_excl_win} tokens could also be suppressed). Switch to Exact Whole-Word Matching "
-                    "if you only want to block prefix extensions."
+                    f"Note: this theme already uses a {existing_excl_win}-word exclusion window. Excluding a word "
+                    f"keeps that window intact."
                 )
             else:
-                excl_label = "False-alarm words to exclude (preserves turn-level exclusion window)"
-                excl_help = (
-                    "This domain already uses turn-level exclude_fences (no token window). Adding a word preserves "
-                    "turn-level suppression whenever that word appears anywhere in a turn."
-                )
+                excl_label = "Words to exclude (keeps existing entry-level exclusion window)"
+                excl_help = "Preserves this theme's entry-level exclusion window."
                 excl_scope_note = (
-                    "Note: this domain already uses turn-level exclude_fences. Adding an exclusion word suppresses "
-                    "the whole turn if that word appears anywhere in it. Switch to Exact Whole-Word Matching if you "
-                    "only want to block prefix extensions."
+                    "Note: this theme already uses entry-level exclusions. Excluding a word suppresses the whole "
+                    "entry whenever that word appears."
                 )
 
             selected_exclude_words = []
             ext_key = None
-            if ext_words:
-                ext_sig = hashlib.sha256(",".join(ext_words).encode("utf-8")).hexdigest()[:8]
+            if excludable_words:
+                ext_sig = hashlib.sha256(",".join(excludable_words).encode("utf-8")).hexdigest()[:8]
                 ext_key = f"spotcheck_excl_{fix_domain_id}_{ext_sig}"
                 selected_exclude_words = sc2.multiselect(
                     excl_label,
-                    ext_words,
-                    default=ext_words,
+                    excludable_words,
+                    default=excludable_words,
                     key=ext_key,
                     help=excl_help,
                 )
@@ -2264,39 +2858,41 @@ with tab_thematic:
                     st.caption(excl_scope_note)
             b1, b2 = st.columns(2)
             b1.button(
-                "🛡️ Exclude Selected Words from Domain",
+                "Exclude Selected Words from Theme",
                 on_click=apply_tightened_codebook,
                 args=(codebook_bytes, domain_choice_map, picked_fix_label, ext_key, False),
                 disabled=not selected_exclude_words,
                 key="spotcheck_exclude_btn",
                 **stretch_kwargs(st.button),
-                help="Adds the selected false-alarm words to exclude_fences and immediately re-codes.",
+                help="Blocks the selected words (including any flagged spelling matches) and immediately re-codes.",
             )
             b2.button(
-                "🎯 Switch Domain to Exact Whole-Word Matching",
+                "Switch Theme to Exact Whole-Word Matching",
                 on_click=apply_tightened_codebook,
                 args=(codebook_bytes, domain_choice_map, picked_fix_label, ext_key, True),
                 key="spotcheck_exact_btn",
                 **stretch_kwargs(st.button),
-                help="Switches this domain to match_mode: exact so short stems only match whole words.",
+                help="Restricts prefix stems in this theme to whole words only.",
             )
 
             st.markdown("---")
             st.markdown("##### Flagged matches in context")
-            sc_dom_options = ["All domains", *sorted(audit_df["domain_name"].astype(str).unique())]
+            sc_dom_options = ["All themes", *sorted(audit_display["domain_name"].astype(str).unique())]
             if st.session_state.get("spotcheck_dom_filter") not in sc_dom_options:
                 st.session_state.pop("spotcheck_dom_filter", None)
             rf1, rf2 = st.columns(2)
-            risk_filter = rf1.selectbox("Filter by risk", ["All risk levels", "High", "Medium"], key="spotcheck_risk_filter")
-            dom_filter_sc = rf2.selectbox(
-                "Filter flagged domain",
-                sc_dom_options,
-                key="spotcheck_dom_filter",
-            )
-            shown_audit = audit_df
-            if risk_filter != "All risk levels":
-                shown_audit = shown_audit[shown_audit["risk_level"] == risk_filter]
-            if dom_filter_sc != "All domains":
+            priority_options = [
+                "All flagged matches",
+                SPOTCHECK_PRIORITY_PARTIAL,
+                SPOTCHECK_PRIORITY_SPELLING,
+                SPOTCHECK_PRIORITY_CONTEXT,
+            ]
+            priority_filter = rf1.selectbox("Filter by review priority", priority_options, key="spotcheck_risk_filter")
+            dom_filter_sc = rf2.selectbox("Filter by theme", sc_dom_options, key="spotcheck_dom_filter")
+            shown_audit = audit_display
+            if priority_filter != "All flagged matches":
+                shown_audit = shown_audit[shown_audit["review_priority"] == priority_filter]
+            if dom_filter_sc != "All themes":
                 shown_audit = shown_audit[shown_audit["domain_name"].astype(str) == dom_filter_sc]
             st.caption(f"Showing {min(len(shown_audit), 25)} of {len(shown_audit)} flagged matches.")
             for _, row in shown_audit.head(25).iterrows():
@@ -2304,170 +2900,189 @@ with tab_thematic:
                 ev_badge = evidence_badge_html(row["evidence_type"]) if notes_present else ""
                 st.markdown(
                     f'<div class="quote-box {box_cls}">'
-                    f'<div class="quote-meta">{risk_badge_html(row["risk_level"])}{ev_badge}'
+                    f'<div class="quote-meta">{risk_badge_html(row["risk_level"], row["flag_codes"])}{ev_badge}'
                     f'{esc_inline(row["domain_name"])} · {esc_inline(row["speaker"])} · '
                     f'matched <code>{esc_inline(row["matched_span"])}</code> inside <code>{esc_inline(row["full_word"])}</code></div>'
-                    f'<div style="font-size:0.88rem;color:#334155;margin-bottom:0.35rem;">'
+                    f'<div style="font-size:0.92rem;color:#334155;margin-bottom:0.35rem;">'
                     f'<strong>Why flagged:</strong> {esc_inline(row["flag_reason"])}</div>'
                     f'<div class="quote-text">{highlighted_quote(row["text"], row["match_char_start"], row["match_char_end"])}</div>'
                     f'<div class="quote-provenance">SOURCE {esc_inline(row["source_id"])} · LINE {esc_inline(row["line_number"])} · '
-                    f'FIX: {esc_inline(row["suggested_fix"])}</div>'
+                    f'ACTION: {esc_inline(row["suggested_fix"])}</div>'
                     f"</div>",
                     unsafe_allow_html=True,
                 )
 
 
 # ==============================================================================
-# TAB 2: ECONOMETRIC & ACTUARIAL LEDGER EXPORT
+# TAB 2: EXPORTS & AUDIT FILES
 # ==============================================================================
-with tab_econometric:
-    if group_mode:
-        st.markdown("### Group summary matrix")
-        st.caption(
-            f"G = {total_documents} focus groups (1 file = 1 group). "
-            "Groups reporting = focus groups with at least one matching coded entry."
-        )
-        st.info(
-            "Statistical guardrail (Group mode): normal-approximation Binomial standard errors and 95% "
-            "confidence intervals (p ± 1.96·SE) are hidden. With a small number of focus groups "
-            f"(G = {total_documents}) and participants in the same room shaping one another's answers, "
-            "the counts are not independent Binomial samples, so such an interval would overstate precision. "
-            "Report groups reporting (g of G) and distinct participant voices instead."
-        )
-    elif notes_present:
-        st.markdown("### Econometric parameter matrix")
-        st.caption(
-            f"N = {total_documents} analytical units; each structured notes file is one focus group, "
-            "so its unit is the group, not an individual respondent."
-        )
-        st.info(
-            "Statistical guardrail (structured focus-group notes): normal-approximation Binomial standard "
-            "errors and 95% confidence intervals (p ± 1.96·SE) are hidden for this corpus. Structured notes "
-            "are counted one unit per focus-group file, and participants in the same room are not independent, "
-            "so the units are not independent Binomial samples of individuals."
-        )
-    else:
-        st.markdown("### Econometric parameter matrix")
-        st.caption(
-            f"N = {total_documents} analytical units (documents / respondent rows). "
-            "p = units reporting ÷ N; binomial standard error SE = √(p(1 − p) / N), on the proportion scale."
-        )
-
-    if len(freq):
-        if group_mode:
-            tab2_chart, ci_summary = group_prevalence_chart(group_table, total_documents), group_summary
-            tab2_note = "Bar labels show g/G: focus groups reporting the domain out of all focus groups."
-            tab2_table, tab2_config = group_table, group_table_config
-        else:
-            matrix = pd.DataFrame({
-                "domain_id": freq["domain_id"].astype(str),
-                "domain_name": freq["domain_name"].astype(str),
-            })
-            p = [int(d) / total_documents if total_documents else float("nan") for d in freq["documents_reporting"]]
-            se = [math.sqrt(v * (1 - v) / total_documents) if total_documents else float("nan") for v in p]
-            matrix["documents_reporting"] = freq["documents_reporting"].astype(int)
-            matrix["n_units"] = total_documents
-            matrix["prevalence_pct"] = freq["prevalence_pct"].astype(float)
-            matrix["proportion"] = [round(v, 4) for v in p]
-            matrix["binomial_se"] = [round(v, 4) for v in se]
-            matrix["ci95_low_pct"] = [round(max(0.0, (v - 1.96 * s) * 100), 1) for v, s in zip(p, se)]
-            matrix["ci95_high_pct"] = [round(min(1.0, v + 1.96 * s) * 100, 1) for v, s in zip(p, se)]
-            matrix["matching_turns"] = freq["matching_turns"].astype(int)
-            if notes_present:
-                matrix = matrix.drop(columns=["proportion", "binomial_se", "ci95_low_pct", "ci95_high_pct"])
-
-            bars = alt.Chart(matrix).mark_bar(color=TEAL).encode(
-                x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units)", scale=alt.Scale(domain=[0, 100])),
-                y=alt.Y("domain_name:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
-                tooltip=[
-                    alt.Tooltip("domain_name:N", title="Domain"),
-                    alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
-                    alt.Tooltip("documents_reporting:Q", title="Units reporting"),
-                    alt.Tooltip("n_units:Q", title="N"),
-                    *([] if notes_present else [alt.Tooltip("binomial_se:Q", title="SE")]),
-                ],
-            )
-            if notes_present:
-                tab2_chart = bars
-                ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=False)
-                tab2_note = "Bars show the share of focus-group files with a matching entry; no interval is drawn."
-            else:
-                whiskers = alt.Chart(matrix).mark_rule(color="#0F172A").encode(
-                    x="ci95_low_pct:Q", x2="ci95_high_pct:Q", y=alt.Y("domain_name:N", sort="-x"),
-                )
-                tab2_chart = bars + whiskers
-                ci_summary = describe_prevalence_chart(matrix, total_documents, include_ci=True)
-                tab2_note = "Whiskers show the normal-approximation 95% interval p ± 1.96·SE, clipped to 0–100%."
-            tab2_table = matrix
-            tab2_config = {
-                "domain_id": "Domain ID", "domain_name": "Domain",
-                "documents_reporting": "Units reporting", "n_units": "N (analytical units)",
-                "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
-                "proportion": "p", "binomial_se": "Binomial SE",
-                "ci95_low_pct": "95% CI low (%)", "ci95_high_pct": "95% CI high (%)",
-                "matching_turns": "Matching turns",
-            }
-        st.altair_chart(
-            light_chart_surface(tab2_chart.properties(height=max(160, 42 * len(freq)), description=ci_summary)),
-            **stretch_kwargs(st.altair_chart),
-        )
-        st.html(chart_summary_html(ci_summary))
-        st.caption(tab2_note)
-        st.dataframe(tab2_table, **stretch_kwargs(st.dataframe), hide_index=True, column_config=tab2_config)
-    else:
-        st.info("The active codebook defines no domains.")
-
-    st.markdown("---")
-    st.markdown("#### Auditable exports (generated by AtlasEngine.export_results)")
-    if results["integrity_ok"]:
-        st.success("Workbook integrity check passed: every prevalence cell and audit stamp matches the manifest.")
-    else:
-        st.error("Workbook integrity check failed: " + "; ".join(results["integrity_problems"]))
-    e1, e2, e3 = st.columns(3)
-    e1.download_button(
-        "📥 actuarial_parameter_matrix.xlsx", data=results["exports"]["actuarial_parameter_matrix.xlsx"],
+with tab_exports:
+    st.markdown("### Analyst Downloads")
+    st.caption(
+        "Download a printable Word summary report, an audited Excel frequency table, or CSV quote inventories "
+        "matching the active run."
+    )
+    a1, a2, a3 = st.columns(3)
+    a1.download_button(
+        "Download Full Report (.docx)",
+        data=full_report_docx,
+        file_name="atlas_summary_report.docx",
+        mime=DOCX_MIME,
+        key="tab2_download_full_report",
+        **stretch_kwargs(st.download_button),
+    )
+    a2.download_button(
+        "Download Theme Frequencies (.xlsx)",
+        data=results["exports"]["actuarial_parameter_matrix.xlsx"],
         file_name="actuarial_parameter_matrix.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", **stretch_kwargs(st.download_button),
-        help="Each prevalence cell carries an ATLAS VERIFICATION AUDIT STAMP comment.",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="tab2_download_xlsx",
+        **stretch_kwargs(st.download_button),
+        help="Each prevalence cell carries an embedded ATLAS VERIFICATION AUDIT STAMP comment.",
     )
-    e2.download_button(
-        "📥 provenance_manifest.json", data=results["exports"]["provenance_manifest.json"],
-        file_name="provenance_manifest.json", mime="application/json", **stretch_kwargs(st.download_button),
-    )
-    e3.download_button(
-        "📥 verbatim_quotes_inventory.csv", data=results["exports"]["verbatim_quotes_inventory.csv"],
-        file_name="verbatim_quotes_inventory.csv", mime="text/csv", **stretch_kwargs(st.download_button),
-        help="Verbatim words only: transcript / survey turns and notable quotes from notes.",
+    a3.download_button(
+        "Download Direct Quotes (.csv)",
+        data=results["exports"]["verbatim_quotes_inventory.csv"],
+        file_name="verbatim_quotes_inventory.csv",
+        mime="text/csv",
+        key="tab2_download_verbatim_csv",
+        **stretch_kwargs(st.download_button),
+        help="Verbatim words only: direct notable quotes, transcript turns, or survey answers.",
     )
     if CODED_EVIDENCE_CSV in results["exports"]:
         st.download_button(
-            f"📥 {CODED_EVIDENCE_CSV}", data=results["exports"][CODED_EVIDENCE_CSV],
-            file_name=CODED_EVIDENCE_CSV, mime="text/csv", **stretch_kwargs(st.download_button),
-            help="Every coded entry with its evidence_type: verbatim quotes, paraphrased key points and "
-                 "note-taker observations. Paraphrases and observations are not participant quotations.",
-        )
-    if is_custom_or_stacked:
-        st.download_button(
-            "📥 atlas_active_codebook.yaml (stacked / customized rules)",
-            data=codebook_bytes,
-            file_name="atlas_active_codebook.yaml",
-            mime="application/x-yaml",
-            key="download_active_codebook_tab2",
+            "Download All Coded Entries (.csv — quotes, paraphrases & observations)",
+            data=results["exports"][CODED_EVIDENCE_CSV],
+            file_name=CODED_EVIDENCE_CSV,
+            mime="text/csv",
+            key="tab2_download_coded_csv",
             **stretch_kwargs(st.download_button),
-            help="Archive this exact YAML codebook alongside your export folder so coding rules stay reproducible.",
+            help="Every coded row labeled by Source Type so paraphrases are never confused with direct quotes.",
         )
-    with st.expander("Source files and SHA-256 digests"):
+
+    st.markdown("---")
+    if group_mode:
+        st.info(
+            "Statistical guardrail (Group mode): normal-approximation Binomial standard errors and 95% "
+            f"confidence intervals are hidden because focus groups (G = {total_documents}) are small and "
+            "participants in the same room influence one another. Report focus groups (g of G) and "
+            "clearly labeled notes volume instead."
+        )
+    elif notes_present:
+        st.info(
+            "Statistical guardrail (structured focus-group notes): Binomial confidence intervals are hidden "
+            "because each structured notes file represents a focus group, not independent survey respondents."
+        )
+    elif len(freq):
+        st.markdown("#### Prevalence & Binomial Standard Errors (Individual Mode)")
+        st.caption(
+            f"N = {total_documents} analytical units. p = units reporting / N; "
+            "Binomial SE = sqrt(p(1 - p) / N) on the proportion scale."
+        )
+        ci_df = freq.sort_values(
+            ["prevalence_pct", "matching_turns", "domain_name"],
+            ascending=[False, False, True],
+            kind="mergesort",
+        ).copy()
+        p_vals = [int(d) / total_documents if total_documents else float("nan") for d in ci_df["documents_reporting"]]
+        se_vals = [math.sqrt(v * (1 - v) / total_documents) if total_documents else float("nan") for v in p_vals]
+        ci_df["proportion_p"] = [round(v, 4) for v in p_vals]
+        ci_df["binomial_se"] = [round(v, 4) for v in se_vals]
+        ci_df["ci95_low_pct"] = [round(max(0.0, (v - 1.96 * s) * 100), 1) for v, s in zip(p_vals, se_vals)]
+        ci_df["ci95_high_pct"] = [round(min(100.0, (v + 1.96 * s) * 100), 1) for v, s in zip(p_vals, se_vals)]
+        st.dataframe(
+            ci_df[[
+                "domain_name", "documents_reporting", "total_documents", "prevalence_pct",
+                "proportion_p", "binomial_se", "ci95_low_pct", "ci95_high_pct", "matching_turns",
+            ]],
+            **stretch_kwargs(st.dataframe),
+            hide_index=True,
+            column_config={
+                "domain_name": "Theme",
+                "documents_reporting": "Units Reporting",
+                "total_documents": "Analytical Units (N)",
+                "prevalence_pct": st.column_config.NumberColumn("Prevalence (%)", format="%.1f"),
+                "proportion_p": st.column_config.NumberColumn("Proportion (p)", format="%.4f"),
+                "binomial_se": st.column_config.NumberColumn("Binomial SE", format="%.4f"),
+                "ci95_low_pct": st.column_config.NumberColumn("95% CI Low (%)", format="%.1f"),
+                "ci95_high_pct": st.column_config.NumberColumn("95% CI High (%)", format="%.1f"),
+                "matching_turns": "Theme Matches",
+            },
+        )
+        y_order_ci = list(ci_df["domain_id"].astype(str))
+        ci_id_to_label = dict(zip(y_order_ci, ci_df["domain_name"].astype(str)))
+        ci_label_expr = f"({json.dumps(ci_id_to_label)})[datum.value]"
+        ci_bars = alt.Chart(ci_df).mark_bar(color=NAVY, cornerRadiusEnd=3).encode(
+            x=alt.X("prevalence_pct:Q", title="Prevalence (% of analytical units, with 95% CI)", scale=alt.Scale(domain=[0, 105])),
+            y=alt.Y("domain_id:N", sort=y_order_ci, title=None, axis=alt.Axis(labelLimit=360, labelExpr=ci_label_expr)),
+            tooltip=[
+                alt.Tooltip("domain_name:N", title="Theme"),
+                alt.Tooltip("domain_id:N", title="Theme ID"),
+                alt.Tooltip("prevalence_pct:Q", title="Prevalence (%)"),
+                alt.Tooltip("ci95_low_pct:Q", title="95% CI Low (%)"),
+                alt.Tooltip("ci95_high_pct:Q", title="95% CI High (%)"),
+            ],
+        )
+        ci_rules = alt.Chart(ci_df).mark_rule(color=TEAL, strokeWidth=2.2).encode(
+            x="ci95_low_pct:Q",
+            x2="ci95_high_pct:Q",
+            y=alt.Y("domain_id:N", sort=y_order_ci),
+        )
+        ci_summary = describe_prevalence_chart(ci_df, total_documents, include_ci=True)
+        st.altair_chart(
+            light_chart_surface(
+                (ci_bars + ci_rules).properties(height=max(180, 44 * len(ci_df)), description=ci_summary)
+            ),
+            **stretch_kwargs(st.altair_chart),
+        )
+        st.html(chart_summary_html(ci_summary))
+
+    st.markdown("---")
+    st.markdown("### Audit & Reproducibility Files")
+    if results["integrity_ok"]:
+        st.success("Workbook integrity check passed: every prevalence cell and audit stamp matches the provenance manifest.")
+    else:
+        st.error("Workbook integrity check failed: " + "; ".join(results["integrity_problems"]))
+
+    au1, au2 = st.columns(2)
+    au1.download_button(
+        "Download Provenance Manifest (.json)",
+        data=results["exports"]["provenance_manifest.json"],
+        file_name="provenance_manifest.json",
+        mime="application/json",
+        key="tab2_download_manifest",
+        **stretch_kwargs(st.download_button),
+    )
+    au2.download_button(
+        "Download Active Theme Rules (.yaml)",
+        data=codebook_bytes,
+        file_name="atlas_active_codebook.yaml",
+        mime="application/x-yaml",
+        key="tab2_download_codebook",
+        **stretch_kwargs(st.download_button),
+        help="Archive this exact YAML file alongside your exports so every coding rule stays reproducible.",
+    )
+    if spelling_tolerance and len(typo_df):
+        st.download_button(
+            f"Download Spelling-Tolerance Matches Inventory (.csv — {len(typo_df)} occurrences)",
+            data=typo_df.to_csv(index=False).encode("utf-8"),
+            file_name="atlas_typo_matches_inventory.csv",
+            mime="text/csv",
+            key="tab2_download_typos",
+            **stretch_kwargs(st.download_button),
+        )
+    with st.expander("Source files and SHA-256 digests", expanded=False):
         st.dataframe(
             pd.DataFrame(
-                [{"source_id": k, "sha256": v} for k, v in results["file_hashes"].items()],
-                columns=["source_id", "sha256"],
+                [{"Source File": k, "SHA-256": v} for k, v in results["file_hashes"].items()],
+                columns=["Source File", "SHA-256"],
             ),
             **stretch_kwargs(st.dataframe), hide_index=True,
         )
 
 
 # ==============================================================================
-# TAB 3: FORMATTED IN-APP REFERENCE GUIDES
+# TAB 3: REFERENCE GUIDES
 # ==============================================================================
 with tab_guides:
     render_reference_guides_tab()

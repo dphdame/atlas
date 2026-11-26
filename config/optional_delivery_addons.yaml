@@ -1,0 +1,96 @@
+# ATLAS Optional Add-On Themes: Program Delivery & Policy Friction
+# Distinct, non-overlapping process and cross-cutting policy themes that can be
+# toggled individually alongside the 10 Core Evaluation Themes without duplicating
+# Housing, Food, Employment, Transportation, or Childcare domains.
+project: "Optional Add-On Themes (Program Delivery & Policy Friction)"
+version: "1.0"
+
+domains:
+  - id: "program_enrollment_paperwork"
+    name: "Program Enrollment & Paperwork"
+    description: "Enrollment forms, proof of income, office visits, waiting for approval, callbacks and reminders"
+    roots_en:
+      - "paperwork"
+      - "form"
+      - "proof of income"
+      - "enroll"
+      - "enrollment"
+      - "application"
+      - "office"
+      - "approv"
+      - "approval"
+      - "callback"
+      - "call"
+      - "waiting"
+      - "checklist"
+      - "reminder"
+      - "mailbox"
+    exclude_fences:
+      - "format"
+      - "formal"
+      - "former"
+      - "formula"
+      - "inform"
+      - "information"
+      - "perform"
+      - "performance"
+      - "platform"
+      - "uniform"
+      - "transform"
+    exclude_window: 0
+
+  - id: "benefit_cliffs"
+    name: "Benefit Cliffs & Aid Loss"
+    description: "Fear or experience of losing healthcare, food aid, or subsidies when income increases"
+    roots_en:
+      - "benefit cliff"
+      - "lost medi-cal"
+      - "cut off food stamps"
+      - "income limit"
+      - "made a dollar too much"
+      - "lost coverage"
+      - "lose benefits"
+      - "eligibility cutoff"
+
+  - id: "utility_strain"
+    name: "Utility Shutoffs & Energy Burden"
+    description: "Past-due electric, gas, water, or phone bills and service shutoff notices"
+    roots_en:
+      - "electric bill"
+      - "pge"
+      - "shut off notice"
+      - "shutoff"
+      - "disconnect"
+      - "gas bill"
+      - "water bill"
+      - "phone disconnected"
+      - "utility bill"
+    exclude_fences:
+      - "heath"
+      - "heathen"
+    exclude_window: 0
+
+  - id: "wait_times"
+    name: "Wait Times & Processing Backlogs"
+    description: "Long queues, delayed disbursements, unreturned calls and pending approvals"
+    roots_en:
+      - "waiting on hold"
+      - "weeks waiting"
+      - "backlog"
+      - "pending approval"
+      - "called three times"
+      - "no callback"
+      - "waitlist"
+      - "hold time"
+
+  - id: "language_access"
+    name: "Language & Translation Barriers"
+    description: "Interpreter access, translated materials, and bilingual staff availability"
+    roots_en:
+      - "interpreter"
+      - "in spanish"
+      - "translation"
+      - "translate"
+      - "didn't understand form"
+      - "bilingual staff"
+      - "language barrier"

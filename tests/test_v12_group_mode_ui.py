@@ -64,16 +64,17 @@ NOTES_QUOTE_COLUMNS = ["evidence_type", "question_id", "group_id", "participant_
 
 GBI_DOMAIN_IDS = [
     "housing_rent_stability", "food_groceries_basic_needs", "debt_financial_breathing_room",
-    "employment_education_career", "transportation_mobility", "family_caregiving_wellbeing",
-    "stress_relief_mental_health", "program_enrollment_paperwork",
+    "employment_work", "education_training", "transportation_mobility",
+    "family_caregiving_wellbeing", "healthcare_medical",
+    "stress_relief_mental_health", "legal_justice",
 ]
+ADDONS_CODEBOOK = REPO / "config" / "optional_delivery_addons.yaml"
 
 DATA_TYPE_INDIVIDUAL = "Individual transcripts / survey responses"
 DATA_TYPE_GROUP = "Group / summarized notes"
 CORPUS_GBI_NOTES = "Sample: Multi-Group Focus-Group Notes (.docx)"
 GROUP_TABLE_COLUMNS = [
-    "Domain ID", "Domain", "Groups Reporting", "Total Groups (G)", "Group Share (%)",
-    "Distinct Participant Voices", "Verbatim Quotes", "Paraphrased Key Points", "Matching Entries",
+    "Theme", "Focus Groups", "Theme Matches", "Verbatim Quotes", "Paraphrased Key Points",
 ]
 THEMES_EXPANDER = "Note-Taker Themes Summary (Reference Only — Not Counted in Prevalence)"
 NON_VOICES = {"", "Unknown", "NoteTaker_Themes"}
@@ -162,7 +163,7 @@ def engine_on_texts(texts):
 # 1. Generic GBI starter codebook
 # ------------------------------------------------------------------------------
 class GbiStarterCodebookTests(unittest.TestCase):
-    def test_compiles_eight_generic_domains_with_roots(self):
+    def test_compiles_ten_core_domains_with_roots(self):
         engine = AtlasEngine(str(GBI_CODEBOOK))
         self.assertEqual([r["id"] for r in engine.compiled_rules], GBI_DOMAIN_IDS)
         for rule in engine.compiled_rules:
@@ -193,14 +194,16 @@ class GbiStarterCodebookTests(unittest.TestCase):
             "Things are different now.": "housing_rent_stability",
             "A billion things happened.": "debt_financial_breathing_room",
             "The debtor letter was confusing.": "debt_financial_breathing_room",
+            "I was just kidding around.": "family_caregiving_wellbeing",
         }
         positives = {
             "My car broke down last week.": "transportation_mobility",
             "We pay rent on the first.": "housing_rent_stability",
             "The electric bill was late.": "debt_financial_breathing_room",
             "Credit card debt kept growing.": "debt_financial_breathing_room",
-            "Brought the wrong paperwork to the office.": "program_enrollment_paperwork",
             "We bought groceries for the week.": "food_groceries_basic_needs",
+            "The clinic appointment and insurance were covered.": "healthcare_medical",
+            "The court probation fee was cleared.": "legal_justice",
         }
         matched = engine_on_texts(list(negatives) + list(positives))
         for text, domain in negatives.items():
@@ -209,6 +212,14 @@ class GbiStarterCodebookTests(unittest.TestCase):
         for text, domain in positives.items():
             with self.subTest(positive=text):
                 self.assertIn(domain, matched[text])
+
+        # Program Enrollment & Paperwork lives in optional_delivery_addons.yaml.
+        addon_res = AtlasEngine(str(ADDONS_CODEBOOK)).process_turns(
+            [{"source_id": "s.txt", "unit_id": "s.txt", "document_name": "s.txt", "speaker": "P1",
+              "text": "Brought the wrong paperwork to the office."}],
+            {"s.txt": "0" * 64},
+        )
+        self.assertIn("program_enrollment_paperwork", set(addon_res["quotes_df"]["domain_id"]))
 
     def test_codebook_is_generic_and_public_safe(self):
         text = GBI_CODEBOOK.read_text(encoding="utf-8").lower()
@@ -219,7 +230,12 @@ class GbiStarterCodebookTests(unittest.TestCase):
         results = AtlasEngine(str(GBI_CODEBOOK)).process_corpus(
             [str(TREATMENT_DOCX), str(CONTROL_DOCX)], root_dir=str(REPO))
         freq = results["frequencies_df"].set_index("domain_id")
-        self.assertEqual(int(freq.loc["program_enrollment_paperwork", "documents_reporting"]), 2)
+        self.assertEqual(int(freq.loc["transportation_mobility", "documents_reporting"]), 1)
+        self.assertEqual(int(freq.loc["debt_financial_breathing_room", "documents_reporting"]), 1)
+        addon_res = AtlasEngine(str(ADDONS_CODEBOOK)).process_corpus(
+            [str(TREATMENT_DOCX), str(CONTROL_DOCX)], root_dir=str(REPO))
+        addon_freq = addon_res["frequencies_df"].set_index("domain_id")
+        self.assertEqual(int(addon_freq.loc["program_enrollment_paperwork", "documents_reporting"]), 2)
 
 
 # ------------------------------------------------------------------------------
@@ -245,7 +261,7 @@ class EngineNotesMetadataTests(unittest.TestCase):
     def test_legacy_turns_store_empty_strings(self):
         sid = "software_test_legacy.txt"
         turns = [{"source_id": sid, "unit_id": sid, "document_name": sid, "speaker": "P1",
-                  "text": "The paperwork was long."}]
+                  "text": "The rent increased this month."}]
         quotes = AtlasEngine(str(GBI_CODEBOOK)).process_turns(turns, {sid: "0" * 64})["quotes_df"]
         self.assertEqual(len(quotes), 1)
         for col in NOTES_QUOTE_COLUMNS:
@@ -418,24 +434,24 @@ class GroupHelperTests(unittest.TestCase):
     def test_group_frequency_table(self):
         freq, quotes = self.results["frequencies_df"], self.results["quotes_df"]
         table = self.h["build_group_frequency_table"](freq, quotes, 2)
-        self.assertEqual(list(table.columns), GROUP_TABLE_COLUMNS)
+        display_cols = [c for c in table.columns if not c.startswith("_")]
+        self.assertEqual(display_cols, GROUP_TABLE_COLUMNS)
         self.assertEqual(len(table), len(freq))
-        row = table.set_index("Domain ID").loc["program_enrollment_paperwork"]
-        dq = quotes[quotes["domain_id"] == "program_enrollment_paperwork"]
-        self.assertEqual(int(row["Groups Reporting"]), 2)
-        self.assertEqual(int(row["Total Groups (G)"]), 2)
-        self.assertAlmostEqual(float(row["Group Share (%)"]), 100.0)
-        voices = {(s, p) for s, p in zip(dq["source_id"], dq["speaker"]) if p not in NON_VOICES}
-        self.assertEqual(int(row["Distinct Participant Voices"]), len(voices))
+        row = table.set_index("_domain_id").loc["transportation_mobility"]
+        dq = quotes[quotes["domain_id"] == "transportation_mobility"]
+        self.assertEqual(row["Focus Groups"], "1 of 2")
+        self.assertEqual(int(row["_groups_reporting"]), 1)
         self.assertEqual(int(row["Verbatim Quotes"]), int((dq["evidence_type"] == QUOTE).sum()))
         self.assertEqual(int(row["Paraphrased Key Points"]), int((dq["evidence_type"] == KP).sum()))
-        self.assertEqual(int(row["Matching Entries"]), len(dq))
+        self.assertEqual(int(row["Theme Matches"]), len(dq))
+        self.assertEqual(int(row["Verbatim Quotes"]) + int(row["Paraphrased Key Points"]), int(row["Theme Matches"]))
 
     def test_group_theme_matrix(self):
         freq, quotes, hashes = self.results["frequencies_df"], self.results["quotes_df"], self.results["file_hashes"]
         matrix = self.h["build_group_theme_matrix"](freq, quotes, hashes)
         self.assertEqual(len(matrix), len(freq) * 2)
-        for col in ("domain_name", "group_label", "present", "matching_entries", "distinct_voices", "cell_label"):
+        for col in ("domain_name", "group_label", "present", "matching_entries",
+                    "groups_reporting", "presence_label", "entries_label", "tile_state"):
             self.assertIn(col, matrix.columns)
         self.assertEqual(set(matrix["group_label"]),
                          {"software_test_gbi_group_treatment.docx", "software_test_gbi_group_control.docx"})
@@ -444,18 +460,18 @@ class GroupHelperTests(unittest.TestCase):
                 sid = TREATMENT_ID if "treatment" in r["group_label"] else CONTROL_ID
                 name_ids = freq.loc[freq["domain_name"] == r["domain_name"], "domain_id"]
                 dq = quotes[(quotes["domain_id"] == name_ids.iloc[0]) & (quotes["source_id"] == sid)]
-                voices = len({p for p in dq["speaker"] if p not in NON_VOICES})
                 self.assertEqual(int(r["matching_entries"]), len(dq))
-                self.assertEqual(int(r["distinct_voices"]), voices)
                 self.assertEqual(bool(r["present"]), len(dq) > 0)
-                self.assertEqual(r["cell_label"], f"{voices}v" if voices else ("✓" if len(dq) else "—"))
+                self.assertEqual(r["presence_label"], "✓" if len(dq) else "—")
+                self.assertEqual(r["entries_label"], str(len(dq)) if len(dq) else "—")
+                self.assertEqual(r["tile_state"], "present" if len(dq) else "none")
 
     def test_matrix_unknown_only_cell_is_checkmark(self):
         freq = pd.DataFrame([{"domain_id": "d1", "domain_name": "SOFTWARE_TEST D1"}])
         quotes = pd.DataFrame([{"domain_id": "d1", "source_id": "g/a.txt", "speaker": "Unknown",
                                 "evidence_type": "verbatim_turn"}])
         matrix = self.h["build_group_theme_matrix"](freq, quotes, {"g/a.txt": "0", "h/b.txt": "1"})
-        labels = dict(zip(matrix["group_label"], matrix["cell_label"]))
+        labels = dict(zip(matrix["group_label"], matrix["presence_label"]))
         self.assertEqual(labels, {"a.txt": "✓", "b.txt": "—"})
 
     def test_group_labels_disambiguate_shared_basenames(self):
@@ -468,8 +484,9 @@ class GroupHelperTests(unittest.TestCase):
         table = self.h["build_group_frequency_table"](freq, quotes, 2)
         text = self.h["describe_group_prevalence_chart"](table, 2)
         self.assertEqual(text, self.h["describe_group_prevalence_chart"](table, 2))
-        self.assertIn("2 of 2 focus groups", text)
+        self.assertIn("2 focus groups", text)
         self.assertNotIn("CI", text)
+        self.assertNotIn("participant voice", text.lower())
         matrix = self.h["build_group_theme_matrix"](freq, quotes, self.results["file_hashes"])
         mtext = self.h["describe_group_matrix_chart"](matrix, 2)
         self.assertEqual(mtext, self.h["describe_group_matrix_chart"](matrix, 2))
@@ -477,7 +494,7 @@ class GroupHelperTests(unittest.TestCase):
         self.assertIn("software_test_gbi_group_treatment.docx", mtext)
         empty = pd.DataFrame(columns=GROUP_TABLE_COLUMNS)
         self.assertEqual(self.h["describe_group_prevalence_chart"](empty, 2),
-                         "No domains defined in the active codebook.")
+                         "No themes selected.")
 
 
 # ------------------------------------------------------------------------------
@@ -521,7 +538,7 @@ def chart_frames(at, description):
 
 
 def run_analysis(at):
-    widget(at, "button", "▶ Run Analysis").click()
+    widget(at, "button", "Run Analysis").click()
     at.run()
     return at
 
@@ -535,16 +552,14 @@ def choose_corpus(at, needle, *, run=True):
 
 def upload(at, files, codebook=None, codebook_name=None):
     choose_corpus(at, "Upload", run=False)
-    if codebook_name is not None:
-        widget(at, "selectbox", "Active YAML Codebook").select(codebook_name)
-        at.run()
-    if codebook is not None:
-        widget(at, "selectbox", "Active YAML Codebook").select("Upload Custom Codebook (.yaml)")
-        at.run()
-    next(u for u in at.file_uploader if u.label.startswith("Upload Transcript")).set_value(files)
-    if codebook is not None:
-        next(u for u in at.file_uploader if u.label.startswith("Upload Custom Codebook")).set_value(
-            ("software_test_codebook.yaml", codebook, "application/x-yaml"))
+    tx_up = next(u for u in at.file_uploader if "txt" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+    tx_up.set_value(files)
+    cb_bytes = codebook
+    if cb_bytes is None and codebook_name is not None and codebook_name != "gbi_focus_group_starter.yaml":
+        cb_bytes = (REPO / "config" / codebook_name).read_bytes()
+    if cb_bytes is not None:
+        cb_up = next(u for u in at.file_uploader if "yaml" in {str(t).lstrip(".").lower() for t in (u.allowed_type or [])})
+        cb_up.set_value((codebook_name or "software_test_codebook.yaml", cb_bytes, "application/x-yaml"))
     at.run()
     return run_analysis(at)
 
@@ -580,40 +595,43 @@ class GroupModeAppTests(unittest.TestCase):
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL)
         self.assertEqual(list(widget(at, "radio", "Data Type").options), [DATA_TYPE_INDIVIDUAL, DATA_TYPE_GROUP])
         self.assertFalse(has_widget(at, "checkbox", "Include Note-Taker Observations"))
-        self.assertFalse(has_widget(at, "metric", "Analytical Units (N)"))
-        choose_corpus(at, "Bilingual")
-        self.assertTrue(has_widget(at, "metric", "Analytical Units (N)"))
+        self.assertFalse(has_widget(at, "metric", "Analytical Units"))
+        upload(at, [("software_test_bilingual_interview.txt",
+                     (SAMPLES / "software_test_bilingual_interview.txt").read_bytes(), "text/plain")])
+        self.assertTrue(has_widget(at, "metric", "Analytical Units"))
 
     def test_auto_selects_group_mode_and_codebook(self):
         at = self.at
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_GROUP)
-        self.assertEqual(widget(at, "selectbox", "Active YAML Codebook").value, "gbi_focus_group_starter.yaml")
+        self.assertTrue(any("Core Evaluation Themes (10 of 10)" in e.label for e in at.expander))
         self.assertFalse(widget(at, "checkbox", "Include Note-Taker Observations").value)
 
     def test_group_kpis_are_group_scoped(self):
         at, res = self.at, expected_results()
-        tagged = res["tagged_turns_df"]
-        voices = {(s, p) for s, p in zip(tagged["source_id"], tagged["speaker"]) if p not in NON_VOICES}
-        bare = {p for p in tagged["speaker"] if p not in NON_VOICES}
-        self.assertEqual(metric(at, "Focus Groups (G)"), 2)
-        self.assertEqual(metric(at, "Distinct Participant Voices"), len(voices))
-        self.assertGreater(len(voices), len(bare), "P1 in two groups must count as two voices")
-        self.assertEqual(metric(at, "Coded Notes Entries"), res["participant_turns_analyzed"])
-        self.assertEqual(metric(at, "Active Domains"), len(res["frequencies_df"]))
-        self.assertFalse(has_widget(at, "metric", "Analytical Units (N)"))
+        self.assertEqual(metric(at, "Focus Groups"), 2)
+        self.assertFalse(has_widget(at, "metric", "Distinct Participant Voices"))
+        self.assertEqual(metric(at, "Notes Entries Scanned"), res["participant_turns_analyzed"])
+        self.assertEqual(metric(at, "Theme Matches"), len(res["quotes_df"]))
+        n_found = int((res["frequencies_df"]["documents_reporting"] > 0).sum())
+        self.assertEqual(str(widget(at, "metric", "Themes Found").value), f"{n_found} of {len(res['frequencies_df'])}")
+        self.assertFalse(has_widget(at, "metric", "Analytical Units"))
 
     def test_group_charts_are_integer_and_summarised_literally(self):
         at, res = self.at, expected_results()
         table = self.helpers["build_group_frequency_table"](res["frequencies_df"], res["quotes_df"], 2)
-        matrix = self.helpers["build_group_theme_matrix"](res["frequencies_df"], res["quotes_df"], res["file_hashes"])
+        theme_order = list(table["Theme"].astype(str))
+        matrix = self.helpers["build_group_theme_matrix"](
+            res["frequencies_df"], res["quotes_df"], res["file_hashes"], theme_order=theme_order
+        )
         g_text = self.helpers["describe_group_prevalence_chart"](table, 2)
         m_text = self.helpers["describe_group_matrix_chart"](matrix, 2)
         specs = chart_specs(at)
         descriptions = [s.get("description", "") for s in specs]
-        self.assertIn(g_text, descriptions)
         self.assertIn(m_text, descriptions)
-        self.assertEqual(descriptions.count(g_text), 2, "Tab 1 and Tab 2 each draw the g-of-G chart")
+        self.assertIn(g_text, descriptions)
+        # Option A: Group x Theme Grid renders BEFORE the Notes Volume bar chart.
+        self.assertLess(descriptions.index(m_text), descriptions.index(g_text))
         summaries = [h.value for h in at.html if "atlas-chart-summary" in h.value]
         to_html = self.helpers["chart_summary_html"]
         self.assertIn(to_html(g_text), summaries)
@@ -622,17 +640,14 @@ class GroupModeAppTests(unittest.TestCase):
 
         g_spec = next(s for s in specs if s.get("description") == g_text)
         dumped = json.dumps(g_spec)
-        self.assertIn("Groups Reporting (out of 2 focus groups)", dumped)
-        self.assertIn('"values": [0, 1, 2]', dumped)
+        self.assertIn("Matched Notes Entries", dumped)
         self.assertIn('"format": "d"', dumped)
-        self.assertIn('"domain": [0, 2]', dumped)
         g_data = pd.concat(chart_frames(at, g_text))
-        expected_labels = {f"{g}/2" for g in table["Groups Reporting"]}
+        expected_labels = {f"{int(m)} ({int(g)}/2)" for m, g in zip(table["Theme Matches"], table["_groups_reporting"])}
         self.assertEqual(set(g_data["bar_label"]), expected_labels)
-        self.assertIn("2/2", expected_labels)
-        self.assertTrue(all(float(v).is_integer() for v in g_data["groups_reporting"]))
         m_data = pd.concat(chart_frames(at, m_text))
-        self.assertEqual(sorted(m_data["cell_label"]), sorted(matrix["cell_label"]))
+        self.assertIn("Groups", set(m_data["col_label"]))
+        self.assertTrue(set(m_data["tile_state"]) <= {"present", "none"})
         m_spec = next(s for s in specs if s.get("description") == m_text)
         self.assertIn('"rect"', json.dumps(m_spec))
         self.assertIn('"text"', json.dumps(m_spec))
@@ -640,7 +655,7 @@ class GroupModeAppTests(unittest.TestCase):
     def test_group_frequency_table_and_themes_reference(self):
         at = self.at
         tables = [f for f in frames(at) if list(f.columns) == GROUP_TABLE_COLUMNS]
-        self.assertEqual(len(tables), 2, "Tab 1 frequency table and Tab 2 group summary matrix")
+        self.assertEqual(len(tables), 1, "Tab 1 reconciled Group Summary table")
         expanders = [e.label for e in at.expander]
         self.assertIn(THEMES_EXPANDER, expanders)
         themes = expected_results()["note_taker_themes_df"]
@@ -651,16 +666,16 @@ class GroupModeAppTests(unittest.TestCase):
     def test_tab2_suppresses_binomial_se_and_ci(self):
         at = self.at
         for f in frames(at):
-            for col in ("binomial_se", "ci95_low_pct", "ci95_high_pct", "proportion"):
+            for col in ("binomial_se", "ci95_low_pct", "ci95_high_pct", "proportion_p"):
                 self.assertNotIn(col, f.columns)
         self.assertFalse([c.value for c in at.caption if "Whiskers show" in c.value])
-        self.assertFalse([c.value for c in at.caption if "binomial standard error SE" in c.value])
         self.assertTrue([i.value for i in at.info if "Binomial" in i.value and "hidden" in i.value
                          and "Group mode" in i.value])
-        self.assertNotIn("rule", json.dumps(chart_specs(at)))
+        self.assertNotIn('"rule"', json.dumps(chart_specs(at)))
         labels = {d.label for d in at.get("download_button")}
-        for name in ("actuarial_parameter_matrix.xlsx", "provenance_manifest.json", "verbatim_quotes_inventory.csv"):
-            self.assertTrue(any(name in label for label in labels), name)
+        for expected_btn in ("Download Full Report (.docx)", "Download Theme Frequencies (.xlsx)",
+                             "Download Direct Quotes (.csv)", "Download Provenance Manifest (.json)"):
+            self.assertTrue(any(expected_btn in label for label in labels), expected_btn)
         self.assertTrue([s.value for s in at.success if "Workbook integrity check passed" in s.value])
 
     def test_evidence_browser_filters_and_badges(self):
@@ -684,13 +699,17 @@ class GroupModeAppTests(unittest.TestCase):
         self.assertTrue(cards)
         self.assertFalse(any("Paraphrase (Key Point)" in c for c in cards))
 
+        widget(at, "checkbox", "Quotable Verbatim Only").uncheck()
+        at.run()
         group_box = widget(at, "selectbox", "Filter by group")
         group_box.select("software_test_gbi_group_control.docx")
         at.run()
         evidence = next(f for f in frames(at) if "evidence_type" in f.columns and "match_text" in f.columns)
         self.assertEqual(set(evidence["group_label"]), {"software_test_gbi_group_control.docx"})
 
-        widget(at, "text_input", "Search verbatim text").input("zzzz-no-such-text")
+        widget(at, "checkbox", "Quotable Verbatim Only").check()
+        at.run()
+        widget(at, "text_input", "Search theme matches").input("zzzz-no-such-text")
         at.run()
         self.assertTrue([i.value for i in at.info if "verbatim" in i.value.lower()])
 
@@ -701,8 +720,8 @@ class GroupModeAppTests(unittest.TestCase):
         run_analysis(at)
         assert_clean(self, at)
         res = expected_results((KP, QUOTE, OBS))
-        self.assertEqual(metric(at, "Coded Notes Entries"), res["participant_turns_analyzed"])
-        self.assertEqual(metric(at, "Focus Groups (G)"), 2)
+        self.assertEqual(metric(at, "Notes Entries Scanned"), res["participant_turns_analyzed"])
+        self.assertEqual(metric(at, "Focus Groups"), 2)
 
     def test_individual_override_on_structured_notes_keeps_guardrail(self):
         at = choose_corpus(boot(), "Multi-Group")
@@ -711,13 +730,12 @@ class GroupModeAppTests(unittest.TestCase):
         run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL)
-        self.assertTrue(has_widget(at, "metric", "Analytical Units (N)"))
+        self.assertTrue(has_widget(at, "metric", "Analytical Units"))
         # Notes are still one unit per focus-group file, so no binomial interval is shown.
-        self.assertEqual(metric(at, "Analytical Units (N)"), 2)
+        self.assertEqual(metric(at, "Analytical Units"), 2)
         for f in frames(at):
-            for col in ("binomial_se", "ci95_low_pct", "ci95_high_pct", "proportion"):
+            for col in ("binomial_se", "ci95_low_pct", "ci95_high_pct", "proportion_p"):
                 self.assertNotIn(col, f.columns)
-        self.assertFalse([c.value for c in at.caption if "Whiskers show" in c.value])
         self.assertNotIn('"rule"', json.dumps(chart_specs(at)))
         self.assertTrue([i.value for i in at.info if "structured focus-group notes" in i.value
                          and "hidden" in i.value])
@@ -727,14 +745,10 @@ class GroupModeAppTests(unittest.TestCase):
         cards = [m.value for m in at.markdown if '<div class="quote-box">' in m.value]
         self.assertTrue(any("Paraphrase (Key Point)" in c for c in cards))
         tab_labels = [t.label for t in at.tabs]
-        self.assertTrue(any("Coded Evidence & Provenance Browser" in lbl for lbl in tab_labels), tab_labels)
-        self.assertFalse(any("Verbatim Quote & Provenance Browser" in lbl for lbl in tab_labels), tab_labels)
+        self.assertIn("Coded Evidence", tab_labels)
         md_values = [m.value for m in at.markdown]
-        self.assertTrue(any("Coded evidence with source provenance" in m for m in md_values))
-        self.assertFalse(any("Verbatim evidence with line-level provenance" in m for m in md_values))
-        self.assertFalse(any("matched quotes shown" in m for m in md_values))
-        self.assertTrue(has_widget(at, "text_input", "Search coded entries"))
-        self.assertFalse(has_widget(at, "text_input", "Search verbatim text"))
+        self.assertTrue(any("Coded Evidence & Direct Quotes" in m for m in md_values))
+        self.assertTrue(has_widget(at, "text_input", "Search theme matches"))
         at.run()
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_INDIVIDUAL,
                          "a rerun on the same corpus keeps the manual choice")
@@ -742,49 +756,36 @@ class GroupModeAppTests(unittest.TestCase):
     def test_exports_offer_verbatim_only_and_labelled_coded_evidence(self):
         at = self.at
         labels = [d.label for d in at.get("download_button")]
-        self.assertTrue(any("coded_evidence_inventory.csv" in label for label in labels))
-        self.assertTrue(any("verbatim_quotes_inventory.csv" in label for label in labels))
+        self.assertTrue(any("All Coded Entries" in label for label in labels))
+        self.assertTrue(any("Download Direct Quotes (.csv)" in label for label in labels))
 
     def test_topic_medoids_are_labelled_by_evidence_type(self):
-        at, res = self.at, expected_results()
+        at = self.at
         self.assertFalse([c.value for c in at.caption if "real participant turn" in c.value])
-        topics = next(f for f in frames(at) if "medoid_text" in f.columns)
-        self.assertIn("medoid_evidence_type", topics.columns)
-        by_text = {}
-        for _, r in res["tagged_turns_df"].iterrows():
-            by_text.setdefault(r["text"], set()).add(r["evidence_type"])
-        for _, r in topics.iterrows():
-            with self.subTest(medoid=r["medoid_text"]):
-                self.assertIn(r["medoid_evidence_type"], by_text[r["medoid_text"]])
         topic_cards = [m.value for m in at.markdown if '<div class="quote-box topic-box">' in m.value
-                       and "Top terms" in m.value]
+                       and "Top keywords:" in m.value]
         self.assertTrue(topic_cards)
         self.assertTrue(all("atlas-evidence-badge" in c for c in topic_cards))
+        self.assertTrue(all("coverage-badge" in c for c in topic_cards))
 
 
 class IndividualModeAppTests(unittest.TestCase):
     def test_individual_tab2_keeps_binomial_se_and_ci(self):
-        at = choose_corpus(boot(), "Bilingual")
+        at = upload(boot(), [
+            ("software_test_survey.csv", SURVEY_CSV.read_bytes(), "text/csv"),
+        ], codebook_name="pfl_case_study_codebook.yaml")
         assert_clean(self, at)
         matrix = next(f for f in frames(at) if "binomial_se" in f.columns)
-        for col in ("ci95_low_pct", "ci95_high_pct", "n_units", "proportion"):
+        for col in ("ci95_low_pct", "ci95_high_pct", "total_documents", "proportion_p"):
             self.assertIn(col, matrix.columns)
-        self.assertTrue([c.value for c in at.caption if "Whiskers show" in c.value])
         self.assertFalse([i.value for i in at.info if "Group mode" in i.value])
         self.assertFalse([i.value for i in at.info if "structured focus-group notes" in i.value])
         self.assertFalse(any(list(f.columns) == GROUP_TABLE_COLUMNS for f in frames(at)))
-        self.assertTrue(any("Verbatim Quote & Provenance Browser" in t.label for t in at.tabs))
-        self.assertTrue(any("Verbatim evidence with line-level provenance" in m.value for m in at.markdown))
-        # A verbatim-only Individual corpus with matches keeps verbatim search/count wording.
-        at_docx = choose_corpus(boot(), "Teams")
-        assert_clean(self, at_docx)
-        self.assertTrue(has_widget(at_docx, "text_input", "Search verbatim text"))
-        self.assertTrue(any("matched quotes shown" in m.value for m in at_docx.markdown))
-        self.assertTrue([c.value for c in at.caption if "real participant turn" in c.value])
-        topics = next(f for f in frames(at) if "medoid_text" in f.columns)
-        self.assertNotIn("medoid_evidence_type", topics.columns)
+        self.assertIn("Coded Evidence", [t.label for t in at.tabs])
+        self.assertTrue(any("Coded Evidence & Direct Quotes" in m.value for m in at.markdown))
+        self.assertTrue(has_widget(at, "text_input", "Search theme matches"))
         labels = [d.label for d in at.get("download_button")]
-        self.assertFalse(any("coded_evidence_inventory" in label for label in labels))
+        self.assertFalse(any("All Coded Entries" in label for label in labels))
 
 
 class UploadDetectionAppTests(unittest.TestCase):
@@ -794,8 +795,8 @@ class UploadDetectionAppTests(unittest.TestCase):
         at = upload(boot(), files)
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_GROUP)
-        self.assertEqual(metric(at, "Focus Groups (G)"), 2)
-        self.assertEqual(metric(at, "Distinct Participant Voices"), 3)
+        self.assertEqual(metric(at, "Focus Groups"), 2)
+        self.assertFalse(has_widget(at, "metric", "Distinct Participant Voices"))
 
     def test_plain_txt_defaults_individual_and_can_override_to_group(self):
         files = [("software_test_room_a.txt", UPLOAD_TXT_A, "text/plain"),
@@ -808,11 +809,9 @@ class UploadDetectionAppTests(unittest.TestCase):
         run_analysis(at)
         assert_clean(self, at)
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_GROUP)
-        self.assertEqual(metric(at, "Focus Groups (G)"), 2)
+        self.assertEqual(metric(at, "Focus Groups"), 2)
         self.assertFalse(any("binomial_se" in f.columns for f in frames(at)))
         self.assertTrue([i.value for i in at.info if "Group mode" in i.value])
-        cards = [m.value for m in at.markdown if '<div class="quote-box">' in m.value]
-        self.assertTrue(cards and all("Transcript / Survey" in c for c in cards))
 
     def test_corrupt_docx_upload_does_not_crash_detection(self):
         files = [("software_test_corrupt.docx", b"PK\x03\x04 not really a docx", "application/octet-stream")]
@@ -828,7 +827,7 @@ class UploadDetectionAppTests(unittest.TestCase):
         self.assertEqual(widget(at, "radio", "Data Type").value, DATA_TYPE_GROUP)
         specs = chart_specs(at)
         summaries = [h.value for h in at.html if "atlas-chart-summary" in h.value]
-        self.assertGreaterEqual(len(summaries), 3)
+        self.assertGreaterEqual(len(summaries), 2)
         to_html = load_app_helpers("chart_summary_html")["chart_summary_html"]
         descriptions = [s.get("description", "") for s in specs]
         for markup in summaries:
@@ -896,21 +895,20 @@ class GroupBySourceEngineTests(unittest.TestCase):
 
 class GroupBySourceAppTests(unittest.TestCase):
     def test_sample_csv_in_group_mode_is_one_group(self):
-        at = choose_corpus(boot(), "Community Health Survey")
+        at = upload(boot(), [("software_test_survey.csv", SURVEY_CSV.read_bytes(), "text/csv")])
         widget(at, "radio", "Data Type").set_value(DATA_TYPE_GROUP)
         at.run()
         run_analysis(at)
         assert_clean(self, at)
-        self.assertEqual(metric(at, "Focus Groups (G)"), 1)
+        self.assertEqual(metric(at, "Focus Groups"), 1)
         tables = [f for f in frames(at) if list(f.columns) == GROUP_TABLE_COLUMNS]
         self.assertTrue(tables)
         for t in tables:
-            self.assertEqual(set(t["Total Groups (G)"]), {1})
-            self.assertLessEqual(int(t["Groups Reporting"].max()), 1)
-        specs = [s for s in chart_specs(at) if "Tile matrix" in s.get("description", "")]
+            self.assertTrue(all(str(v).endswith("of 1") for v in t["Focus Groups"]))
+        specs = [s for s in chart_specs(at) if "Focus-group grid" in s.get("description", "")]
         self.assertTrue(specs)
-        self.assertIn("by 1 focus group.", specs[0]["description"])
-        self.assertTrue([s for s in chart_specs(at) if "out of 1 focus group." in s.get("description", "")])
+        self.assertIn("across 1 focus group.", specs[0]["description"])
+        self.assertTrue([s for s in chart_specs(at) if "across 1 focus group." in s.get("description", "")])
 
     def test_two_csv_upload_in_group_mode_is_two_groups(self):
         files = [("software_test_room_a.csv", UPLOAD_CSV_A, "text/csv"),
@@ -920,15 +918,14 @@ class GroupBySourceAppTests(unittest.TestCase):
         at.run()
         run_analysis(at)
         assert_clean(self, at)
-        self.assertEqual(metric(at, "Focus Groups (G)"), 2)
+        self.assertEqual(metric(at, "Focus Groups"), 2)
         for t in [f for f in frames(at) if list(f.columns) == GROUP_TABLE_COLUMNS]:
-            self.assertEqual(set(t["Total Groups (G)"]), {2})
-            self.assertLessEqual(int(t["Groups Reporting"].max()), 2)
+            self.assertTrue(all(str(v).endswith("of 2") for v in t["Focus Groups"]))
 
     def test_individual_mode_csv_keeps_row_level_units(self):
-        at = choose_corpus(boot(), "Community Health Survey")
+        at = upload(boot(), [("software_test_survey.csv", SURVEY_CSV.read_bytes(), "text/csv")])
         assert_clean(self, at)
-        self.assertGreater(metric(at, "Analytical Units (N)"), 1)
+        self.assertGreater(metric(at, "Analytical Units"), 1)
 
 
 class MixedEvidenceLabelTests(unittest.TestCase):
@@ -941,27 +938,21 @@ class MixedEvidenceLabelTests(unittest.TestCase):
     def test_unchecked_mixed_evidence_has_no_verbatim_labels(self):
         at = choose_corpus(boot(), "Multi-Group")
         assert_clean(self, at)
-        self.assertTrue(has_widget(at, "text_input", "Search coded entries"))
-        self.assertFalse(has_widget(at, "text_input", "Search verbatim text"))
+        self.assertTrue(has_widget(at, "text_input", "Search theme matches"))
         text = self._all_text(at)
-        self.assertIn("Coded evidence with source provenance", text)
-        self.assertNotIn("Verbatim evidence with line-level provenance", text)
-        self.assertNotIn("Verbatim entry", text)
-        self.assertIn("coded entries shown (includes paraphrases/observations; check 'Quotable Verbatim Only' "
-                      "for direct quotes)", text)
+        self.assertIn("Coded Evidence & Direct Quotes", text)
+        self.assertIn("check 'Quotable Verbatim Only' for direct quotes", text)
+        self.assertNotIn("(direct verbatim quotes only)", text)
 
-    def test_tab_label_follows_evidence_shown(self):
+    def test_tab_label_is_clean_without_icons(self):
         at = choose_corpus(boot(), "Multi-Group")
         labels = [t.label for t in at.tabs]
-        self.assertIn("💬 Coded Evidence & Provenance Browser", labels)
-        self.assertNotIn("💬 Verbatim Quote & Provenance Browser", labels)
-        widget(at, "checkbox", "Quotable Verbatim Only").check()
-        at.run()
-        labels = [t.label for t in at.tabs]
-        self.assertIn("💬 Verbatim Quote & Provenance Browser", labels)
-        self.assertNotIn("💬 Coded Evidence & Provenance Browser", labels)
-        at = choose_corpus(boot(), "Community Health Survey")
-        self.assertIn("💬 Verbatim Quote & Provenance Browser", [t.label for t in at.tabs])
+        self.assertIn("Coded Evidence", labels)
+        self.assertIn("Discover Unlisted Themes", labels)
+        self.assertIn("Spot-Check Matches", labels)
+        for lbl in labels:
+            self.assertNotIn("💬", lbl)
+            self.assertNotIn("🔍", lbl)
 
     def test_verbatim_only_keeps_transcript_and_survey_turns_in_group_mode(self):
         files = [("software_test_room_a.txt", UPLOAD_TXT_A, "text/plain"),
@@ -983,18 +974,18 @@ class MixedEvidenceLabelTests(unittest.TestCase):
         widget(at, "checkbox", "Quotable Verbatim Only").check()
         at.run()
         assert_clean(self, at)
-        self.assertTrue(has_widget(at, "text_input", "Search verbatim text"))
+        self.assertTrue(has_widget(at, "text_input", "Search theme matches"))
         text = self._all_text(at)
-        self.assertIn("Verbatim evidence with line-level provenance", text)
-        self.assertNotIn("Coded evidence with source provenance", text)
+        self.assertIn("(direct verbatim quotes only)", text)
         evidence = next(f for f in frames(at) if "evidence_type" in f.columns and "match_text" in f.columns)
         self.assertEqual(set(evidence["evidence_type"]), {QUOTE})
 
     def test_individual_mode_labels_unchanged(self):
-        at = choose_corpus(boot(), "Community Health Survey")
-        self.assertTrue(has_widget(at, "text_input", "Search verbatim text"))
+        at = upload(boot(), [("software_test_survey.csv", SURVEY_CSV.read_bytes(), "text/csv")],
+                    codebook_name="pfl_case_study_codebook.yaml")
+        self.assertTrue(has_widget(at, "text_input", "Search theme matches"))
         text = self._all_text(at)
-        self.assertIn("Verbatim evidence with line-level provenance", text)
+        self.assertIn("Coded Evidence & Direct Quotes", text)
 
 
 def _spec_colours(spec):
@@ -1008,9 +999,9 @@ class GroupChartContrastTests(unittest.TestCase):
 
     def test_group_charts_use_coordinated_light_surface(self):
         specs = [s for s in chart_specs(self.at)
-                 if "Horizontal bar chart of focus groups" in s.get("description", "")
-                 or "Tile matrix" in s.get("description", "")]
-        self.assertEqual(len(specs), 3, "Tab 1 bars + tiles, Tab 2 bars")
+                 if "Horizontal bar chart of matched notes entries" in s.get("description", "")
+                 or "Focus-group grid" in s.get("description", "")]
+        self.assertEqual(len(specs), 2, "Tab 1 Group Grid + Notes Volume bars")
         for spec in specs:
             cfg = spec.get("config", {})
             self.assertEqual(cfg.get("background"), "#FFFFFF")
@@ -1025,7 +1016,7 @@ class GroupChartContrastTests(unittest.TestCase):
 
     def test_group_bar_marks_meet_non_text_and_text_contrast(self):
         spec = next(s for s in chart_specs(self.at)
-                    if "Horizontal bar chart of focus groups" in s.get("description", ""))
+                    if "Horizontal bar chart of matched notes entries" in s.get("description", ""))
         dumped = json.dumps(spec)
         self.assertIn("#1E3A8A", dumped)
         self.assertIn("#0F172A", dumped)
@@ -1038,14 +1029,16 @@ class GroupChartContrastTests(unittest.TestCase):
         h = load_app_helpers()
         for fill, text in h["GROUP_TILE_COLOURS"].values():
             self.assertGreaterEqual(contrast(text, fill), 4.5)
-        spec = next(s for s in chart_specs(self.at) if "Tile matrix" in s.get("description", ""))
+        spec = next(s for s in chart_specs(self.at) if "Focus-group grid" in s.get("description", ""))
         dumped = json.dumps(spec)
         for fill, text in h["GROUP_TILE_COLOURS"].values():
             self.assertIn(fill, dumped)
             self.assertIn(text, dumped)
 
     def test_individual_chart_also_on_light_surface(self):
-        at = choose_corpus(boot(), "Bilingual")
+        at = upload(boot(), [
+            ("software_test_bilingual_interview.txt", (SAMPLES / "software_test_bilingual_interview.txt").read_bytes(), "text/plain"),
+        ], codebook_name="pfl_case_study_codebook.yaml")
         spec = next(s for s in chart_specs(at) if s.get("mark") or s.get("layer"))
         self.assertEqual(spec.get("config", {}).get("background"), "#FFFFFF")
 

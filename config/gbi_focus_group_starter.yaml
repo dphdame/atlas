@@ -1,25 +1,28 @@
-# ATLAS Starter Codebook: Guaranteed Basic Income & Cash-Assistance Focus Groups
-# Generic, public-safe starter domains for coding focus-group notes about recurring
-# cash assistance. Roots are word-start prefixes ("evict" also matches "eviction").
-# Exclusion fences with exclude_window: 0 drop only a root occurrence that shares a
-# token with the fence ("car" inside "card", "bill" inside "billion"); the rest of
-# the turn is still coded. Adapt roots and fences to each study before use.
-project: "Guaranteed Basic Income Focus Groups (Starter Codebook)"
-version: "1.0"
+# ATLAS Core Evaluation Themes: Social-Policy & Guaranteed Basic Income Starter
+# Generic, public-safe starter domains aligned to the 10 core safety-net / GBI
+# outcome areas. Roots are word-start prefixes ("evict" also matches "eviction"),
+# paired with explicit complete-word forms so opt-in spelling tolerance works
+# cleanly under distance-1 whole-token matching. Exclusion fences with
+# exclude_window: 0 drop only a root occurrence sharing a token with the fence.
+project: "Core Evaluation Themes (Social Policy & GBI)"
+version: "2.0"
 
 domains:
   - id: "housing_rent_stability"
     name: "Housing & Rent Stability"
-    description: "Paying rent, keeping housing, deposits, moves, eviction risk and landlord relations"
+    description: "Paying rent, keeping housing, deposits, moves, eviction risk, shelter and landlord relations"
     roots_en:
       - "rent"
       - "housing"
       - "landlord"
       - "evict"
+      - "eviction"
       - "mortgage"
       - "security deposit"
       - "apartment"
       - "homeless"
+      - "shelter"
+      - "lease"
       - "utilities"
     exclude_fences:
       - "parent"
@@ -27,16 +30,22 @@ domains:
       - "current"
       - "currently"
       - "different"
+      - "rental car"
+      - "car rental"
     exclude_window: 0
 
   - id: "food_groceries_basic_needs"
-    name: "Food, Groceries & Basic Needs"
-    description: "Buying groceries and meals, food pantries, diapers, clothing and household essentials"
+    name: "Food Security & Basic Needs"
+    description: "Buying groceries and meals, food pantries, hunger, diapers, clothing and household essentials"
     roots_en:
       - "food"
       - "grocer"
+      - "groceries"
+      - "grocery"
       - "meal"
       - "pantry"
+      - "hungry"
+      - "hunger"
       - "diaper"
       - "clothes"
       - "clothing"
@@ -48,8 +57,8 @@ domains:
     exclude_window: 0
 
   - id: "debt_financial_breathing_room"
-    name: "Debt, Bills & Financial Cushion"
-    description: "Paying bills and debts, late fees, savings, emergency funds and a financial cushion"
+    name: "Financial Stability, Bills & Debt"
+    description: "Paying bills and debts, late fees, budgeting, savings, emergency funds and a financial cushion"
     roots_en:
       - "bill"
       - "debt"
@@ -57,6 +66,9 @@ domains:
       - "late fee"
       - "overdraft"
       - "saving"
+      - "savings"
+      - "budget"
+      - "income"
       - "emergency fund"
       - "cushion"
       - "breathing room"
@@ -67,38 +79,70 @@ domains:
       - "billboard"
       - "debtor"
       - "debtors"
+      - "incoming"
     exclude_window: 0
 
-  - id: "employment_education_career"
-    name: "Employment, Education & Career Goals"
-    description: "Work hours, job search, training, school, certificates and longer-term career plans"
+  - id: "employment_work"
+    name: "Employment"
+    description: "Work hours, job search, wages, paychecks, interviews, employers and business plans"
     roots_en:
       - "job"
       - "employ"
+      - "employment"
       - "career"
+      - "wage"
+      - "salary"
       - "shift"
       - "hours at work"
       - "paycheck"
+      - "interview"
+      - "employer"
+      - "business"
+    exclude_fences:
+      - "busy"
+    exclude_window: 0
+
+  - id: "education_training"
+    name: "Education & Training"
+    description: "School, college, classes, training programs, certificates, diplomas, degrees and tutoring"
+    roots_en:
       - "school"
+      - "college"
+      - "university"
       - "class"
       - "training"
       - "certificate"
+      - "certification"
       - "degree"
-      - "business"
+      - "diploma"
+      - "ged"
+      - "education"
+      - "educacion"
+      - "tutor"
+      - "graduate"
+    exclude_fences:
+      - "classic"
+      - "classical"
+      - "classify"
+      - "classification"
+      - "subclass"
+    exclude_window: 0
 
   - id: "transportation_mobility"
     name: "Transportation & Mobility"
-    description: "Cars, repairs, gas, transit fares, rides and trips to offices or appointments"
+    description: "Cars, repairs, gas, transit fares, rides, licenses and trips to offices or appointments"
     roots_en:
       - "car"
       - "bus"
       - "transit"
+      - "transportation"
       - "gas"
       - "ride"
       - "commute"
       - "parking"
       - "trip"
       - "repair"
+      - "license"
     exclude_fences:
       - "card"
       - "cards"
@@ -115,8 +159,8 @@ domains:
     exclude_window: 0
 
   - id: "family_caregiving_wellbeing"
-    name: "Family, Childcare & Caregiving"
-    description: "Children, childcare costs, caring for relatives and time with family"
+    name: "Childcare & Parenting"
+    description: "Children, childcare costs, daycare, caring for relatives and time with family"
     roots_en:
       - "childcare"
       - "child care"
@@ -130,15 +174,49 @@ domains:
       - "parent"
     exclude_fences:
       - "kidney"
+      - "kidding"
+      - "kidded"
+      - "kidnap"
+      - "kidnapped"
+    exclude_window: 0
+
+  - id: "healthcare_medical"
+    name: "Healthcare"
+    description: "Doctors, medical visits, clinics, hospitals, insurance, prescriptions, dental and vision care"
+    roots_en:
+      - "doctor"
+      - "medical"
+      - "medicine"
+      - "medication"
+      - "hospital"
+      - "clinic"
+      - "healthcare"
+      - "health care"
+      - "insurance"
+      - "prescription"
+      - "dental"
+      - "dentist"
+      - "vision"
+      - "glasses"
+      - "illness"
+      - "treatment"
+    exclude_fences:
+      - "vision board"
     exclude_window: 0
 
   - id: "stress_relief_mental_health"
-    name: "Stress Relief, Autonomy & Mental Health"
-    description: "Stress, worry, sleep, relief, frustration, dignity and the freedom to choose how to spend"
+    name: "Mental Health & Stress Relief"
+    description: "Stress, anxiety, depression, counseling, sleep, relief, dignity and peace of mind"
     roots_en:
       - "stress"
       - "anxi"
+      - "anxiety"
       - "worr"
+      - "depression"
+      - "depressed"
+      - "therapy"
+      - "therapist"
+      - "counseling"
       - "sleep"
       - "relief"
       - "relieved"
@@ -149,26 +227,28 @@ domains:
       - "freedom"
       - "autonomy"
 
-  - id: "program_enrollment_paperwork"
-    name: "Program Enrollment, Paperwork & Communication"
-    description: "Enrollment forms, proof of income, office visits, waiting for approval, callbacks and reminders"
+  - id: "legal_justice"
+    name: "Legal & Justice"
+    description: "Courts, probation, parole, arrests, legal aid, expungement and background checks"
     roots_en:
-      - "paperwork"
-      - "form"
-      - "proof of income"
-      - "enroll"
-      - "application"
-      - "office"
-      - "approv"
-      - "callback"
-      - "call"
-      - "waiting"
-      - "checklist"
-      - "reminder"
-      - "mailbox"
+      - "court"
+      - "probation"
+      - "parole"
+      - "criminal"
+      - "arrest"
+      - "incarcerat"
+      - "prison"
+      - "jail"
+      - "conviction"
+      - "legal"
+      - "lawyer"
+      - "attorney"
+      - "expunge"
+      - "background check"
+      - "justice"
     exclude_fences:
-      - "format"
-      - "formal"
-      - "former"
-      - "formula"
+      - "courtyard"
+      - "courtesy"
+      - "courtship"
+      - "courteous"
     exclude_window: 0
