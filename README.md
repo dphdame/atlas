@@ -3,6 +3,8 @@
 
 **Python 3.10+ · MIT License · local processing · SHA-256 source provenance**
 
+**Companion article:** [From Spoken Words to Countable Data: Meet ATLAS](https://tooearlytosay.com/research/methodology/from-spoken-words-to-countable-data-meet-atlas/) on [Too Early To Say](https://tooearlytosay.com)
+
 ---
 
 ## Overview
