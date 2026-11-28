@@ -1,0 +1,104 @@
+{
+  "figure_name": "atlas_concept_01_workflow",
+  "surface": "report_figure",
+  "sha256": "e35c9efb469bfaed6b2468c38e5eea39e6f4ae4a46784aada50686c77c9c9aa9",
+  "canvas_w_px": 1980,
+  "canvas_h_px": 945,
+  "target_w_in": 6.5,
+  "min_font_px": 45.0,
+  "min_text_contrast": 7.0,
+  "containment_errors": 0,
+  "collision_errors": 0,
+  "text_elements": [
+    {
+      "role": "banner",
+      "panel_id": "panel_1",
+      "text": "How ATLAS Turns Notes Into Theme Counts",
+      "font_px": 57.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "100% Offline",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "STEP 1",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Upload Files",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Load Word notes, transcripts, or Excel sheets",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "STEP 2",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Pick Themes",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Check starter lists, upload rules, or add topics",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "STEP 3",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Spot-Check",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Review flagged words and drop false hits",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "STEP 4",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Export",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Save Word reports, Excel tables, and quotes",
+      "font_px": 45.0
+    },
+    {
+      "role": "source",
+      "panel_id": "panel_1",
+      "text": "Files stay on your computer; repeat runs produce identical counts",
+      "font_px": 45.0
+    }
+  ]
+}

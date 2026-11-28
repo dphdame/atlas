@@ -1,0 +1,104 @@
+{
+  "figure_name": "atlas_concept_03_audit_trail",
+  "surface": "report_figure",
+  "sha256": "55667fe01912cbdfe72165a30ee8f388eb7e8adda5121a1d1e5b9c879fe97c5b",
+  "canvas_w_px": 1980,
+  "canvas_h_px": 975,
+  "target_w_in": 6.5,
+  "min_font_px": 45.0,
+  "min_text_contrast": 7.0,
+  "containment_errors": 0,
+  "collision_errors": 0,
+  "text_elements": [
+    {
+      "role": "banner",
+      "panel_id": "panel_1",
+      "text": "How Every Count Traces to Its Source Line",
+      "font_px": 57.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "Audit Trail",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "1. SOURCE",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Exact Line",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Tracks file name, line number, speaker, and word span",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "2. COUNTS",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Tables",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Tallies groups and entries in Word and Excel",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "3. STAMP",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "SHA-256",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Locks input file hashes in the JSON manifest",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "4. RULES",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "YAML File",
+      "font_px": 48.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Archive rules to repeat exact counts later",
+      "font_px": 45.0
+    },
+    {
+      "role": "source",
+      "panel_id": "panel_1",
+      "text": "SHA-256 = 256-bit digital fingerprint; JSON/YAML = plain-text record files",
+      "font_px": 45.0
+    }
+  ]
+}

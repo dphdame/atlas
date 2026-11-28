@@ -586,10 +586,17 @@ FIGURE_ALT_KEYWORDS = {
     "atlas_labor_market_distribution.png": ("bar chart", "prevalence", "standard error"),
     "atlas_audit_bridge.png": ("audit bridge", "SHA-256", "verify_workbook_integrity"),
     "atlas_dashboard_ui_walkthrough.png": ("workbench", "sidebar", "KPI"),
+    "atlas_concept_01_workflow.png": ("workflow", "upload", "spot-check"),
+    "atlas_concept_02_rules_and_blocks.png": ("keyword", "look-alike", "spot-check"),
+    "atlas_concept_03_audit_trail.png": ("SHA-256", "JSON", "YAML"),
+    "atlas_screen_01_setup_libraries.png": ("screenshot", "input files", "upload custom themes"),
+    "atlas_screen_02_grid_and_kpis.png": ("screenshot", "headline", "grid"),
+    "atlas_screen_03_discover_add_topic.png": ("screenshot", "discover", "active themes"),
+    "atlas_screen_04_spotcheck.png": ("screenshot", "spot-check", "flagged"),
 }
 EMBED_COUNTS = {
     "README.md": 5,
-    "docs/ATLAS_User_Guide.md": 4,
+    "docs/ATLAS_User_Guide.md": 7,
     "docs/ATLAS_Methodology_and_Reference_Manual.md": 5,
     "docs/ATLAS_Practitioner_Field_Guide_Program_Evaluation.md": 1,
 }
@@ -650,7 +657,7 @@ class ADAAccessibilityTests(unittest.TestCase):
 
     # ---- WCAG 1.1.1: alt text on every static figure embed -------------------------
     def test_all_fifteen_figure_embeds_have_descriptive_alt_text(self):
-        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]*figures/(atlas_[a-z_]+\.png))\)")
+        pattern = re.compile(r"!\[([^\]]*)\]\(([^)]*figures/(atlas_[a-z0-9_]+\.png))\)")
         total = 0
         for rel, expected in EMBED_COUNTS.items():
             embeds = pattern.findall((REPO / rel).read_text(encoding="utf-8"))
@@ -658,7 +665,7 @@ class ADAAccessibilityTests(unittest.TestCase):
             total += len(embeds)
             for alt_text, _, name in embeds:
                 with self.subTest(doc=rel, figure=name):
-                    self.assertIn(name, FIGURE_WIDTHS)
+                    self.assertIn(name, FIGURE_ALT_KEYWORDS)
                     self.assertGreaterEqual(len(alt_text.split()), 12, f"alt text too short: {alt_text!r}")
                     self.assertLessEqual(len(re.findall(r"[.!?](\s|$)", alt_text)), 1, f"multi-sentence: {alt_text!r}")
                     self.assertIsNone(re.search(r"2,?500", alt_text), alt_text)
@@ -666,7 +673,7 @@ class ADAAccessibilityTests(unittest.TestCase):
                         self.assertNotIn(word, alt_text.lower())
                     for keyword in FIGURE_ALT_KEYWORDS[name]:
                         self.assertIn(keyword.lower(), alt_text.lower(), f"{name} alt text must mention {keyword!r}")
-        self.assertEqual(total, 15)
+        self.assertEqual(total, sum(EMBED_COUNTS.values()))
 
     # ---- Figure markup: width, font floors, contrast --------------------------------
     def test_figure_canvas_widths_fit_the_github_column(self):

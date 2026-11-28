@@ -58,7 +58,7 @@ from atlas_engine import (
     tighten_codebook_domain,
     verbatim_only as verbatim_rows,
 )
-from atlas_report import build_summary_report_docx
+from atlas_report import _disambiguate_theme_labels, build_summary_report_docx
 from universal_transcript_parser import (
     TABULAR_EXTENSIONS,
     TRANSCRIPT_EXTENSIONS,
@@ -418,22 +418,26 @@ def build_group_frequency_table(freq, quotes, total_groups, *, include_observati
         and (quotes["evidence_type"].astype(str) == "observation").any()
     )
     cols = GROUP_TABLE_COLUMNS_WITH_OBS if has_obs else GROUP_TABLE_COLUMNS
+    freq_label_map = _disambiguate_theme_labels(
+        [(str(r["domain_id"]), str(r["domain_name"])) for _, r in freq.iterrows()]
+    ) if len(freq) else {}
     rows = []
     for _, r in freq.iterrows():
-        dq = quotes[quotes["domain_id"].astype(str) == str(r["domain_id"])] if len(quotes) else quotes
+        did = str(r["domain_id"])
+        dq = quotes[quotes["domain_id"].astype(str) == did] if len(quotes) else quotes
         evidence = dq["evidence_type"].astype(str) if (len(dq) and "evidence_type" in dq.columns) else pd.Series(dtype=str)
         n_verbatim = int(len(verbatim_rows(dq))) if len(dq) else 0
         n_paraphrase = int((evidence == "key_point_paraphrase").sum()) if len(dq) else 0
         n_obs = int((evidence == "observation").sum()) if len(dq) else 0
         g_rep = int(r["documents_reporting"])
         row = {
-            "Theme": str(r["domain_name"]),
+            "Theme": freq_label_map.get(did, str(r["domain_name"])),
             "Focus Groups": f"{g_rep} of {int(total_groups)}",
             "Theme Matches": int(len(dq)),
             "Verbatim Quotes": n_verbatim,
             "Paraphrased Key Points": n_paraphrase,
             "_groups_reporting": g_rep,
-            "_domain_id": str(r["domain_id"]),
+            "_domain_id": did,
         }
         if has_obs:
             row["Note-Taker Observations"] = n_obs
@@ -484,12 +488,12 @@ def build_group_theme_matrix(freq, quotes, file_hashes, *, theme_order=None):
     else:
         ordered_ids = all_ids
 
-    name_counts: dict[str, int] = {}
-    for did in ordered_ids:
-        r = freq_by_id.get(did)
-        if r is not None:
-            dn = str(r["domain_name"])
-            name_counts[dn] = name_counts.get(dn, 0) + 1
+    ordered_pairs = [
+        (did, str(freq_by_id[did]["domain_name"]))
+        for did in ordered_ids
+        if did in freq_by_id
+    ]
+    matrix_label_map = _disambiguate_theme_labels(ordered_pairs)
 
     rows = []
     for did in ordered_ids:
@@ -497,7 +501,7 @@ def build_group_theme_matrix(freq, quotes, file_hashes, *, theme_order=None):
         if r is None:
             continue
         name = str(r["domain_name"])
-        theme_label = f"{name} ({did})" if name_counts.get(name, 0) > 1 else name
+        theme_label = matrix_label_map.get(did, name)
         dq = quotes[quotes["domain_id"].astype(str) == did] if len(quotes) else quotes
         if "documents_reporting" in r and pd.notna(r["documents_reporting"]):
             g_rep = int(r["documents_reporting"])
@@ -2197,7 +2201,7 @@ discovery_overlap = compute_topic_codebook_overlap(discovery, turn_records, doma
 full_report_docx = build_summary_report_docx(
     results,
     group_mode=group_mode,
-    group_table=group_table[[c for c in group_table.columns if not c.startswith("_")]] if group_table is not None else None,
+    group_table=group_table,
     group_matrix=group_matrix,
     discovery=discovery,
     discovery_overlap=discovery_overlap,

@@ -787,12 +787,15 @@ class FullSummaryReportDocxReconciliationTests(unittest.TestCase):
             table_text = "\n".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
             full_text = para_text + "\n" + table_text
             self.assertIn("SOFTWARE_TEST FIXTURE", full_text)
-            self.assertIn("1. Run Overview & Source Provenance", para_text)
-            self.assertIn("7. Excluded Questions & Session Headers (Not Coded)", para_text)
+            self.assertIn("1. Summary at a Glance", para_text)
+            self.assertIn("Technical and Audit Appendix", para_text)
+            self.assertIn("Appendix D. Skipped Questions and Session Headers", para_text)
             self.assertNotIn("response rate", full_text.lower())
+            self.assertGreaterEqual(len(doc.inline_shapes), 1, "Expected embedded Theme Summary bar chart PNG")
+            self.assertAlmostEqual(doc.sections[0].left_margin.inches, 0.9, places=2)
 
-            # Verify KPI table matches engine exactly.
-            kpi_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells] == ["Metric", "Value", "Definition"])
+            # Verify Headline Counts table matches engine exactly.
+            kpi_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells] == ["Metric", "Value", "What It Counts"])
             kpi_map = {row.cells[0].text.strip(): row.cells[1].text.strip() for row in kpi_tbl.rows[1:]}
             self.assertEqual(kpi_map["Focus Groups"], "2")
             self.assertEqual(kpi_map["Theme Matches"], str(len(res["quotes_df"])))
@@ -807,10 +810,10 @@ class FullSummaryReportDocxReconciliationTests(unittest.TestCase):
             doc_matches_sum = sum(int(r.cells[2].text.strip()) for r in summary_tbl_doc.rows[1:])
             self.assertEqual(doc_matches_sum, len(res["quotes_df"]))
 
-            # Verify Excluded Questions audit table captured Q2: row.
+            # Verify Excluded Questions audit table captured Q2: row with plain-English reason.
             excl_tbl_doc = next(
                 t for t in doc.tables
-                if [c.text.strip() for c in t.rows[0].cells] == ["Source File", "Location", "Exclusion Reason", "Excluded Text"]
+                if [c.text.strip() for c in t.rows[0].cells] == ["Source Group", "Location", "Why Skipped", "Skipped Text"]
             )
             self.assertTrue(any("What changed?" in r.cells[-1].text for r in excl_tbl_doc.rows[1:]))
 
@@ -859,7 +862,7 @@ class FullSummaryReportDocxReconciliationTests(unittest.TestCase):
             self.assertNotIn("response rate", full_text.lower())
             self.assertIn("2 written answers scanned (1 rows left this question blank)", full_text)
             self.assertIn("gorceries", full_text)
-            kpi_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells] == ["Metric", "Value", "Definition"])
+            kpi_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells] == ["Metric", "Value", "What It Counts"])
             kpi_map = {row.cells[0].text.strip(): row.cells[1].text.strip() for row in kpi_tbl.rows[1:]}
             self.assertEqual(kpi_map["Analytical Units"], "2")
             self.assertEqual(kpi_map["Written Answers Scanned"], "2")
@@ -928,10 +931,16 @@ class CodexAdversarialRegressionTests(unittest.TestCase):
             n_p.write_bytes(notes_bytes)
             eng = AtlasEngine(str(cb_p))
             res = eng.process_corpus([str(n_p)], root_dir=tmp, group_by_source=True)
+            # Verify DOCX report grid, group breakdown table, AND Section 3 evidence headings ALL keep 3 unique labels.
+            gt_dup = pd.DataFrame([
+                {"Theme": "Costs", "Focus Groups": "1 of 1", "Theme Matches": 2, "Verbatim Quotes": 1, "Paraphrased Key Points": 1, "_domain_id": "a"},
+                {"Theme": "Costs (a)", "Focus Groups": "1 of 1", "Theme Matches": 1, "Verbatim Quotes": 0, "Paraphrased Key Points": 1, "_domain_id": "c"},
+                {"Theme": "Costs", "Focus Groups": "0 of 1", "Theme Matches": 0, "Verbatim Quotes": 0, "Paraphrased Key Points": 0, "_domain_id": "b"},
+            ])
             docx_bytes = atlas_report.build_summary_report_docx(
                 res,
                 group_mode=True,
-                group_table=None,
+                group_table=gt_dup,
                 group_matrix=data_tiles[["domain_id", "domain_name", "theme_label", "group_label", "present", "matching_entries", "groups_reporting"]],
                 discovery=None,
                 discovery_overlap=None,
@@ -943,7 +952,74 @@ class CodexAdversarialRegressionTests(unittest.TestCase):
             grid_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells][0] == "Theme" and "Groups" in [c.text.strip() for c in t.rows[0].cells])
             row_pairs = [(r.cells[0].text.strip(), r.cells[1].text.strip()) for r in grid_tbl.rows[1:]]
             self.assertEqual(len(row_pairs), 3, row_pairs)
+            self.assertEqual(len({lbl for lbl, _ in row_pairs}), 3, f"Grid theme labels collided: {row_pairs}")
             self.assertCountEqual([val for _, val in row_pairs], ["✓ (2)", "—", "✓ (1)"])
+            # Group breakdown table must also carry 3 unique Theme labels (never duplicate "Costs", "Costs")
+            sum_tbl = next(t for t in doc.tables if [c.text.strip() for c in t.rows[0].cells][0] == "Theme" and "Theme Matches" in [c.text.strip() for c in t.rows[0].cells])
+            sum_labels = [r.cells[0].text.strip() for r in sum_tbl.rows[1:]]
+            self.assertEqual(len(set(sum_labels)), 3, f"Breakdown table theme labels collided: {sum_labels}")
+            # Section 3 evidence headings must also remain separated by domain_id (never merged under one "Costs")
+            para_texts = [p.text.strip() for p in doc.paragraphs]
+            self.assertIn("Costs (a) (2 matches)", para_texts)
+            self.assertIn("Costs (a) (c) (1 match)", para_texts)
+            # Chart label shortening must preserve ID suffixes on long duplicate theme names
+            short_chart = atlas_report._shorten_chart_labels(
+                [
+                    {"domain_id": "a", "label": "Housing affordability and stability (a)"},
+                    {"domain_id": "b", "label": "Housing affordability and stability (b)"},
+                ],
+                max_len=34,
+            )
+            self.assertEqual(len(set(short_chart)), 2, short_chart)
+            self.assertTrue(short_chart[0].endswith("(a)") and short_chart[1].endswith("(b)"), short_chart)
+
+    def test_friendly_group_labels_collision_after_normalization(self):
+        labels = atlas_report.friendly_group_labels(["room_one.docx", "room__one.docx"])
+        self.assertEqual(len(set(labels.values())), 2, labels)
+        self.assertEqual(labels["room_one.docx"], "room_one.docx")
+        self.assertEqual(labels["room__one.docx"], "room__one.docx")
+
+    def test_spotcheck_appendix_discloses_truncation_above_50_flags(self):
+        notes_bytes = _make_notes_docx_bytes(
+            [("P1: Rent went up this winter.", '"Rent jumped fast."', "")],
+            title="SOFTWARE_TEST SpotCheck Truncation",
+        )
+        cb_yaml = b"project: test\ndomains:\n  - id: H\n    name: Housing\n    roots_en: [rent]\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            cb_p = Path(tmp) / "cb.yaml"
+            cb_p.write_bytes(cb_yaml)
+            n_p = Path(tmp) / "g1.docx"
+            n_p.write_bytes(notes_bytes)
+            eng = AtlasEngine(str(cb_p))
+            res = eng.process_corpus([str(n_p)], root_dir=tmp, group_by_source=True)
+            audit_df = pd.DataFrame([
+                {
+                    "risk_level": "High",
+                    "domain_id": "H",
+                    "domain_name": "Housing",
+                    "matched_span": "rent",
+                    "full_word": f"rental{i}",
+                    "flag_codes": "prefix_extension",
+                    "flag_reason": "Matched inside longer word",
+                    "source_id": "g1.docx",
+                    "line_number": i + 1,
+                }
+                for i in range(51)
+            ])
+            docx_bytes = atlas_report.build_summary_report_docx(
+                res,
+                group_mode=True,
+                group_table=None,
+                group_matrix=None,
+                discovery=None,
+                discovery_overlap=None,
+                audit_df=audit_df,
+                active_theme_names=["Housing"],
+                corpus_label="g1.docx",
+            )
+            doc = docx.Document(io.BytesIO(docx_bytes))
+            full_text = "\n".join(p.text for p in doc.paragraphs)
+            self.assertIn("Showing the first 50 of 51 flagged matches", full_text)
 
     def test_vertically_merged_cells_preserve_participant_and_notable_quote_guards(self):
         # Case A: P1 tag in col 0 vertically merged across rows 1 & 2; row 2 col 2 starts with "Facilitator:".

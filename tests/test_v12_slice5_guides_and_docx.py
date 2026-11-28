@@ -29,7 +29,7 @@ GUIDE_FILES = (
 )
 EXPECTED_DOCX_IMAGES = {
     "ATLAS_GBI_Analyst_Quick_Start.md": 0,
-    "ATLAS_User_Guide.md": 4,
+    "ATLAS_User_Guide.md": 7,
     "ATLAS_Methodology_and_Reference_Manual.md": 5,
     "ATLAS_Practitioner_Field_Guide_Program_Evaluation.md": 1,
 }

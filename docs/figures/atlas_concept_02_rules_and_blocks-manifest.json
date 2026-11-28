@@ -1,0 +1,98 @@
+{
+  "figure_name": "atlas_concept_02_rules_and_blocks",
+  "surface": "report_figure",
+  "sha256": "1e0abaecdcf53ad340b70ad54f1717081aea66fa12fbb7fc7093419d16a57f02",
+  "canvas_w_px": 1980,
+  "canvas_h_px": 1065,
+  "target_w_in": 6.5,
+  "min_font_px": 45.0,
+  "min_text_contrast": 7.0,
+  "containment_errors": 0,
+  "collision_errors": 0,
+  "text_elements": [
+    {
+      "role": "banner",
+      "panel_id": "panel_1",
+      "text": "How Keyword Rules and Look-Alike Blocks Work",
+      "font_px": 57.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "Transportation",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Keywords: car, bus, transit",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Blocked look-alikes: card, career, care",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "\u2713 Counted",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "\"Missed the bus to clinic\"",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Matches keyword \"bus\"",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "\u2715 Skipped",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "\"Got a new gift card\"",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Look-alike block skips \"card\"",
+      "font_px": 45.0
+    },
+    {
+      "role": "badge",
+      "panel_id": "panel_1",
+      "text": "! Flagged",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "\"Did not need a car\"",
+      "font_px": 45.0
+    },
+    {
+      "role": "node",
+      "panel_id": "panel_1",
+      "text": "Nearby \"not\" sent to Spot-Check",
+      "font_px": 45.0
+    },
+    {
+      "role": "source",
+      "panel_id": "panel_1",
+      "text": "Illustrative example showing transparent word rules and human review",
+      "font_px": 45.0
+    }
+  ]
+}
