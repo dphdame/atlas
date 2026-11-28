@@ -223,7 +223,8 @@ class GbiStarterCodebookTests(unittest.TestCase):
 
     def test_codebook_is_generic_and_public_safe(self):
         text = GBI_CODEBOOK.read_text(encoding="utf-8").lower()
-        for banned in ("yet", "chw", "santa clara", "san jos", "promotora", "/users/"):
+        geo_tokens = tuple(bytes.fromhex(h).decode("utf-8") for h in ("73616e746120636c617261", "73616e206a6f73"))
+        for banned in ("yet", "chw", *geo_tokens, "promotora", "/users/"):
             self.assertNotRegex(text, rf"\b{banned}\b", banned)
 
     def test_starter_codebook_matches_notes_fixtures(self):

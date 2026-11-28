@@ -50,3 +50,5 @@ Right under **Theme Summary**, use these one-click buttons.
 - **Download Chart (.svg)** *(Browser Edition)*: Sharp Scalable Vector Graphics (SVG) chart (`atlas_theme_chart.svg`) for slides. In Python, save charts from the chart `...` menu or use the chart inside the Word report.
 
 *Technical note: Offline topic discovery uses Term Frequency–Inverse Document Frequency and Non-Negative Matrix Factorization (`TF-IDF + NMF`). Open the **Reference Guides** tab in the Python app or see [ATLAS User Guide](ATLAS_User_Guide.md) for screenshots and YAML rule syntax.*
+
+**Questions or help adapting ATLAS:** Contact **Victoria Cholette** on GitHub ([@dphdame](https://github.com/dphdame)) or at [hello@tooearlytosay.com](mailto:hello@tooearlytosay.com).

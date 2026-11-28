@@ -1547,7 +1547,10 @@ def render_footer():
     st.markdown("---")
     st.markdown(
         "<div style='text-align:center;color:#475569;font-size:0.85rem;padding:1rem 0;'>"
-        "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License"
+        "ATLAS · Automated Text-to-Ledger Actuarial Synthesis · MIT License<br>"
+        "Questions or help using or adapting ATLAS? Contact Victoria Cholette "
+        "(<a href='https://github.com/dphdame'>@dphdame</a> · "
+        "<a href='mailto:hello@tooearlytosay.com'>hello@tooearlytosay.com</a>)."
         "</div>",
         unsafe_allow_html=True,
     )

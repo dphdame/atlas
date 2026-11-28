@@ -277,3 +277,7 @@ Every run writes `provenance_manifest.json` with exact counts, theme digests, an
 | **SVG** | Scalable Vector Graphics: a sharp image format for exported charts that stays crisp at any print or slide size. |
 | **TF-IDF** | Term Frequency–Inverse Document Frequency: a word-weighting score that highlights distinctive words across entries during topic discovery. |
 | **YAML** | YAML Ain't Markup Language: a human-readable plain-text file format (`.yaml`) used to save, edit, and share ATLAS theme libraries. |
+
+### Questions or Help Adapting ATLAS
+
+If you have questions or need help using or adapting ATLAS for your project, contact **Victoria Cholette** on GitHub ([@dphdame](https://github.com/dphdame)) or by email at [hello@tooearlytosay.com](mailto:hello@tooearlytosay.com).

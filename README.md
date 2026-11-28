@@ -33,6 +33,9 @@ requests; see [Privacy and network use](#privacy-and-network-use) for what that 
 
 ## Quickstart
 
+### Zero-Install Browser Edition (recommended for non-technical users)
+Launch the live workbench at **[https://dphdame.github.io/atlas/](https://dphdame.github.io/atlas/)** (or open `standalone/ATLAS_Workbench.html` / `standalone/ATLAS_Workbench.aspx` offline in Microsoft Edge or Google Chrome). Everything runs 100% locally in browser memory—uploaded files are never sent to GitHub or any server—with zero Python install and zero external network calls, matching the Python engine's rules, merged-cell guards, spelling check, and SHA-256 provenance digests.
+
 ### Option A: desktop launcher
 1. **macOS / Linux:** double-click `run.command` (or run `./run.command`).
 2. **Windows:** double-click `run.bat`.
@@ -222,3 +225,7 @@ network call; a logged call fails the run.
 ## License
 
 Distributed under the MIT License. See [LICENSE](LICENSE).
+
+## Questions or Help Adapting ATLAS
+
+If you have questions or need help using or adapting ATLAS (non-AI deterministic edition) for your project, contact **Victoria Cholette** on GitHub ([@dphdame](https://github.com/dphdame)) or by email at [hello@tooearlytosay.com](mailto:hello@tooearlytosay.com).
